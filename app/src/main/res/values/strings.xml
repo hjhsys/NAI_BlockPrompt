@@ -110,8 +110,17 @@
     <string name="select_option">Select an option</string>
     <string name="save_block">Save block</string>
     <string name="save_preset">Save preset</string>
+    <string name="load_preset">Load preset</string>
+    <string name="search_options">Search options</string>
+    <string name="search_titles_only">Titles only</string>
+    <string name="search_include_content">Titles and prompt content</string>
     <string name="delete_block_title">Delete block?</string>
     <string name="delete_block_message">“%1$s” will be removed from the current editor.</string>
+    <string name="delete_character_title">Delete character?</string>
+    <string name="delete_character_message">Character %1$d and all of its blocks will be removed.</string>
+    <string name="more_actions">More actions</string>
+    <string name="lock_block">Lock block</string>
+    <string name="unlock_block">Unlock block</string>
     <string name="phase4_save_preview">This button previews the Phase 4 placement. Saving and naming will be connected to local storage in Phase 4.</string>
     <string name="confirm">OK</string>
     <string name="original_missing">Original image file is missing.</string>

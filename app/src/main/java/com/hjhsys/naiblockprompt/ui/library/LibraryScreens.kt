@@ -1,5 +1,6 @@
 package com.hjhsys.naiblockprompt.ui.library
 
+import androidx.annotation.StringRes
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -32,6 +33,7 @@ import com.hjhsys.naiblockprompt.data.local.entity.SavedFolderEntity
 import com.hjhsys.naiblockprompt.ui.MainViewModel
 import com.hjhsys.naiblockprompt.ui.RestoreOptions
 import com.hjhsys.naiblockprompt.ui.components.AppTitleBar
+import com.hjhsys.naiblockprompt.ui.components.AppTitleMenuItem
 import com.hjhsys.naiblockprompt.domain.editor.PromptOwner
 import com.hjhsys.naiblockprompt.domain.model.SavedSetKind
 import java.io.File
@@ -51,7 +53,7 @@ fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onRestor
             }
         }
     }
-    Scaffold(topBar = { AppTitleBar(R.string.history_title, onOpenSettings = onOpenSettings) }) { padding ->
+    Scaffold(topBar = { AppTitleBar(R.string.history_title, menuItems = listOf(AppTitleMenuItem(R.string.nav_settings, Icons.Default.Settings, onClick = onOpenSettings))) }) { padding ->
     LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (history.isEmpty()) item { Text(stringResource(R.string.history_empty)) }
         items(history, key = { it.entity.id }) { item ->
@@ -96,11 +98,13 @@ fun SavedScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onWorkflow
     val blocks by viewModel.savedBlocks.collectAsState(); val folders by viewModel.savedFolders.collectAsState(); val presets by viewModel.presets.collectAsState(); val sets by viewModel.savedSets.collectAsState()
     val workflow by viewModel.savedWorkflow.collectAsState()
     var tab by rememberSaveable { mutableIntStateOf(0) }; var search by rememberSaveable { mutableStateOf("") }
+    var searchScope by rememberSaveable { mutableStateOf(SavedSearchScope.TITLE_ONLY) }
+    var searchMenuExpanded by remember { mutableStateOf(false) }
     var workflowName by rememberSaveable(workflow) { mutableStateOf(when (val active = workflow) { is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveBlock -> active.block.name; is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SavePreset -> "Preset"; else -> "" }) }
     var workflowFolderId by rememberSaveable(workflow) { mutableStateOf<String?>(null) }
     var folderFilter by rememberSaveable { mutableStateOf("ALL") }
     var overwriteWorkflow by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(workflow) { if (workflow != null) tab = when (workflow) { is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveSet, is com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadSet -> 1; is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SavePreset -> 2; else -> 0 } }
+    LaunchedEffect(workflow) { if (workflow != null) tab = when (workflow) { is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveSet, is com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadSet -> 1; is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SavePreset, com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadPreset -> 2; else -> 0 } }
     var folderDialog by rememberSaveable { mutableStateOf(false) }
     var movingBlock by remember { mutableStateOf<com.hjhsys.naiblockprompt.data.local.entity.SavedBlockEntity?>(null) }
     var movingPreset by remember { mutableStateOf<com.hjhsys.naiblockprompt.data.local.entity.PresetEntity?>(null) }
@@ -114,7 +118,7 @@ fun SavedScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onWorkflow
     movingSet?.let { set -> AlertDialog(onDismissRequest = { movingSet = null }, title = { Text(stringResource(R.string.choose_folder)) }, text = { Column { TextButton(onClick = { viewModel.moveSavedSet(set, null); movingSet = null }) { Text(stringResource(R.string.no_folder)) }; folders.forEach { folder -> TextButton(onClick = { viewModel.moveSavedSet(set, folder.id); movingSet = null }) { Text(folder.name) } } } }, confirmButton = {}) }
     Scaffold(
         topBar = {
-            if (workflow == null) AppTitleBar(R.string.saved_title, onOpenSettings = onOpenSettings)
+            if (workflow == null) AppTitleBar(R.string.saved_title, menuItems = listOf(AppTitleMenuItem(R.string.nav_settings, Icons.Default.Settings, onClick = onOpenSettings)))
         },
     ) { screenPadding ->
     Column(
@@ -123,7 +127,7 @@ fun SavedScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onWorkflow
     ) {
         workflow?.let {
             ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) { Text(stringResource(when (it) { is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveBlock -> R.string.save_block_mode; is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SavePreset -> R.string.save_preset_mode; is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveSet -> R.string.save_set; is com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadSet -> R.string.load_set; else -> R.string.load_block_mode }), style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f)); TextButton(onClick = { viewModel.cancelSavedWorkflow(); onWorkflowFinished() }) { Text(stringResource(R.string.cancel)) } }
+                Row(verticalAlignment = Alignment.CenterVertically) { Text(stringResource(when (it) { is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveBlock -> R.string.save_block_mode; is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SavePreset -> R.string.save_preset_mode; is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveSet -> R.string.save_set; is com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadSet -> R.string.load_set; com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadPreset -> R.string.load_preset; else -> R.string.load_block_mode }), style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f)); TextButton(onClick = { viewModel.cancelSavedWorkflow(); onWorkflowFinished() }) { Text(stringResource(R.string.cancel)) } }
                 if (it is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveBlock) {
                     Text(stringResource(R.string.save_location), style = MaterialTheme.typography.labelLarge)
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) { item { FilterChip(workflowFolderId == null, { workflowFolderId = null }, { Text(stringResource(R.string.no_folder)) }) }; items(folders, key = { folder -> folder.id }) { folder -> FilterChip(workflowFolderId == folder.id, { workflowFolderId = folder.id }, { Text(folder.name) }) } }
@@ -137,8 +141,30 @@ fun SavedScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onWorkflow
                 } else Text(stringResource(R.string.choose_block_to_load), style = MaterialTheme.typography.bodySmall)
             } }
         }
-        if (workflow == null) TabRow(tab) { Tab(tab == 0, { tab = 0 }, text = { Text(stringResource(R.string.saved_blocks)) }); Tab(tab == 1, { tab = 1 }, text = { Text(stringResource(R.string.saved_sets)) }); Tab(tab == 2, { tab = 2 }, text = { Text(stringResource(R.string.presets)) }) }
-        OutlinedTextField(search, { search = it }, Modifier.fillMaxWidth(), label = { Text(stringResource(R.string.search)) }, leadingIcon = { Icon(Icons.Default.Search, null) }, singleLine = true)
+        if (workflow == null) PrimaryTabRow(selectedTabIndex = tab) { Tab(tab == 0, { tab = 0 }, text = { Text(stringResource(R.string.saved_blocks)) }); Tab(tab == 1, { tab = 1 }, text = { Text(stringResource(R.string.saved_sets)) }); Tab(tab == 2, { tab = 2 }, text = { Text(stringResource(R.string.presets)) }) }
+        OutlinedTextField(
+            search,
+            { search = it },
+            Modifier.fillMaxWidth(),
+            label = { Text(stringResource(R.string.search)) },
+            leadingIcon = { Icon(Icons.Default.Search, null) },
+            trailingIcon = {
+                Box {
+                    IconButton(onClick = { searchMenuExpanded = true }) { Icon(Icons.Default.MoreVert, stringResource(R.string.search_options)) }
+                    DropdownMenu(searchMenuExpanded, { searchMenuExpanded = false }) {
+                        SavedSearchScope.entries.forEach { scope ->
+                            DropdownMenuItem(
+                                text = { Text(stringResource(scope.label)) },
+                                leadingIcon = { if (searchScope == scope) Icon(Icons.Default.Check, null) },
+                                onClick = { searchScope = scope; searchMenuExpanded = false },
+                            )
+                        }
+                    }
+                }
+            },
+            supportingText = { Text(stringResource(searchScope.label)) },
+            singleLine = true,
+        )
         Row(verticalAlignment = Alignment.CenterVertically) { TextButton(onClick = { folderDialog = true }) { Icon(Icons.Default.CreateNewFolder, null); Text(stringResource(R.string.new_folder)) } }
         LazyRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             item { FilterChip(folderFilter == "ALL", { folderFilter = "ALL" }, { Text(stringResource(R.string.all_folders)) }) }
@@ -147,20 +173,36 @@ fun SavedScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onWorkflow
         }
         if (tab == 0) {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                val filtered = blocks.filter { (search.isBlank() || it.name.contains(search, true) || it.content.contains(search, true)) && (folderFilter == "ALL" || (folderFilter == "NONE" && it.folderId == null) || it.folderId == folderFilter) }
+                val filtered = blocks.filter { (search.isBlank() || it.name.contains(search, true) || (searchScope == SavedSearchScope.INCLUDE_CONTENT && it.content.contains(search, true))) && (folderFilter == "ALL" || (folderFilter == "NONE" && it.folderId == null) || it.folderId == folderFilter) }
                 if (filtered.isEmpty()) item { Text(stringResource(R.string.saved_empty)) }
                 items(filtered, key = { it.id }) { block -> ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp)) { Text(block.name, style = MaterialTheme.typography.titleMedium); Text(block.content.ifBlank { stringResource(R.string.empty_prompt) }, maxLines = 3, overflow = TextOverflow.Ellipsis); Row { if (workflow is com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadBlock) Button(onClick = { viewModel.finishBlockLoad(block); onWorkflowFinished() }) { Text(stringResource(R.string.load)) } else TextButton(onClick = { viewModel.addSavedBlockToBase(block) }) { Text(stringResource(R.string.add_to_base)) }; TextButton(onClick = { movingBlock = block }) { Text(folders.firstOrNull { it.id == block.folderId }?.name ?: stringResource(R.string.no_folder)) }; IconButton(onClick = { viewModel.deleteSavedBlock(block) }) { Icon(Icons.Default.Delete, stringResource(R.string.delete)) } } } } }
             }
         } else if (tab == 1) LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             val kind = (workflow as? com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadSet)?.owner?.let { if (it is PromptOwner.Base) SavedSetKind.BASE else SavedSetKind.CHARACTER }
-            val filtered = sets.filter { (kind == null || it.set?.kind == kind) && (search.isBlank() || it.entity.name.contains(search, true)) && (folderFilter == "ALL" || (folderFilter == "NONE" && it.entity.folderId == null) || it.entity.folderId == folderFilter) }
+            val filtered = sets.filter { item -> (kind == null || item.set?.kind == kind) && (search.isBlank() || item.entity.name.contains(search, true) || (searchScope == SavedSearchScope.INCLUDE_CONTENT && (item.set?.prompts?.allBlocks()?.any { it.name.contains(search, true) || it.content.contains(search, true) } == true || item.set?.textRendering?.content?.contains(search, true) == true))) && (folderFilter == "ALL" || (folderFilter == "NONE" && item.entity.folderId == null) || item.entity.folderId == folderFilter) }
             if (filtered.isEmpty()) item { Text(stringResource(R.string.saved_empty)) }
             items(filtered, key = { it.entity.id }) { set -> ElevatedCard(Modifier.fillMaxWidth()) { Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(set.entity.name); Text(set.entity.kind, style = MaterialTheme.typography.bodySmall) }; if (workflow is com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadSet) Button(onClick = { viewModel.finishSetLoad(set); onWorkflowFinished() }) { Text(stringResource(R.string.load)) }; TextButton(onClick = { movingSet = set.entity }) { Text(folders.firstOrNull { it.id == set.entity.folderId }?.name ?: stringResource(R.string.no_folder)) }; IconButton(onClick = { viewModel.deleteSavedSet(set.entity) }) { Icon(Icons.Default.Delete, stringResource(R.string.delete)) } } } }
         } else LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (presets.isEmpty()) item { Text(stringResource(R.string.saved_empty)) }
-            items(presets.filter { (search.isBlank() || it.entity.name.contains(search, true)) && (folderFilter == "ALL" || (folderFilter == "NONE" && it.entity.folderId == null) || it.entity.folderId == folderFilter) }, key = { it.entity.id }) { preset -> ElevatedCard(Modifier.fillMaxWidth()) { Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(preset.entity.name, style = MaterialTheme.typography.titleMedium); Text(preset.session?.generationSettings?.modelId ?: "-", style = MaterialTheme.typography.bodySmall) }; TextButton(onClick = { viewModel.restorePreset(preset) }, enabled = preset.session != null) { Text(stringResource(R.string.restore)) }; TextButton(onClick = { movingPreset = preset.entity }) { Text(folders.firstOrNull { it.id == preset.entity.folderId }?.name ?: stringResource(R.string.no_folder)) }; IconButton(onClick = { viewModel.deletePreset(preset.entity) }) { Icon(Icons.Default.Delete, stringResource(R.string.delete)) } } } }
+            items(presets.filter { item -> (search.isBlank() || item.entity.name.contains(search, true) || (searchScope == SavedSearchScope.INCLUDE_CONTENT && item.session?.containsPromptText(search) == true)) && (folderFilter == "ALL" || (folderFilter == "NONE" && item.entity.folderId == null) || item.entity.folderId == folderFilter) }, key = { it.entity.id }) { preset -> ElevatedCard(Modifier.fillMaxWidth()) { Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(preset.entity.name, style = MaterialTheme.typography.titleMedium); Text(preset.session?.generationSettings?.modelId ?: "-", style = MaterialTheme.typography.bodySmall) }; if (workflow == com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadPreset) Button(onClick = { viewModel.restorePreset(preset); viewModel.cancelSavedWorkflow(); onWorkflowFinished() }, enabled = preset.session != null) { Text(stringResource(R.string.load)) }; TextButton(onClick = { movingPreset = preset.entity }) { Text(folders.firstOrNull { it.id == preset.entity.folderId }?.name ?: stringResource(R.string.no_folder)) }; IconButton(onClick = { viewModel.deletePreset(preset.entity) }) { Icon(Icons.Default.Delete, stringResource(R.string.delete)) } } } }
         }
     } }
+}
+
+private enum class SavedSearchScope(@param:StringRes val label: Int) {
+    TITLE_ONLY(R.string.search_titles_only),
+    INCLUDE_CONTENT(R.string.search_include_content),
+}
+
+private fun com.hjhsys.naiblockprompt.domain.model.PromptPair.allBlocks() = positiveBlocks + negativeBlocks
+
+private fun com.hjhsys.naiblockprompt.domain.model.Session.containsPromptText(query: String): Boolean {
+    val baseMatches = base.prompts.allBlocks().any { it.name.contains(query, true) || it.content.contains(query, true) } ||
+        base.textRendering.content.contains(query, true)
+    return baseMatches || characters.any { character ->
+        character.prompts.allBlocks().any { it.name.contains(query, true) || it.content.contains(query, true) } ||
+            character.textRendering.content.contains(query, true)
+    }
 }
 
 @Composable

@@ -161,6 +161,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     fun saveBlock(block: PromptBlock, name: String, folderId: String?) = viewModelScope.launch { container.libraryRepository.saveBlock(block, name, folderId) }
     fun beginBlockSave(block: PromptBlock) { _savedWorkflow.value = SavedWorkflow.SaveBlock(block) }
     fun beginPresetSave() { _session.value?.let { _savedWorkflow.value = SavedWorkflow.SavePreset(it) } }
+    fun beginPresetLoad() { _savedWorkflow.value = SavedWorkflow.LoadPreset }
     fun beginSetSave(owner: PromptOwner) {
         val current = _session.value ?: return
         val set = when (owner) {
@@ -364,6 +365,7 @@ sealed interface SavedWorkflow {
     data class SaveSet(val set: SavedPromptSet) : SavedWorkflow
     data class LoadSet(val owner: PromptOwner) : SavedWorkflow
     data class LoadBlock(val owner: PromptOwner, val polarity: PromptPolarity, val blockId: String) : SavedWorkflow
+    data object LoadPreset : SavedWorkflow
 }
 
 sealed interface GenerationUiState {

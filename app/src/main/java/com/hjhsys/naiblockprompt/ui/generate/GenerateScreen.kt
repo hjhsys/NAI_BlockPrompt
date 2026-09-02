@@ -33,6 +33,7 @@ import com.hjhsys.naiblockprompt.domain.prompt.PromptProcessor
 import com.hjhsys.naiblockprompt.ui.MainViewModel
 import com.hjhsys.naiblockprompt.ui.GenerationUiState
 import com.hjhsys.naiblockprompt.ui.components.AppTitleBar
+import com.hjhsys.naiblockprompt.ui.components.AppTitleMenuItem
 import com.hjhsys.naiblockprompt.data.network.nai.NaiApiFailure
 import com.hjhsys.naiblockprompt.domain.generation.MissingGenerationField
 import com.hjhsys.naiblockprompt.domain.generation.NaiCatalogOption
@@ -85,7 +86,15 @@ fun GenerateScreen(
     }
     Scaffold(
         topBar = {
-            AppTitleBar(R.string.generate_title, onOpenSettings = onOpenSettings)
+            AppTitleBar(
+                R.string.generate_title,
+                menuItems = listOf(
+                    AppTitleMenuItem(R.string.load_preset, Icons.Default.FolderOpen, onClick = viewModel::beginPresetLoad),
+                    AppTitleMenuItem(R.string.save_preset, Icons.Default.Save, onClick = viewModel::beginPresetSave),
+                    AppTitleMenuItem(R.string.previous_work, Icons.Default.Restore, enabled = hasStash, onClick = viewModel::swapStash),
+                    AppTitleMenuItem(R.string.nav_settings, Icons.Default.Settings, onClick = onOpenSettings),
+                ),
+            )
         },
         bottomBar = {
             Surface(shadowElevation = 8.dp) {
@@ -121,24 +130,6 @@ fun GenerateScreen(
         contentPadding = PaddingValues(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                OutlinedButton(onClick = viewModel::beginPresetSave) {
-                    Icon(Icons.Default.Save, contentDescription = null)
-                    Spacer(Modifier.width(4.dp))
-                    Text(stringResource(R.string.save_preset))
-                }
-                TextButton(onClick = viewModel::swapStash, enabled = hasStash) {
-                    Icon(Icons.Default.Restore, contentDescription = null)
-                    Spacer(Modifier.width(4.dp))
-                    Text(stringResource(R.string.previous_work_short))
-                }
-            }
-        }
         if (workspace == GenerateWorkspace.EDITOR) {
         item {
             PromptSectionCard(
@@ -291,6 +282,21 @@ private fun CharacterSectionCard(
     showFormatter: Boolean,
     viewModel: MainViewModel,
 ) {
+    var showMore by remember { mutableStateOf(false) }
+    var confirmDelete by rememberSaveable(character.id) { mutableStateOf(false) }
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text(stringResource(R.string.delete_character_title)) },
+            text = { Text(stringResource(R.string.delete_character_message, index + 1)) },
+            confirmButton = {
+                TextButton(onClick = { confirmDelete = false; viewModel.removeCharacter(character.id) }) {
+                    Text(stringResource(R.string.delete), color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text(stringResource(R.string.cancel)) } },
+        )
+    }
     ElevatedCard {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -299,15 +305,33 @@ private fun CharacterSectionCard(
                     style = MaterialTheme.typography.titleLarge,
                     modifier = Modifier.weight(1f),
                 )
-                SmallIconButton(R.string.load_set, Icons.Default.FolderOpen, true) { viewModel.beginSetLoad(PromptOwner.Character(character.id)) }
-                SmallIconButton(R.string.save_set, Icons.Default.Save, true) { viewModel.beginSetSave(PromptOwner.Character(character.id)) }
                 SmallIconButton(R.string.move_up, Icons.Default.ArrowUpward, index > 0) {
                     viewModel.moveCharacter(character.id, MoveDirection.UP)
                 }
                 SmallIconButton(R.string.move_down, Icons.Default.ArrowDownward, index < count - 1) {
                     viewModel.moveCharacter(character.id, MoveDirection.DOWN)
                 }
-                SmallIconButton(R.string.delete, Icons.Default.Delete, true) { viewModel.removeCharacter(character.id) }
+                Box {
+                    SmallIconButton(R.string.more_actions, Icons.Default.MoreVert, true) { showMore = true }
+                    DropdownMenu(expanded = showMore, onDismissRequest = { showMore = false }) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.load_set)) },
+                            leadingIcon = { Icon(Icons.Default.FolderOpen, contentDescription = null) },
+                            onClick = { showMore = false; viewModel.beginSetLoad(PromptOwner.Character(character.id)) },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.save_set)) },
+                            leadingIcon = { Icon(Icons.Default.Save, contentDescription = null) },
+                            onClick = { showMore = false; viewModel.beginSetSave(PromptOwner.Character(character.id)) },
+                        )
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.delete)) },
+                            leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+                            onClick = { showMore = false; confirmDelete = true },
+                        )
+                    }
+                }
             }
             PromptSectionContent(
                 owner = PromptOwner.Character(character.id),
@@ -456,6 +480,7 @@ private fun PromptBlockCard(
     val validation = remember(block.content) { PromptProcessor.validateWeights(block.content) }
     val randomizerValidation = remember(block.content) { PromptProcessor.validateRandomizers(block.content) }
     var confirmDelete by rememberSaveable(block.id) { mutableStateOf(false) }
+    var showMore by remember { mutableStateOf(false) }
     if (confirmDelete) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
@@ -487,20 +512,45 @@ private fun PromptBlockCard(
             }
             Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                 SmallIconButton(
-                    if (block.locked) R.string.locked else R.string.unlocked,
-                    if (block.locked) Icons.Default.Lock else Icons.Default.LockOpen,
-                    true,
-                ) { onLockedChange(!block.locked) }
-                SmallIconButton(
                     if (block.collapsed) R.string.expand else R.string.collapse,
                     if (block.collapsed) Icons.Default.ChevronRight else Icons.Default.ExpandMore,
                     true,
                 ) { onCollapsedChange(!block.collapsed) }
                 SmallIconButton(R.string.move_up, Icons.Default.ArrowUpward, canMoveUp && !block.locked) { onMove(MoveDirection.UP) }
                 SmallIconButton(R.string.move_down, Icons.Default.ArrowDownward, canMoveDown && !block.locked) { onMove(MoveDirection.DOWN) }
-                SmallIconButton(R.string.load_saved_block, Icons.Default.FolderOpen, !block.locked, onLoad)
-                SmallIconButton(R.string.save_block, Icons.Default.BookmarkAdd, true, onSave)
-                SmallIconButton(R.string.delete, Icons.Default.Delete, !block.locked) { confirmDelete = true }
+                Spacer(Modifier.weight(1f))
+                if (block.locked) {
+                    Icon(Icons.Default.Lock, contentDescription = stringResource(R.string.locked), tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(4.dp))
+                }
+                Box {
+                    SmallIconButton(R.string.more_actions, Icons.Default.MoreVert, true) { showMore = true }
+                    DropdownMenu(expanded = showMore, onDismissRequest = { showMore = false }) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(if (block.locked) R.string.unlock_block else R.string.lock_block)) },
+                            leadingIcon = { Icon(if (block.locked) Icons.Default.LockOpen else Icons.Default.Lock, contentDescription = null) },
+                            onClick = { showMore = false; onLockedChange(!block.locked) },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.load_saved_block)) },
+                            leadingIcon = { Icon(Icons.Default.FolderOpen, contentDescription = null) },
+                            enabled = !block.locked,
+                            onClick = { showMore = false; onLoad() },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.save_block)) },
+                            leadingIcon = { Icon(Icons.Default.BookmarkAdd, contentDescription = null) },
+                            onClick = { showMore = false; onSave() },
+                        )
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.delete)) },
+                            leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+                            enabled = !block.locked,
+                            onClick = { showMore = false; confirmDelete = true },
+                        )
+                    }
+                }
             }
             if (!block.collapsed) {
                 val highColor = MaterialTheme.colorScheme.error
