@@ -48,6 +48,35 @@ class NaiRequestMapperTest {
         assertTrue(encoded.contains("\"centers\":[{\"x\":0.5,\"y\":0.5}]"))
     }
 
+    @Test fun `maps base and character text rendering at positive prompt end only`() {
+        val session = Session(
+            base = BasePrompt(
+                prompts = PromptPair(
+                    positiveBlocks = listOf(PromptBlock(name = "p", content = "base")),
+                    negativeBlocks = listOf(PromptBlock(name = "n", content = "undesired")),
+                ),
+                textRendering = TextRenderingState(true, "BASE TEXT"),
+            ),
+            characters = listOf(
+                CharacterPrompt(
+                    prompts = PromptPair(
+                        positiveBlocks = listOf(PromptBlock(name = "p", content = "girl")),
+                        negativeBlocks = listOf(PromptBlock(name = "n", content = "bad hands")),
+                    ),
+                    textRendering = TextRenderingState(true, "CHARACTER TEXT"),
+                ),
+            ),
+            generationSettings = GenerationSettings("nai-diffusion-4-5-full", samplerId = "k_euler_ancestral", steps = 28, scale = 5f),
+        )
+        val request = (NaiRequestMapper { 11L }.prepare(session, true) as PrepareGenerationResult.Ready).generation.request
+
+        assertEquals("base,\nText: BASE TEXT", request.input)
+        assertEquals("base,\nText: BASE TEXT", request.parameters.v4Prompt.caption.baseCaption)
+        assertEquals("girl,\nText: CHARACTER TEXT", request.parameters.v4Prompt.caption.characterCaptions.single().characterCaption)
+        assertEquals("undesired,", request.parameters.v4NegativePrompt.caption.baseCaption)
+        assertEquals("bad hands,", request.parameters.v4NegativePrompt.caption.characterCaptions.single().characterCaption)
+    }
+
     @Test fun `switching model preserves prompts and selects model parameter version`() {
         val base = Session.empty().copy(
             generationSettings = GenerationSettings("nai-diffusion-4-5-full", samplerId="k_euler_ancestral", steps=28, scale=6f),

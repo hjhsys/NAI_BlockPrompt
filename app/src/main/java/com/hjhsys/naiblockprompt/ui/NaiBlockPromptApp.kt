@@ -3,6 +3,7 @@ package com.hjhsys.naiblockprompt.ui
 import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -29,6 +30,7 @@ import com.hjhsys.naiblockprompt.R
 import com.hjhsys.naiblockprompt.ui.generate.GenerateScreen
 import com.hjhsys.naiblockprompt.ui.library.HistoryScreen
 import com.hjhsys.naiblockprompt.ui.library.SavedScreen
+import com.hjhsys.naiblockprompt.ui.components.AppTitleBar
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 
 private enum class MainDestination(
@@ -70,7 +72,7 @@ fun NaiBlockPromptApp(container: AppContainer) {
     Scaffold(
         bottomBar = {
             if (savedWorkflow == null) NavigationBar {
-                MainDestination.entries.forEach { destination ->
+                MainDestination.entries.filterNot { it == MainDestination.Settings }.forEach { destination ->
                     NavigationBarItem(
                         selected = currentRoute == destination.route,
                         onClick = {
@@ -93,17 +95,23 @@ fun NaiBlockPromptApp(container: AppContainer) {
             modifier = Modifier.padding(padding),
         ) {
             composable(MainDestination.Generate.route) {
-                GenerateScreen(session, settings, viewModel)
+                GenerateScreen(session, settings, viewModel) {
+                    navController.navigate(MainDestination.Settings.route) { launchSingleTop = true }
+                }
             }
             composable(MainDestination.History.route) {
-                HistoryScreen(viewModel) {
+                HistoryScreen(viewModel, onOpenSettings = {
+                    navController.navigate(MainDestination.Settings.route) { launchSingleTop = true }
+                }) {
                     navController.navigate(MainDestination.Generate.route) {
                         launchSingleTop = true
                     }
                 }
             }
             composable(MainDestination.Saved.route) {
-                SavedScreen(viewModel) {
+                SavedScreen(viewModel, onOpenSettings = {
+                    navController.navigate(MainDestination.Settings.route) { launchSingleTop = true }
+                }) {
                     navController.navigate(MainDestination.Generate.route) { launchSingleTop = true }
                 }
             }
@@ -120,6 +128,7 @@ fun NaiBlockPromptApp(container: AppContainer) {
                     onSaveToken = viewModel::saveToken,
                     onClearToken = viewModel::clearToken,
                     onTestConnection = viewModel::testConnection,
+                    onBack = { navController.popBackStack() },
                 )
             }
         }
@@ -152,13 +161,15 @@ private fun SettingsScreen(
     onSaveToken: (String) -> Unit,
     onClearToken: () -> Unit,
     onTestConnection: () -> Unit,
+    onBack: () -> Unit,
 ) {
     var token by rememberSaveable { mutableStateOf("") }
-    Column(
-        modifier = Modifier.fillMaxSize().padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text(stringResource(R.string.settings_title), style = MaterialTheme.typography.headlineMedium)
+    Column(modifier = Modifier.fillMaxSize()) {
+        AppTitleBar(R.string.settings_title, onBack = onBack)
+        Column(
+            modifier = Modifier.fillMaxSize().padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
         SettingSwitch(R.string.settings_formatter, showFormatter, onShowFormatterChange)
         SettingSwitch(R.string.settings_weight_normalization, normalizeWeights, onNormalizeWeightsChange)
         Text(stringResource(R.string.settings_history_limit_value, historyLimit))
@@ -188,6 +199,7 @@ private fun SettingsScreen(
         }
         ConnectionStatus(connectionState)
         Text(stringResource(R.string.settings_saved), style = MaterialTheme.typography.bodySmall)
+        }
     }
 }
 

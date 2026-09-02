@@ -38,10 +38,14 @@ class NaiRequestMapper(
         }
 
         fun joined(blocks: List<PromptBlock>) = PromptProcessor.joinEnabledBlocks(blocks, normalizeWeights)
-        val basePositive = joined(session.base.prompts.positiveBlocks)
+        fun positive(blocks: List<PromptBlock>, textRendering: TextRenderingState) =
+            PromptProcessor.appendTextRendering(joined(blocks), textRendering)
+        val basePositive = positive(session.base.prompts.positiveBlocks, session.base.textRendering)
         val baseNegative = joined(session.base.prompts.negativeBlocks)
         val characters = session.characters.sortedBy { it.order }
-        val positiveCharacters = characters.map { NaiV4CharacterCaption(joined(it.prompts.positiveBlocks)) }
+        val positiveCharacters = characters.map {
+            NaiV4CharacterCaption(positive(it.prompts.positiveBlocks, it.textRendering))
+        }
         val negativeCharacters = characters.map { NaiV4CharacterCaption(joined(it.prompts.negativeBlocks)) }
 
         val request = NaiImageGenerationRequest(

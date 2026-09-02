@@ -5,6 +5,7 @@
     <string name="nav_history">History</string>
     <string name="nav_saved">Saved</string>
     <string name="nav_settings">Settings</string>
+    <string name="back">Back</string>
     <string name="generate_title">Generate</string>
     <string name="loading_session">Restoring the last session…</string>
     <string name="base_prompt">Base</string>
@@ -30,6 +31,12 @@
     <string name="format_multiline">One per line</string>
     <string name="format_single_line">Combine</string>
     <string name="weight_warning">Possible unclosed :: weight syntax (%1$d delimiters). Generation will not be blocked.</string>
+    <string name="randomizer_warning">Possible unclosed || Prompt Randomizer syntax (%1$d delimiters). Generation will not be blocked.</string>
+    <string name="text_rendering">Text Rendering</string>
+    <string name="text_rendering_prefix">Text:</string>
+    <string name="text_rendering_hint">Enter only the text to render</string>
+    <string name="on">ON</string>
+    <string name="off">OFF</string>
     <string name="comment_hint">Use ## comment ## for notes. Comments are kept while editing and removed from generated prompts.</string>
     <string name="character_girl">Girl</string>
     <string name="character_boy">Boy</string>

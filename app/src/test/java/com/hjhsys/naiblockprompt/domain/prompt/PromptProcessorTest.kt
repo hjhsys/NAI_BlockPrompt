@@ -1,6 +1,7 @@
 package com.hjhsys.naiblockprompt.domain.prompt
 
 import com.hjhsys.naiblockprompt.domain.model.PromptBlock
+import com.hjhsys.naiblockprompt.domain.model.TextRenderingState
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -39,6 +40,7 @@ class PromptProcessorTest {
     }
 
     @Test fun `numeric character before closing weight receives a space`() {
+        assertEquals("1.2::artist123 ::", PromptProcessor.normalizeWeightClosings("1.2::artist123::"))
         assertEquals("2::abc123 ::", PromptProcessor.normalizeWeightClosings("2::abc123::"))
         assertEquals("2::artist ::", PromptProcessor.normalizeWeightClosings("2::artist ::"))
     }
@@ -47,6 +49,41 @@ class PromptProcessorTest {
         val input = "girl\n1.2::red eyes, blue hair ::\nsmile,,"
         assertEquals("girl, 1.2::red eyes, blue hair ::, smile", PromptProcessor.formatSingleLine(input))
         assertEquals("girl,\n1.2::red eyes, blue hair ::,\nsmile", PromptProcessor.formatMultiline(input))
+    }
+
+    @Test fun `formatters preserve randomizer contents as one protected region`() {
+        val randomizer = "||option A| option B, wide\tspace|option C||"
+        val input = "girl,\n$randomizer, smile"
+        assertEquals("girl, $randomizer, smile", PromptProcessor.formatSingleLine(input))
+        assertEquals("girl,\n$randomizer,\nsmile", PromptProcessor.formatMultiline(input))
+    }
+
+    @Test fun `odd randomizer delimiter count produces non blocking validation warning`() {
+        val validation = PromptProcessor.validateRandomizers("tag, ||option A|option B")
+        assertEquals(1, validation.delimiterCount)
+        assertTrue(validation.hasUnclosedRandomizer)
+        assertFalse(PromptProcessor.validateRandomizers("||a|b||").hasUnclosedRandomizer)
+    }
+
+    @Test fun `randomizer spans include delimiters and open randomizer reaches block end`() {
+        val input = "tag ||a|b|| next ||open|value"
+        assertEquals(
+            listOf(
+                RandomizerSpan(input.indexOf("||a"), input.indexOf("|| next") + 2),
+                RandomizerSpan(input.indexOf("||open"), input.length),
+            ),
+            PromptProcessor.randomizerSpans(input),
+        )
+    }
+
+    @Test fun `text rendering is appended only when enabled with content`() {
+        val off = TextRenderingState(enabled = false, content = "HELLO")
+        assertEquals("base,", PromptProcessor.appendTextRendering("base,", off))
+        assertEquals("base,", PromptProcessor.appendTextRendering("base,", TextRenderingState(enabled = true)))
+        assertEquals(
+            "base,\nText: HELLO WORLD\n\nGOOD MORNING",
+            PromptProcessor.appendTextRendering("base,", TextRenderingState(true, "HELLO WORLD\n\nGOOD MORNING")),
+        )
     }
 
     @Test fun `enabled blocks join in order with comments stripped`() {

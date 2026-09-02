@@ -22,6 +22,13 @@ data class PromptPair(
     val negativeBlocks: List<PromptBlock> = emptyList(),
 )
 
+/** NovelAI V4+ Text Rendering content, kept separate from movable prompt blocks. */
+@Serializable
+data class TextRenderingState(
+    val enabled: Boolean = false,
+    val content: String = "",
+)
+
 @Serializable
 enum class PromptPolarity { POSITIVE, NEGATIVE }
 
@@ -29,6 +36,7 @@ enum class PromptPolarity { POSITIVE, NEGATIVE }
 data class BasePrompt(
     val prompts: PromptPair = PromptPair(),
     val selectedPolarity: PromptPolarity = PromptPolarity.POSITIVE,
+    val textRendering: TextRenderingState = TextRenderingState(),
 )
 
 @Serializable
@@ -49,6 +57,7 @@ data class CharacterPrompt(
     val order: Int = 0,
     val position: CharacterPosition? = null,
     val selectedPolarity: PromptPolarity = PromptPolarity.POSITIVE,
+    val textRendering: TextRenderingState = TextRenderingState(),
 )
 
 @Serializable
@@ -107,6 +116,7 @@ data class SavedPromptSet(
     val prompts: PromptPair,
     val selectedPolarity: PromptPolarity,
     val characterType: CharacterType? = null,
+    val textRendering: TextRenderingState = TextRenderingState(),
 )
 
 /** Exact processed prompt payload retained only for a successful generation history entry. */

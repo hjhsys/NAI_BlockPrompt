@@ -31,6 +31,7 @@ import com.hjhsys.naiblockprompt.data.local.entity.SavedBlockEntity
 import com.hjhsys.naiblockprompt.data.local.entity.SavedFolderEntity
 import com.hjhsys.naiblockprompt.ui.MainViewModel
 import com.hjhsys.naiblockprompt.ui.RestoreOptions
+import com.hjhsys.naiblockprompt.ui.components.AppTitleBar
 import com.hjhsys.naiblockprompt.domain.editor.PromptOwner
 import com.hjhsys.naiblockprompt.domain.model.SavedSetKind
 import java.io.File
@@ -38,7 +39,7 @@ import java.text.DateFormat
 import java.util.Date
 
 @Composable
-fun HistoryScreen(viewModel: MainViewModel, onRestored: () -> Unit) {
+fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onRestored: () -> Unit) {
     val history by viewModel.history.collectAsState()
     var restore by remember { mutableStateOf<HistoryItem?>(null) }
     var original by remember { mutableStateOf<HistoryItem?>(null) }
@@ -50,8 +51,8 @@ fun HistoryScreen(viewModel: MainViewModel, onRestored: () -> Unit) {
             }
         }
     }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item { Text(stringResource(R.string.history_title), style = MaterialTheme.typography.headlineMedium) }
+    Scaffold(topBar = { AppTitleBar(R.string.history_title, onOpenSettings = onOpenSettings) }) { padding ->
+    LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (history.isEmpty()) item { Text(stringResource(R.string.history_empty)) }
         items(history, key = { it.entity.id }) { item ->
             ElevatedCard(Modifier.fillMaxWidth()) {
@@ -70,7 +71,7 @@ fun HistoryScreen(viewModel: MainViewModel, onRestored: () -> Unit) {
                 }
             }
         }
-    }
+    } }
 }
 
 @Composable
@@ -91,7 +92,7 @@ private fun RestoreDialog(item: HistoryItem, dismiss: () -> Unit, confirm: (Rest
 }
 
 @Composable
-fun SavedScreen(viewModel: MainViewModel, onWorkflowFinished: () -> Unit) {
+fun SavedScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onWorkflowFinished: () -> Unit) {
     val blocks by viewModel.savedBlocks.collectAsState(); val folders by viewModel.savedFolders.collectAsState(); val presets by viewModel.presets.collectAsState(); val sets by viewModel.savedSets.collectAsState()
     val workflow by viewModel.savedWorkflow.collectAsState()
     var tab by rememberSaveable { mutableIntStateOf(0) }; var search by rememberSaveable { mutableStateOf("") }
@@ -111,8 +112,15 @@ fun SavedScreen(viewModel: MainViewModel, onWorkflowFinished: () -> Unit) {
     movingBlock?.let { block -> AlertDialog(onDismissRequest = { movingBlock = null }, title = { Text(stringResource(R.string.choose_folder)) }, text = { Column { TextButton(onClick = { viewModel.moveSavedBlock(block, null); movingBlock = null }) { Text(stringResource(R.string.no_folder)) }; folders.forEach { folder -> TextButton(onClick = { viewModel.moveSavedBlock(block, folder.id); movingBlock = null }) { Text(folder.name) } } } }, confirmButton = {}) }
     movingPreset?.let { preset -> AlertDialog(onDismissRequest = { movingPreset = null }, title = { Text(stringResource(R.string.choose_folder)) }, text = { Column { TextButton(onClick = { viewModel.movePreset(preset, null); movingPreset = null }) { Text(stringResource(R.string.no_folder)) }; folders.forEach { folder -> TextButton(onClick = { viewModel.movePreset(preset, folder.id); movingPreset = null }) { Text(folder.name) } } } }, confirmButton = {}) }
     movingSet?.let { set -> AlertDialog(onDismissRequest = { movingSet = null }, title = { Text(stringResource(R.string.choose_folder)) }, text = { Column { TextButton(onClick = { viewModel.moveSavedSet(set, null); movingSet = null }) { Text(stringResource(R.string.no_folder)) }; folders.forEach { folder -> TextButton(onClick = { viewModel.moveSavedSet(set, folder.id); movingSet = null }) { Text(folder.name) } } } }, confirmButton = {}) }
-    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        if (workflow == null) Text(stringResource(R.string.saved_title), style = MaterialTheme.typography.headlineMedium)
+    Scaffold(
+        topBar = {
+            if (workflow == null) AppTitleBar(R.string.saved_title, onOpenSettings = onOpenSettings)
+        },
+    ) { screenPadding ->
+    Column(
+        Modifier.fillMaxSize().padding(screenPadding).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
         workflow?.let {
             ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) { Text(stringResource(when (it) { is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveBlock -> R.string.save_block_mode; is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SavePreset -> R.string.save_preset_mode; is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveSet -> R.string.save_set; is com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadSet -> R.string.load_set; else -> R.string.load_block_mode }), style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f)); TextButton(onClick = { viewModel.cancelSavedWorkflow(); onWorkflowFinished() }) { Text(stringResource(R.string.cancel)) } }
@@ -152,7 +160,7 @@ fun SavedScreen(viewModel: MainViewModel, onWorkflowFinished: () -> Unit) {
             if (presets.isEmpty()) item { Text(stringResource(R.string.saved_empty)) }
             items(presets.filter { (search.isBlank() || it.entity.name.contains(search, true)) && (folderFilter == "ALL" || (folderFilter == "NONE" && it.entity.folderId == null) || it.entity.folderId == folderFilter) }, key = { it.entity.id }) { preset -> ElevatedCard(Modifier.fillMaxWidth()) { Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(preset.entity.name, style = MaterialTheme.typography.titleMedium); Text(preset.session?.generationSettings?.modelId ?: "-", style = MaterialTheme.typography.bodySmall) }; TextButton(onClick = { viewModel.restorePreset(preset) }, enabled = preset.session != null) { Text(stringResource(R.string.restore)) }; TextButton(onClick = { movingPreset = preset.entity }) { Text(folders.firstOrNull { it.id == preset.entity.folderId }?.name ?: stringResource(R.string.no_folder)) }; IconButton(onClick = { viewModel.deletePreset(preset.entity) }) { Icon(Icons.Default.Delete, stringResource(R.string.delete)) } } } }
         }
-    }
+    } }
 }
 
 @Composable

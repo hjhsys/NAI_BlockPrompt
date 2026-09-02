@@ -32,6 +32,7 @@ import com.hjhsys.naiblockprompt.domain.model.*
 import com.hjhsys.naiblockprompt.domain.prompt.PromptProcessor
 import com.hjhsys.naiblockprompt.ui.MainViewModel
 import com.hjhsys.naiblockprompt.ui.GenerationUiState
+import com.hjhsys.naiblockprompt.ui.components.AppTitleBar
 import com.hjhsys.naiblockprompt.data.network.nai.NaiApiFailure
 import com.hjhsys.naiblockprompt.domain.generation.MissingGenerationField
 import com.hjhsys.naiblockprompt.domain.generation.NaiCatalogOption
@@ -47,6 +48,7 @@ fun GenerateScreen(
     session: Session?,
     appSettings: AppSettings,
     viewModel: MainViewModel,
+    onOpenSettings: () -> Unit,
 ) {
     if (session == null) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -83,9 +85,11 @@ fun GenerateScreen(
     }
     Scaffold(
         topBar = {
-            Surface(shadowElevation = 4.dp) {
+            AppTitleBar(R.string.generate_title, onOpenSettings = onOpenSettings)
+        },
+        bottomBar = {
+            Surface(shadowElevation = 8.dp) {
                 Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
-                    Text(stringResource(R.string.generate_title), style = MaterialTheme.typography.titleLarge)
                     SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                         GenerateWorkspace.entries.forEachIndexed { index, value ->
                             SegmentedButton(
@@ -97,21 +101,18 @@ fun GenerateScreen(
                             )
                         }
                     }
-                }
-            }
-        },
-        bottomBar = {
-            Surface(shadowElevation = 8.dp) {
-                Button(
-                    onClick = { viewModel.generate(); workspace = GenerateWorkspace.RESULT },
-                    enabled = generationState !is GenerationUiState.Loading,
-                    modifier = Modifier.fillMaxWidth().padding(12.dp).heightIn(min = 52.dp),
-                ) {
-                    if (generationState is GenerationUiState.Loading) {
-                        CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(8.dp))
+                    Spacer(Modifier.height(6.dp))
+                    Button(
+                        onClick = { viewModel.generate(); workspace = GenerateWorkspace.RESULT },
+                        enabled = generationState !is GenerationUiState.Loading,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+                    ) {
+                        if (generationState is GenerationUiState.Loading) {
+                            CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        Text(stringResource(if (generationState is GenerationUiState.Loading) R.string.generating else R.string.generate_one_image))
                     }
-                    Text(stringResource(if (generationState is GenerationUiState.Loading) R.string.generating else R.string.generate_one_image))
                 }
             }
         },
@@ -145,6 +146,7 @@ fun GenerateScreen(
                 owner = PromptOwner.Base,
                 pair = session.base.prompts,
                 selectedPolarity = session.base.selectedPolarity,
+                textRendering = session.base.textRendering,
                 showFormatter = appSettings.showFormatterActions,
                 viewModel = viewModel,
             )
@@ -311,6 +313,7 @@ private fun CharacterSectionCard(
                 owner = PromptOwner.Character(character.id),
                 pair = character.prompts,
                 selectedPolarity = character.selectedPolarity,
+                textRendering = character.textRendering,
                 showFormatter = showFormatter,
                 viewModel = viewModel,
             )
@@ -324,6 +327,7 @@ private fun PromptSectionCard(
     owner: PromptOwner,
     pair: PromptPair,
     selectedPolarity: PromptPolarity,
+    textRendering: TextRenderingState,
     showFormatter: Boolean,
     viewModel: MainViewModel,
 ) {
@@ -334,7 +338,7 @@ private fun PromptSectionCard(
                 SmallIconButton(R.string.load_set, Icons.Default.FolderOpen, true) { viewModel.beginSetLoad(owner) }
                 SmallIconButton(R.string.save_set, Icons.Default.Save, true) { viewModel.beginSetSave(owner) }
             }
-            PromptSectionContent(owner, pair, selectedPolarity, showFormatter, viewModel)
+            PromptSectionContent(owner, pair, selectedPolarity, textRendering, showFormatter, viewModel)
         }
     }
 }
@@ -344,6 +348,7 @@ private fun PromptSectionContent(
     owner: PromptOwner,
     pair: PromptPair,
     selectedPolarity: PromptPolarity,
+    textRendering: TextRenderingState,
     showFormatter: Boolean,
     viewModel: MainViewModel,
 ) {
@@ -387,6 +392,49 @@ private fun PromptSectionContent(
         Spacer(Modifier.width(6.dp))
         Text(stringResource(R.string.add_block))
     }
+    if (selectedPolarity == PromptPolarity.POSITIVE) {
+        TextRenderingSlot(
+            state = textRendering,
+            onEnabledChange = { enabled -> viewModel.updateTextRendering(owner) { it.copy(enabled = enabled) } },
+            onContentChange = { content -> viewModel.updateTextRendering(owner) { it.copy(content = content) } },
+        )
+    }
+}
+
+@Composable
+private fun TextRenderingSlot(
+    state: TextRenderingState,
+    onEnabledChange: (Boolean) -> Unit,
+    onContentChange: (String) -> Unit,
+) {
+    OutlinedCard {
+        Column(Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    stringResource(R.string.text_rendering),
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(stringResource(if (state.enabled) R.string.on else R.string.off), style = MaterialTheme.typography.labelMedium)
+                Spacer(Modifier.width(4.dp))
+                Switch(
+                    checked = state.enabled,
+                    onCheckedChange = onEnabledChange,
+                    modifier = Modifier.heightIn(max = 40.dp),
+                )
+            }
+            if (state.enabled) {
+                Text(stringResource(R.string.text_rendering_prefix), style = MaterialTheme.typography.labelLarge)
+                OutlinedTextField(
+                    value = state.content,
+                    onValueChange = onContentChange,
+                    minLines = 3,
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text(stringResource(R.string.text_rendering_hint)) },
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -406,6 +454,7 @@ private fun PromptBlockCard(
     onFormat: (BlockFormatter) -> Unit,
 ) {
     val validation = remember(block.content) { PromptProcessor.validateWeights(block.content) }
+    val randomizerValidation = remember(block.content) { PromptProcessor.validateRandomizers(block.content) }
     var confirmDelete by rememberSaveable(block.id) { mutableStateOf(false) }
     if (confirmDelete) {
         AlertDialog(
@@ -461,6 +510,11 @@ private fun PromptBlockCard(
                 } else {
                     Color(0xFF2E7D32)
                 }
+                val randomizerColor = if (MaterialTheme.colorScheme.surface.luminance() < 0.5f) {
+                    Color(0xFFFFD54F)
+                } else {
+                    Color(0xFF9A6700)
+                }
                 OutlinedTextField(
                     value = block.content,
                     onValueChange = { content -> onUpdate { it.copy(content = content) } },
@@ -468,14 +522,21 @@ private fun PromptBlockCard(
                     label = { Text(stringResource(R.string.prompt_content)) },
                     minLines = 3,
                     modifier = Modifier.fillMaxWidth(),
-                    visualTransformation = remember(highColor, lowColor, commentColor) {
-                        PromptVisualTransformation(highColor, lowColor, commentColor)
+                    visualTransformation = remember(highColor, lowColor, commentColor, randomizerColor) {
+                        PromptVisualTransformation(highColor, lowColor, commentColor, randomizerColor)
                     },
                 )
                 Text(stringResource(R.string.comment_hint), style = MaterialTheme.typography.bodySmall)
                 if (validation.hasUnclosedWeight) {
                     Text(
                         stringResource(R.string.weight_warning, validation.delimiterCount),
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                if (randomizerValidation.hasUnclosedRandomizer) {
+                    Text(
+                        stringResource(R.string.randomizer_warning, randomizerValidation.delimiterCount),
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -573,10 +634,10 @@ private fun PromptPreviewCard(session: Session, normalize: Boolean) {
                 }
             }
             if (expanded) {
-                PreviewLine(R.string.base_positive_preview, PromptProcessor.joinEnabledBlocks(session.base.prompts.positiveBlocks, normalize))
+                PreviewLine(R.string.base_positive_preview, PromptProcessor.appendTextRendering(PromptProcessor.joinEnabledBlocks(session.base.prompts.positiveBlocks, normalize), session.base.textRendering))
                 PreviewLine(R.string.base_negative_preview, PromptProcessor.joinEnabledBlocks(session.base.prompts.negativeBlocks, normalize))
                 session.characters.sortedBy { it.order }.forEachIndexed { index, character ->
-                    PreviewLine(R.string.character_positive_preview, PromptProcessor.joinEnabledBlocks(character.prompts.positiveBlocks, normalize), index + 1)
+                    PreviewLine(R.string.character_positive_preview, PromptProcessor.appendTextRendering(PromptProcessor.joinEnabledBlocks(character.prompts.positiveBlocks, normalize), character.textRendering), index + 1)
                     PreviewLine(R.string.character_negative_preview, PromptProcessor.joinEnabledBlocks(character.prompts.negativeBlocks, normalize), index + 1)
                 }
             }
@@ -661,6 +722,7 @@ private class PromptVisualTransformation(
     private val highColor: Color,
     private val lowColor: Color,
     private val commentColor: Color,
+    private val randomizerColor: Color,
 ) : VisualTransformation {
     override fun filter(text: AnnotatedString): TransformedText {
         val builder = AnnotatedString.Builder(text)
@@ -671,6 +733,9 @@ private class PromptVisualTransformation(
                 else -> Color.Unspecified
             }
             if (color != Color.Unspecified) builder.addStyle(SpanStyle(color = color), span.start, span.endExclusive)
+        }
+        PromptProcessor.randomizerSpans(text.text).forEach { span ->
+            builder.addStyle(SpanStyle(color = randomizerColor), span.start, span.endExclusive)
         }
         // Apply comments last so they take precedence over an enclosing weight span.
         PromptProcessor.commentSpans(text.text).forEach { span ->

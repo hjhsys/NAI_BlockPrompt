@@ -115,6 +115,15 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         SessionEditor.formatBlock(it, owner, polarity, id, formatter)
     }
 
+    fun updateTextRendering(owner: PromptOwner, transform: (TextRenderingState) -> TextRenderingState) = edit { current ->
+        when (owner) {
+            PromptOwner.Base -> current.copy(base = current.base.copy(textRendering = transform(current.base.textRendering)))
+            is PromptOwner.Character -> current.copy(characters = current.characters.map { character ->
+                if (character.id == owner.id) character.copy(textRendering = transform(character.textRendering)) else character
+            })
+        }
+    }
+
     fun updateGenerationSettings(transform: (GenerationSettings) -> GenerationSettings) = edit {
         it.copy(generationSettings = transform(it.generationSettings))
     }
@@ -155,8 +164,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     fun beginSetSave(owner: PromptOwner) {
         val current = _session.value ?: return
         val set = when (owner) {
-            PromptOwner.Base -> SavedPromptSet(SavedSetKind.BASE, current.base.prompts, current.base.selectedPolarity)
-            is PromptOwner.Character -> current.characters.firstOrNull { it.id == owner.id }?.let { SavedPromptSet(SavedSetKind.CHARACTER, it.prompts, it.selectedPolarity, it.type) }
+            PromptOwner.Base -> SavedPromptSet(SavedSetKind.BASE, current.base.prompts, current.base.selectedPolarity, textRendering = current.base.textRendering)
+            is PromptOwner.Character -> current.characters.firstOrNull { it.id == owner.id }?.let { SavedPromptSet(SavedSetKind.CHARACTER, it.prompts, it.selectedPolarity, it.type, it.textRendering) }
         } ?: return
         _savedWorkflow.value = SavedWorkflow.SaveSet(set)
     }
@@ -190,8 +199,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         val workflow = _savedWorkflow.value as? SavedWorkflow.LoadSet ?: return
         val set = item.set ?: return
         edit { current -> when (val owner = workflow.owner) {
-            PromptOwner.Base -> if (set.kind == SavedSetKind.BASE) current.copy(base = current.base.copy(prompts = set.prompts, selectedPolarity = set.selectedPolarity)) else current
-            is PromptOwner.Character -> if (set.kind == SavedSetKind.CHARACTER) current.copy(characters = current.characters.map { if (it.id == owner.id) it.copy(prompts = set.prompts, selectedPolarity = set.selectedPolarity, type = set.characterType ?: it.type) else it }) else current
+            PromptOwner.Base -> if (set.kind == SavedSetKind.BASE) current.copy(base = current.base.copy(prompts = set.prompts, selectedPolarity = set.selectedPolarity, textRendering = set.textRendering)) else current
+            is PromptOwner.Character -> if (set.kind == SavedSetKind.CHARACTER) current.copy(characters = current.characters.map { if (it.id == owner.id) it.copy(prompts = set.prompts, selectedPolarity = set.selectedPolarity, type = set.characterType ?: it.type, textRendering = set.textRendering) else it }) else current
         } }
         _savedWorkflow.value = null
     }

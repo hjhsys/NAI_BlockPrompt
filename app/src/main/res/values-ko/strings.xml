@@ -5,6 +5,7 @@
     <string name="nav_history">히스토리</string>
     <string name="nav_saved">저장됨</string>
     <string name="nav_settings">설정</string>
+    <string name="back">뒤로</string>
     <string name="generate_title">생성</string>
     <string name="loading_session">마지막 작업을 복원하는 중…</string>
     <string name="base_prompt">Base</string>
@@ -30,6 +31,12 @@
     <string name="format_multiline">한 줄씩</string>
     <string name="format_single_line">합쳐서</string>
     <string name="weight_warning">닫히지 않은 :: 가중치 문법일 수 있습니다(구분자 %1$d개). 생성을 차단하지 않습니다.</string>
+    <string name="randomizer_warning">닫히지 않은 || Prompt Randomizer 문법일 수 있습니다(구분자 %1$d개). 생성을 차단하지 않습니다.</string>
+    <string name="text_rendering">Text Rendering</string>
+    <string name="text_rendering_prefix">Text:</string>
+    <string name="text_rendering_hint">렌더링할 내용만 입력하세요</string>
+    <string name="on">ON</string>
+    <string name="off">OFF</string>
     <string name="comment_hint">메모는 ## 주석 ## 형식으로 작성하세요. 편집 상태에는 보존되고 최종 Prompt에서는 제거됩니다.</string>
     <string name="character_girl">여자</string>
     <string name="character_boy">남자</string>
