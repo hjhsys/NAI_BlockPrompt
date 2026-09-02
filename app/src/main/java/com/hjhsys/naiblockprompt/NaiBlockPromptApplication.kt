@@ -11,6 +11,8 @@ import com.hjhsys.naiblockprompt.data.generation.GenerationRepository
 import com.hjhsys.naiblockprompt.data.library.LibraryRepository
 import com.hjhsys.naiblockprompt.data.network.nai.OkHttpNaiImageApi
 import com.hjhsys.naiblockprompt.data.security.KeystoreTokenStore
+import com.hjhsys.naiblockprompt.data.autocomplete.AutocompleteRepository
+import com.hjhsys.naiblockprompt.data.autocomplete.OkHttpAutocompleteApi
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
@@ -25,20 +27,19 @@ class NaiBlockPromptApplication : Application() {
             .addMigrations(MIGRATION_1_2)
             .build()
         val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
-        val api = OkHttpNaiImageApi(
-            OkHttpClient.Builder()
+        val client = OkHttpClient.Builder()
                 .connectTimeout(30, TimeUnit.SECONDS)
                 .writeTimeout(60, TimeUnit.SECONDS)
                 .readTimeout(5, TimeUnit.MINUTES)
-                .build(),
-            json,
-        )
+                .build()
+        val api = OkHttpNaiImageApi(client, json)
         container = AppContainer(
             sessionRepository = SessionRepository(database.sessionDao(), json),
             settingsRepository = SettingsRepository(this),
             tokenStore = KeystoreTokenStore(this),
             generationRepository = GenerationRepository(this, api, database.historyDao(), json),
             libraryRepository = LibraryRepository(database.savedDao(), database.historyDao(), json),
+            autocompleteRepository = AutocompleteRepository(OkHttpAutocompleteApi(client, json), database.tagDao()),
         )
     }
 }
@@ -64,4 +65,5 @@ data class AppContainer(
     val tokenStore: KeystoreTokenStore,
     val generationRepository: GenerationRepository,
     val libraryRepository: LibraryRepository,
+    val autocompleteRepository: AutocompleteRepository,
 )

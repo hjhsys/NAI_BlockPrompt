@@ -54,6 +54,8 @@ interface HistoryDao {
 
 @Dao
 interface TagDao {
+    @Query("SELECT * FROM tags WHERE canonicalTag = :canonical LIMIT 1")
+    suspend fun findByCanonical(canonical: String): TagEntity?
     @Query("SELECT * FROM tags WHERE canonicalTag LIKE '%' || :query || '%' ORDER BY postCount DESC LIMIT :limit")
     suspend fun search(query: String, limit: Int = 50): List<TagEntity>
     @Upsert suspend fun upsertTag(entity: TagEntity)

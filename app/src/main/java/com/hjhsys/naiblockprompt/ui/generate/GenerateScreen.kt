@@ -4,6 +4,7 @@ import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
@@ -25,6 +26,8 @@ import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.unit.dp
 import com.hjhsys.naiblockprompt.R
 import com.hjhsys.naiblockprompt.domain.editor.*
@@ -43,6 +46,8 @@ import coil3.compose.AsyncImage
 import androidx.compose.ui.layout.ContentScale
 import java.io.File
 import androidx.compose.ui.window.Dialog
+import com.hjhsys.naiblockprompt.domain.autocomplete.PromptAutocomplete
+import com.hjhsys.naiblockprompt.domain.autocomplete.TagSuggestion
 
 @Composable
 fun GenerateScreen(
@@ -406,6 +411,7 @@ private fun PromptSectionContent(
             onLoad = { viewModel.beginBlockLoad(owner, selectedPolarity, block.id) },
             onSave = { viewModel.beginBlockSave(block) },
             onFormat = { viewModel.formatBlock(owner, selectedPolarity, block.id, it) },
+            viewModel = viewModel,
         )
     }
     OutlinedButton(
@@ -476,11 +482,24 @@ private fun PromptBlockCard(
     onLoad: () -> Unit,
     onSave: () -> Unit,
     onFormat: (BlockFormatter) -> Unit,
+    viewModel: MainViewModel,
 ) {
     val validation = remember(block.content) { PromptProcessor.validateWeights(block.content) }
     val randomizerValidation = remember(block.content) { PromptProcessor.validateRandomizers(block.content) }
     var confirmDelete by rememberSaveable(block.id) { mutableStateOf(false) }
     var showMore by remember { mutableStateOf(false) }
+    val autocomplete by viewModel.autocomplete.collectAsStateWithLifecycle()
+    var editorValue by remember(block.id) {
+        mutableStateOf(TextFieldValue(block.content, TextRange(block.content.length)))
+    }
+    LaunchedEffect(block.content) {
+        if (editorValue.text != block.content) {
+            editorValue = editorValue.copy(
+                text = block.content,
+                selection = TextRange(editorValue.selection.end.coerceAtMost(block.content.length)),
+            )
+        }
+    }
     if (confirmDelete) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
@@ -566,8 +585,12 @@ private fun PromptBlockCard(
                     Color(0xFF9A6700)
                 }
                 OutlinedTextField(
-                    value = block.content,
-                    onValueChange = { content -> onUpdate { it.copy(content = content) } },
+                    value = editorValue,
+                    onValueChange = { value ->
+                        editorValue = value
+                        onUpdate { it.copy(content = value.text) }
+                        viewModel.requestAutocomplete(block.id, PromptAutocomplete.currentFragment(value.text, value.selection.end))
+                    },
                     enabled = !block.locked,
                     label = { Text(stringResource(R.string.prompt_content)) },
                     minLines = 3,
@@ -576,6 +599,21 @@ private fun PromptBlockCard(
                         PromptVisualTransformation(highColor, lowColor, commentColor, randomizerColor)
                     },
                 )
+                if (autocomplete.blockId == block.id) {
+                    AutocompleteSuggestions(
+                        novelAi = autocomplete.novelAi,
+                        danbooru = autocomplete.danbooru,
+                        loading = autocomplete.loading,
+                        failed = autocomplete.failed,
+                        onSelect = { suggestion ->
+                            val fragment = autocomplete.fragment ?: return@AutocompleteSuggestions
+                            val replacement = PromptAutocomplete.replace(editorValue.text, fragment, suggestion.tag)
+                            editorValue = TextFieldValue(replacement.text, TextRange(replacement.cursor))
+                            onUpdate { it.copy(content = replacement.text) }
+                            viewModel.clearAutocomplete()
+                        },
+                    )
+                }
                 Text(stringResource(R.string.comment_hint), style = MaterialTheme.typography.bodySmall)
                 if (validation.hasUnclosedWeight) {
                     Text(
@@ -607,6 +645,34 @@ private fun PromptBlockCard(
                 }
             } else {
                 Text(block.content.replace('\n', ' '), maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AutocompleteSuggestions(
+    novelAi: List<TagSuggestion>,
+    danbooru: List<TagSuggestion>,
+    loading: Boolean,
+    failed: Boolean,
+    onSelect: (TagSuggestion) -> Unit,
+) {
+    if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
+    if (novelAi.isNotEmpty()) SuggestionRow(R.string.autocomplete_nai_row, novelAi, onSelect)
+    if (danbooru.isNotEmpty()) SuggestionRow(R.string.autocomplete_danbooru_row, danbooru, onSelect)
+    if (failed && novelAi.isEmpty() && danbooru.isEmpty()) {
+        Text(stringResource(R.string.autocomplete_failed), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+@Composable
+private fun SuggestionRow(@StringRes label: Int, suggestions: List<TagSuggestion>, onSelect: (TagSuggestion) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(stringResource(label), style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(32.dp))
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            items(suggestions, key = { "${it.source}:${it.tag}" }) { suggestion ->
+                SuggestionChip(onClick = { onSelect(suggestion) }, label = { Text(suggestion.tag.replace('_', ' '), maxLines = 1) })
             }
         }
     }

@@ -69,6 +69,12 @@
     <string name="settings_formatter">포맷터 버튼 표시</string>
     <string name="settings_weight_normalization">생성 전 가중치 닫힘 자동 보정</string>
     <string name="settings_autocomplete">자동완성 소스</string>
+    <string name="autocomplete_nai_only">NovelAI만</string>
+    <string name="autocomplete_danbooru_only">Danbooru만</string>
+    <string name="autocomplete_both">NovelAI + Danbooru</string>
+    <string name="autocomplete_nai_row">NAI</string>
+    <string name="autocomplete_danbooru_row">DAN</string>
+    <string name="autocomplete_failed">일부 자동완성 결과를 불러오지 못했습니다.</string>
     <string name="settings_saved">설정은 자동으로 저장됩니다.</string>
     <string name="not_official_notice">NovelAI 또는 Anlatan과 관련 없는 비공식 서드파티 클라이언트입니다.</string>
     <string name="latest_generation">최신 생성 이미지</string>

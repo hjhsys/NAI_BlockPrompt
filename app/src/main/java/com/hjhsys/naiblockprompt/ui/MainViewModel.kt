@@ -21,6 +21,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import com.hjhsys.naiblockprompt.domain.autocomplete.PromptFragment
+import com.hjhsys.naiblockprompt.domain.autocomplete.TagSuggestion
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -51,6 +55,9 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     val hasStash: StateFlow<Boolean> = _hasStash.asStateFlow()
     private val _savedWorkflow = MutableStateFlow<SavedWorkflow?>(null)
     val savedWorkflow: StateFlow<SavedWorkflow?> = _savedWorkflow.asStateFlow()
+    private val _autocomplete = MutableStateFlow(AutocompleteUiState())
+    val autocomplete: StateFlow<AutocompleteUiState> = _autocomplete.asStateFlow()
+    private var autocompleteJob: Job? = null
 
     val settings = container.settingsRepository.settings.stateIn(
         viewModelScope,
@@ -156,6 +163,36 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     fun setHistoryLimit(value: Int) = viewModelScope.launch {
         container.settingsRepository.setHistoryLimit(value)
         container.libraryRepository.trimHistory(value)
+    }
+
+    fun setAutocompleteSource(value: AutocompleteSource) = viewModelScope.launch {
+        container.settingsRepository.setAutocompleteSource(value)
+    }
+
+    fun requestAutocomplete(blockId: String, fragment: PromptFragment?) {
+        autocompleteJob?.cancel()
+        if (fragment == null) {
+            _autocomplete.value = AutocompleteUiState()
+            return
+        }
+        val requestKey = "$blockId:${fragment.text}"
+        _autocomplete.value = AutocompleteUiState(blockId, fragment, loading = true)
+        autocompleteJob = viewModelScope.launch {
+            delay(400)
+            val source = settings.value.autocompleteSource
+            val token = container.tokenStore.load()
+            // The official Primary API Swagger currently verifies this suggest-tags model value.
+            val model = "nai-diffusion-3"
+            val result = container.autocompleteRepository.suggest(fragment.text, source, token, model)
+            if (requestKey == "$blockId:${_autocomplete.value.fragment?.text}") {
+                _autocomplete.value = AutocompleteUiState(blockId, fragment, result.novelAi, result.danbooru, failed = result.failed)
+            }
+        }
+    }
+
+    fun clearAutocomplete() {
+        autocompleteJob?.cancel()
+        _autocomplete.value = AutocompleteUiState()
     }
 
     fun saveBlock(block: PromptBlock, name: String, folderId: String?) = viewModelScope.launch { container.libraryRepository.saveBlock(block, name, folderId) }
@@ -387,3 +424,12 @@ sealed interface ConnectionUiState {
     data class ApiFailed(val statusCode: Int?) : ConnectionUiState
     data object MissingToken : ConnectionUiState
 }
+
+data class AutocompleteUiState(
+    val blockId: String? = null,
+    val fragment: PromptFragment? = null,
+    val novelAi: List<TagSuggestion> = emptyList(),
+    val danbooru: List<TagSuggestion> = emptyList(),
+    val loading: Boolean = false,
+    val failed: Boolean = false,
+)

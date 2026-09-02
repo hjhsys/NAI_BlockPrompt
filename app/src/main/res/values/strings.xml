@@ -69,6 +69,12 @@
     <string name="settings_formatter">Show formatter actions</string>
     <string name="settings_weight_normalization">Normalize weight closings before generation</string>
     <string name="settings_autocomplete">Autocomplete source</string>
+    <string name="autocomplete_nai_only">NovelAI only</string>
+    <string name="autocomplete_danbooru_only">Danbooru only</string>
+    <string name="autocomplete_both">NovelAI + Danbooru</string>
+    <string name="autocomplete_nai_row">NAI</string>
+    <string name="autocomplete_danbooru_row">DAN</string>
+    <string name="autocomplete_failed">Some suggestions could not be loaded.</string>
     <string name="settings_saved">Settings are saved automatically.</string>
     <string name="not_official_notice">Unofficial third-party client. Not affiliated with NovelAI or Anlatan.</string>
     <string name="latest_generation">Latest image</string>

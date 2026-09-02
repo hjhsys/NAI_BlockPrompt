@@ -31,6 +31,7 @@ import com.hjhsys.naiblockprompt.ui.generate.GenerateScreen
 import com.hjhsys.naiblockprompt.ui.library.HistoryScreen
 import com.hjhsys.naiblockprompt.ui.library.SavedScreen
 import com.hjhsys.naiblockprompt.ui.components.AppTitleBar
+import com.hjhsys.naiblockprompt.domain.model.AutocompleteSource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 
 private enum class MainDestination(
@@ -120,11 +121,13 @@ fun NaiBlockPromptApp(container: AppContainer) {
                     showFormatter = settings.showFormatterActions,
                     normalizeWeights = settings.normalizeWeightClosings,
                     historyLimit = settings.historyLimit,
+                    autocompleteSource = settings.autocompleteSource,
                     tokenConfigured = tokenConfigured,
                     connectionState = connectionState,
                     onShowFormatterChange = viewModel::setShowFormatter,
                     onNormalizeWeightsChange = viewModel::setNormalizeWeights,
                     onHistoryLimitChange = viewModel::setHistoryLimit,
+                    onAutocompleteSourceChange = viewModel::setAutocompleteSource,
                     onSaveToken = viewModel::saveToken,
                     onClearToken = viewModel::clearToken,
                     onTestConnection = viewModel::testConnection,
@@ -153,11 +156,13 @@ private fun SettingsScreen(
     showFormatter: Boolean,
     normalizeWeights: Boolean,
     historyLimit: Int,
+    autocompleteSource: AutocompleteSource,
     tokenConfigured: Boolean,
     connectionState: ConnectionUiState,
     onShowFormatterChange: (Boolean) -> Unit,
     onNormalizeWeightsChange: (Boolean) -> Unit,
     onHistoryLimitChange: (Int) -> Unit,
+    onAutocompleteSourceChange: (AutocompleteSource) -> Unit,
     onSaveToken: (String) -> Unit,
     onClearToken: () -> Unit,
     onTestConnection: () -> Unit,
@@ -174,6 +179,15 @@ private fun SettingsScreen(
         SettingSwitch(R.string.settings_weight_normalization, normalizeWeights, onNormalizeWeightsChange)
         Text(stringResource(R.string.settings_history_limit_value, historyLimit))
         Slider(value = historyLimit.toFloat(), onValueChange = { onHistoryLimitChange(it.toInt()) }, valueRange = 1f..100f, steps = 98)
+        Text(stringResource(R.string.settings_autocomplete), style = MaterialTheme.typography.titleMedium)
+        AutocompleteSource.entries.forEach { source ->
+            FilterChip(
+                selected = autocompleteSource == source,
+                onClick = { onAutocompleteSourceChange(source) },
+                label = { Text(stringResource(source.labelResource)) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
         HorizontalDivider()
         Text(stringResource(R.string.novelai_credentials), style = MaterialTheme.typography.titleLarge)
         Text(stringResource(R.string.token_security_hint), style = MaterialTheme.typography.bodySmall)
@@ -201,6 +215,12 @@ private fun SettingsScreen(
         Text(stringResource(R.string.settings_saved), style = MaterialTheme.typography.bodySmall)
         }
     }
+}
+
+private val AutocompleteSource.labelResource: Int get() = when (this) {
+    AutocompleteSource.NOVEL_AI -> R.string.autocomplete_nai_only
+    AutocompleteSource.DANBOORU -> R.string.autocomplete_danbooru_only
+    AutocompleteSource.BOTH -> R.string.autocomplete_both
 }
 
 @Composable

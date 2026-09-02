@@ -6,10 +6,10 @@ An Android-first, phone-focused prompt editor and unofficial third-party client 
 
 ## Current status
 
-Phase 0 through Phase 4 foundations are implemented:
+Phase 0 through Phase 5 foundations are implemented:
 
 - Native Android app written in Kotlin and Jetpack Compose
-- Generate, History, Saved, and Settings bottom navigation
+- Generate, History, and Saved bottom navigation with Settings in the common screen menu
 - English fallback and Korean Android string resources
 - Versioned domain snapshots for the current session
 - Room storage for sessions, one-slot stash, saved blocks/folders, presets, history, and tag data
@@ -28,6 +28,7 @@ Phase 0 through Phase 4 foundations are implemented:
 - 설정 가능한 History 보관 개수(1~100)와 초과 이미지 파일 정리
 - 직전 성공 요청과 Prompt/설정/Seed가 같을 때 중복 생성 확인
 - Debounced Room autosave with an immediate lifecycle flush when the app stops
+- NovelAI/Danbooru tag autocomplete with cursor-fragment replacement, provider settings, debounce/cooldown, short memory cache, and Room source provenance
 
 공식 Swagger에 model/sampler enum이 없으므로 Generate 화면에는 정확한 API ID를 직접 입력해야 합니다. Character Positioning과 V5 전용 동작은 공식 mapping이 확인될 때까지 의도적으로 제외되어 있습니다.
 
@@ -66,6 +67,7 @@ app/src/main/java/com/hjhsys/naiblockprompt/
 ├─ data/network/     NovelAI API DTO와 OkHttp client
 ├─ data/security/    Android Keystore token storage
 ├─ data/generation/  Image/History persistence
+├─ data/autocomplete/ NovelAI/Danbooru suggestion clients and cache
 ├─ domain/model/     API-independent editor and settings models
 └─ ui/               Compose navigation and screens
 ```

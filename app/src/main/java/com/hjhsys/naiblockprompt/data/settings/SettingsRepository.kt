@@ -34,4 +34,5 @@ class SettingsRepository(private val context: Context) {
     suspend fun setShowFormatter(value: Boolean) = context.settingsDataStore.edit { it[Keys.showFormatter] = value }
     suspend fun setNormalizeWeights(value: Boolean) = context.settingsDataStore.edit { it[Keys.normalizeWeights] = value }
     suspend fun setHistoryLimit(value: Int) = context.settingsDataStore.edit { it[Keys.historyLimit] = value.coerceIn(1, 100) }
+    suspend fun setAutocompleteSource(value: AutocompleteSource) = context.settingsDataStore.edit { it[Keys.autocompleteSource] = value.name }
 }
