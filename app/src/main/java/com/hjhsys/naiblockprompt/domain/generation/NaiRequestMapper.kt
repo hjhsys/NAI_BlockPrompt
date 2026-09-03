@@ -58,6 +58,7 @@ class NaiRequestMapper(
                 sampler = sampler,
                 steps = steps,
                 scale = scale,
+                guidanceRescale = settings.guidanceRescale,
                 seed = seed,
                 prompt = basePositive,
                 negativePrompt = baseNegative,

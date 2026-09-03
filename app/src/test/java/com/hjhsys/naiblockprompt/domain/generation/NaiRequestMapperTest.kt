@@ -90,6 +90,21 @@ class NaiRequestMapperTest {
         assertEquals(4, v5.parameters.paramsVersion)
     }
 
+    @Test fun `maps guidance rescale to official cfg rescale parameter`() {
+        val session = Session.empty().copy(
+            generationSettings = GenerationSettings(
+                modelId = "nai-diffusion-4-5-full",
+                samplerId = "k_euler_ancestral",
+                steps = 28,
+                scale = 5f,
+                guidanceRescale = 0.4f,
+            ),
+        )
+        val request = (NaiRequestMapper { 13L }.prepare(session, false) as PrepareGenerationResult.Ready).generation.request
+        assertEquals(0.4f, request.parameters.guidanceRescale)
+        assertTrue(Json.encodeToString(request).contains("\"cfg_rescale\":0.4"))
+    }
+
     private fun character(id: String, order: Int, positive: String) = CharacterPrompt(
         id=id, order=order, prompts=PromptPair(positiveBlocks=listOf(PromptBlock(name="p",content=positive)))
     )

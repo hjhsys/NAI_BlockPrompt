@@ -9,10 +9,15 @@ import com.hjhsys.naiblockprompt.domain.generation.*
 import com.hjhsys.naiblockprompt.domain.model.CURRENT_SNAPSHOT_VERSION
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.first
+import com.hjhsys.naiblockprompt.data.settings.SettingsRepository
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.util.UUID
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 data class GenerationRecord(val imagePath: String, val thumbnailPath: String, val seed: Long)
 
@@ -26,7 +31,9 @@ class GenerationRepository(
     private val api: NaiImageApi,
     private val historyDao: HistoryDao,
     private val json: Json,
+    private val settingsRepository: SettingsRepository,
 ) {
+    private val imageStore = GeneratedImageStore(context)
     suspend fun generate(token: String, generation: PreparedGeneration): GenerationResult {
         return when (val result = api.generate(token, generation.request)) {
             is NaiApiResult.Failure -> GenerationResult.Failure(result.error)
@@ -35,19 +42,27 @@ class GenerationRepository(
     }
 
     suspend fun testConnection(token: String) = api.testConnection(token)
+    suspend fun subscriptionStatus(token: String) = api.subscriptionStatus(token)
 
     private suspend fun persistSuccess(
         generation: PreparedGeneration,
         payload: GeneratedImagePayload,
     ): GenerationResult = withContext(Dispatchers.IO) {
+        var imageReference: String? = null
+        var thumbnail: File? = null
         try {
             val actualSeed = payload.seed ?: generation.usedSeed
             val id = UUID.randomUUID().toString()
-            val imageDir = File(context.filesDir, "generations").apply { mkdirs() }
             val thumbnailDir = File(context.filesDir, "thumbnails").apply { mkdirs() }
-            val image = File(imageDir, "$id.png")
-            val thumbnail = File(thumbnailDir, "$id.jpg")
-            image.writeBytes(payload.bytes)
+            val thumbnailFile = File(thumbnailDir, "$id.jpg")
+            thumbnail = thumbnailFile
+            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
+            val storedImage = imageStore.savePng(
+                payload.bytes,
+                "NAI_${timestamp}_${id.take(8)}.png",
+                settingsRepository.settings.first().imageSaveTreeUri,
+            )
+            imageReference = storedImage
             val decoded = BitmapFactory.decodeByteArray(payload.bytes, 0, payload.bytes.size)
                 ?: throw IllegalArgumentException("Decoded image is invalid")
             val ratio = (384f / decoded.width.coerceAtLeast(decoded.height)).coerceAtMost(1f)
@@ -57,7 +72,7 @@ class GenerationRepository(
                 (decoded.height * ratio).toInt().coerceAtLeast(1),
                 true,
             )
-            thumbnail.outputStream().use { scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, 88, it) }
+            thumbnailFile.outputStream().use { scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, 88, it) }
             if (scaled !== decoded) scaled.recycle()
             decoded.recycle()
 
@@ -66,16 +81,18 @@ class GenerationRepository(
                 HistoryEntryEntity(
                     id = id,
                     createdAt = System.currentTimeMillis(),
-                    imagePath = image.absolutePath,
-                    thumbnailPath = thumbnail.absolutePath,
+                    imagePath = storedImage,
+                    thumbnailPath = thumbnailFile.absolutePath,
                     model = generation.request.model,
                     snapshotVersion = CURRENT_SNAPSHOT_VERSION,
                     snapshotJson = json.encodeToString(snapshot),
                 ),
             )
-            GenerationResult.Success(GenerationRecord(image.absolutePath, thumbnail.absolutePath, actualSeed))
+            GenerationResult.Success(GenerationRecord(storedImage, thumbnailFile.absolutePath, actualSeed))
         } catch (error: Exception) {
-            GenerationResult.Failure(NaiApiFailure.InvalidResponse(error.message))
+            imageReference?.let(imageStore::delete)
+            thumbnail?.delete()
+            GenerationResult.Failure(NaiApiFailure.Storage(error.message))
         }
     }
 }

@@ -20,6 +20,7 @@ data class NaiRequestParameters(
     val sampler: String,
     val steps: Int,
     val scale: Float,
+    @SerialName("cfg_rescale") val guidanceRescale: Float? = null,
     val seed: Long,
     val prompt: String,
     @SerialName("negative_prompt") val negativePrompt: String,

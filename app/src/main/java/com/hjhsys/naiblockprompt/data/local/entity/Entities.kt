@@ -4,6 +4,7 @@ import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import androidx.room.ColumnInfo
 
 @Entity(tableName = "current_session")
 data class CurrentSessionEntity(
@@ -84,6 +85,7 @@ data class HistoryEntryEntity(
     val model: String?,
     val snapshotVersion: Int,
     val snapshotJson: String,
+    @ColumnInfo(defaultValue = "0") val favorite: Boolean = false,
 )
 
 @Entity(tableName = "tags", indices = [Index("canonicalTag", unique = true)])
@@ -92,11 +94,28 @@ data class TagEntity(
     val canonicalTag: String,
     val danbooruCategory: String?,
     val appCategory: String?,
-    val postCount: Long?,
+    @ColumnInfo(name = "postCount") val legacyPostCount: Long?,
+    @ColumnInfo(defaultValue = "NULL") val danbooruPostCount: Long?,
+    @ColumnInfo(defaultValue = "NULL") val naiCount: Double?,
+    @ColumnInfo(defaultValue = "NULL") val naiConfidence: Double?,
     val novelAiSource: Boolean,
     val danbooruSource: Boolean,
     val userCreated: Boolean,
     val lastSeenAt: Long?,
+    @ColumnInfo(defaultValue = "0") val useCount: Int = 0,
+    @ColumnInfo(defaultValue = "NULL") val lastUsedAt: Long? = null,
+)
+
+@Entity(
+    tableName = "tag_aliases",
+    foreignKeys = [ForeignKey(TagEntity::class, ["id"], ["tagId"], onDelete = ForeignKey.CASCADE)],
+    indices = [Index("tagId"), Index("alias")],
+)
+data class TagAliasEntity(
+    @PrimaryKey val id: String,
+    val tagId: String,
+    val alias: String,
+    val source: String,
 )
 
 @Entity(
@@ -127,4 +146,10 @@ data class UserTagOverrideEntity(
     val favorite: Boolean,
     val thumbnailPath: String?,
     val updatedAt: Long,
+)
+
+@Entity(tableName = "user_tag_categories")
+data class UserTagCategoryEntity(
+    @PrimaryKey val name: String,
+    val createdAt: Long,
 )

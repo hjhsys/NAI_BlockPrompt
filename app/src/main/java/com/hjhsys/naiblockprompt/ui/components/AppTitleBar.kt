@@ -2,6 +2,7 @@ package com.hjhsys.naiblockprompt.ui.components
 
 import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -39,6 +40,10 @@ fun AppTitleBar(
     @StringRes title: Int,
     menuItems: List<AppTitleMenuItem> = emptyList(),
     onBack: (() -> Unit)? = null,
+    subtitle: String? = null,
+    trailingSubtitle: String? = null,
+    directAction: AppTitleMenuItem? = null,
+    secondaryDirectAction: AppTitleMenuItem? = null,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     Surface(shadowElevation = 4.dp) {
@@ -51,7 +56,24 @@ fun AppTitleBar(
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back))
                 }
             }
-            Text(stringResource(title), style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(stringResource(title), style = MaterialTheme.typography.titleLarge)
+                if (subtitle != null || trailingSubtitle != null) Row(Modifier.fillMaxWidth()) {
+                    subtitle?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+                    trailingSubtitle?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                }
+            }
+            directAction?.let { action ->
+                IconButton(onClick = action.onClick, enabled = action.enabled) {
+                    Icon(action.icon, contentDescription = stringResource(action.label))
+                }
+            }
+            secondaryDirectAction?.let { action ->
+                IconButton(onClick = action.onClick, enabled = action.enabled) {
+                    Icon(action.icon, contentDescription = stringResource(action.label))
+                }
+            }
             if (menuItems.isNotEmpty()) {
                 androidx.compose.foundation.layout.Box {
                 IconButton(onClick = { menuExpanded = true }) {

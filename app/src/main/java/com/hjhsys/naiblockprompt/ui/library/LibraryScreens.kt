@@ -37,26 +37,50 @@ import com.hjhsys.naiblockprompt.ui.components.AppTitleMenuItem
 import com.hjhsys.naiblockprompt.domain.editor.PromptOwner
 import com.hjhsys.naiblockprompt.domain.model.SavedSetKind
 import java.io.File
+import android.net.Uri
 import java.text.DateFormat
 import java.util.Date
 
 @Composable
-fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onRestored: () -> Unit) {
+fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, isActive: Boolean = true, onOpenResult: () -> Unit, onRestored: () -> Unit) {
     val history by viewModel.history.collectAsState()
+    var favoritesOnly by rememberSaveable { mutableStateOf(false) }
+    val retainedUnfavorites = remember { mutableStateListOf<String>() }
+    LaunchedEffect(isActive) {
+        if (!isActive) {
+            retainedUnfavorites.clear()
+            viewModel.enforceHistoryLimit()
+        }
+    }
     var restore by remember { mutableStateOf<HistoryItem?>(null) }
     var original by remember { mutableStateOf<HistoryItem?>(null) }
     restore?.let { item -> RestoreDialog(item, { restore = null }) { options -> viewModel.restoreHistory(item, options); restore = null; onRestored() } }
     original?.takeIf { it.originalExists }?.let { item ->
         Dialog(onDismissRequest = { original = null }) {
             Surface(shape = MaterialTheme.shapes.large) {
-                AsyncImage(File(item.entity.imagePath), stringResource(R.string.generated_image), Modifier.fillMaxWidth().fillMaxHeight(.9f).clickable { original = null }, contentScale = ContentScale.Fit)
+                AsyncImage(historyImageModel(item.entity.imagePath), stringResource(R.string.generated_image), Modifier.fillMaxWidth().fillMaxHeight(.9f).clickable { original = null }, contentScale = ContentScale.Fit)
             }
         }
     }
-    Scaffold(topBar = { AppTitleBar(R.string.history_title, menuItems = listOf(AppTitleMenuItem(R.string.nav_settings, Icons.Default.Settings, onClick = onOpenSettings))) }) { padding ->
+    Scaffold(topBar = { AppTitleBar(
+        R.string.history_title,
+        directAction = AppTitleMenuItem(R.string.workspace_result, Icons.Default.Image, onClick = onOpenResult),
+    ) }) { padding ->
     LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        if (history.isEmpty()) item { Text(stringResource(R.string.history_empty)) }
-        items(history, key = { it.entity.id }) { item ->
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(selected = !favoritesOnly, onClick = { favoritesOnly = false }, label = { Text(stringResource(R.string.history_all)) })
+                FilterChip(
+                    selected = favoritesOnly,
+                    onClick = { favoritesOnly = true },
+                    label = { Text(stringResource(R.string.history_favorites)) },
+                    leadingIcon = { Icon(Icons.Default.Favorite, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                )
+            }
+        }
+        val visibleHistory = if (favoritesOnly) history.filter { it.entity.favorite || it.entity.id in retainedUnfavorites } else history
+        if (visibleHistory.isEmpty()) item { Text(stringResource(if (favoritesOnly) R.string.history_favorites_empty else R.string.history_empty)) }
+        items(visibleHistory, key = { it.entity.id }) { item ->
             ElevatedCard(Modifier.fillMaxWidth()) {
                 Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     AsyncImage(File(item.entity.thumbnailPath), stringResource(R.string.generated_image), Modifier.size(104.dp).clickable(enabled = item.originalExists) { original = item }, contentScale = ContentScale.Crop)
@@ -66,7 +90,18 @@ fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onRestor
                         item.snapshot?.generation?.let { Text(stringResource(R.string.used_seed, it.usedSeed), style = MaterialTheme.typography.bodySmall) }
                         if (!item.originalExists) Text(stringResource(R.string.original_missing), color = MaterialTheme.colorScheme.error)
                         Row {
-                            TextButton(onClick = { restore = item }) { Text(stringResource(R.string.restore)) }
+                            IconButton(onClick = {
+                                val favorite = !item.entity.favorite
+                                if (!favorite && favoritesOnly) retainedUnfavorites.add(item.entity.id) else retainedUnfavorites.remove(item.entity.id)
+                                viewModel.setHistoryFavorite(item.entity, favorite)
+                            }) {
+                                Icon(
+                                    if (item.entity.favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                                    stringResource(if (item.entity.favorite) R.string.remove_favorite else R.string.add_favorite),
+                                    tint = if (item.entity.favorite) MaterialTheme.colorScheme.primary else LocalContentColor.current,
+                                )
+                            }
+                            TextButton(onClick = { restore = item }) { Text(stringResource(R.string.load)) }
                             IconButton(onClick = { viewModel.deleteHistory(item.entity) }) { Icon(Icons.Default.Delete, stringResource(R.string.delete)) }
                         }
                     }
@@ -76,17 +111,20 @@ fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onRestor
     } }
 }
 
+private fun historyImageModel(reference: String): Any =
+    if (reference.startsWith("content://")) Uri.parse(reference) else File(reference)
+
 @Composable
 private fun RestoreDialog(item: HistoryItem, dismiss: () -> Unit, confirm: (RestoreOptions) -> Unit) {
     var settings by rememberSaveable { mutableStateOf(true) }; var base by rememberSaveable { mutableStateOf(true) }
     var characters by rememberSaveable { mutableStateOf(true) }; var seed by rememberSaveable { mutableStateOf(true) }
-    AlertDialog(onDismissRequest = dismiss, title = { Text(stringResource(R.string.restore_history)) }, text = {
+    AlertDialog(onDismissRequest = dismiss, title = { Text(stringResource(R.string.load_from_history)) }, text = {
         Column {
             Text(stringResource(R.string.restore_stash_notice))
             CheckRow(R.string.restore_settings, settings) { settings = it }; CheckRow(R.string.restore_base, base) { base = it }
             CheckRow(R.string.restore_characters, characters) { characters = it }; CheckRow(R.string.restore_seed, seed) { seed = it }
         }
-    }, confirmButton = { Button(onClick = { confirm(RestoreOptions(settings, base, characters, seed)) }, enabled = item.snapshot != null) { Text(stringResource(R.string.restore)) } }, dismissButton = { TextButton(onClick = dismiss) { Text(stringResource(R.string.cancel)) } })
+    }, confirmButton = { Button(onClick = { confirm(RestoreOptions(settings, base, characters, seed)) }, enabled = item.snapshot != null) { Text(stringResource(R.string.load)) } }, dismissButton = { TextButton(onClick = dismiss) { Text(stringResource(R.string.cancel)) } })
 }
 
 @Composable private fun CheckRow(label: Int, checked: Boolean, change: (Boolean) -> Unit) {

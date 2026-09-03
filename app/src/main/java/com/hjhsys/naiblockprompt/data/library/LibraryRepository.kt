@@ -1,5 +1,7 @@
 package com.hjhsys.naiblockprompt.data.library
 
+import android.content.Context
+import com.hjhsys.naiblockprompt.data.generation.GeneratedImageStore
 import com.hjhsys.naiblockprompt.data.local.dao.HistoryDao
 import com.hjhsys.naiblockprompt.data.local.dao.SavedDao
 import com.hjhsys.naiblockprompt.data.local.entity.*
@@ -16,11 +18,20 @@ data class HistoryItem(val entity: HistoryEntryEntity, val snapshot: SessionSnap
 data class PresetItem(val entity: PresetEntity, val session: Session?)
 data class SavedSetItem(val entity: SavedSetEntity, val set: SavedPromptSet?)
 
+object HistoryRetentionPolicy {
+    fun entriesToTrim(entries: List<HistoryEntryEntity>, keepNormal: Int): List<HistoryEntryEntity> = entries
+        .filterNot { it.favorite }
+        .sortedByDescending { it.createdAt }
+        .drop(keepNormal.coerceIn(1, 100))
+}
+
 class LibraryRepository(
+    context: Context,
     private val savedDao: SavedDao,
     private val historyDao: HistoryDao,
     private val json: Json,
 ) {
+    private val imageStore = GeneratedImageStore(context)
     val history: Flow<List<HistoryItem>> = historyDao.observeAll().map { rows -> rows.map(::historyItem) }
     val blocks: Flow<List<SavedBlockEntity>> = savedDao.observeBlocks()
     val folders: Flow<List<SavedFolderEntity>> = savedDao.observeFolders()
@@ -75,20 +86,23 @@ class LibraryRepository(
     suspend fun deleteHistory(item: HistoryEntryEntity) {
         historyDao.delete(item)
         File(item.thumbnailPath).delete()
-        File(item.imagePath).delete()
+        imageStore.delete(item.imagePath)
     }
+
+    suspend fun setHistoryFavorite(item: HistoryEntryEntity, favorite: Boolean) =
+        historyDao.setFavorite(item.id, favorite)
 
     suspend fun latestSnapshot(): SessionSnapshot? = historyDao.latest()?.let { decode(it.snapshotVersion, it.snapshotJson) }
     suspend fun trimHistory(limit: Int) {
         val keep = limit.coerceIn(1, 100)
-        historyDao.entriesBeyondLimit(keep).forEach {
+        HistoryRetentionPolicy.entriesToTrim(historyDao.listAll(), keep).forEach {
             File(it.thumbnailPath).delete()
-            File(it.imagePath).delete()
+            imageStore.delete(it.imagePath)
+            historyDao.delete(it)
         }
-        historyDao.trimToLimit(keep)
     }
 
-    private fun historyItem(row: HistoryEntryEntity) = HistoryItem(row, decode(row.snapshotVersion, row.snapshotJson), File(row.imagePath).isFile)
+    private fun historyItem(row: HistoryEntryEntity) = HistoryItem(row, decode(row.snapshotVersion, row.snapshotJson), imageStore.exists(row.imagePath))
     private fun decode(version: Int, value: String): SessionSnapshot? = runCatching {
         require(version == CURRENT_SNAPSHOT_VERSION)
         json.decodeFromString<SessionSnapshot>(value)

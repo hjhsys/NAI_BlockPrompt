@@ -1,5 +1,7 @@
 package com.hjhsys.naiblockprompt.data.autocomplete
 
+import android.content.Context
+import android.net.Uri
 import com.hjhsys.naiblockprompt.data.local.dao.TagDao
 import com.hjhsys.naiblockprompt.data.local.entity.TagEntity
 import com.hjhsys.naiblockprompt.domain.autocomplete.*
@@ -8,17 +10,141 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import java.util.UUID
+import com.hjhsys.naiblockprompt.domain.model.TagDictionaryFilter
+import com.hjhsys.naiblockprompt.domain.model.TagDictionaryItem
+import com.hjhsys.naiblockprompt.domain.model.TagDictionarySort
+import com.hjhsys.naiblockprompt.data.local.entity.UserTagOverrideEntity
+import com.hjhsys.naiblockprompt.data.local.entity.UserTagCategoryEntity
+import kotlinx.coroutines.flow.Flow
+import java.io.File
 
-data class AutocompleteResults(val novelAi: List<TagSuggestion> = emptyList(), val danbooru: List<TagSuggestion> = emptyList(), val failed: Boolean = false)
+data class AutocompleteResults(
+    val novelAi: List<TagSuggestion> = emptyList(),
+    val danbooru: List<TagSuggestion> = emptyList(),
+    val novelAiFailed: Boolean = false,
+    val danbooruFailed: Boolean = false,
+)
 
 class AutocompleteRepository(
+    private val context: Context,
     private val api: AutocompleteApi,
     private val tagDao: TagDao,
     private val now: () -> Long = System::currentTimeMillis,
 ) {
+    val observedTags = tagDao.observeAll()
+    val tagCount = tagDao.observeCount()
+    val usedCategories = tagDao.observeUsedCategories()
+    val userCategories = tagDao.observeUserCategories()
+    fun dictionary(query: String, filter: TagDictionaryFilter, category: String, sort: TagDictionarySort): Flow<List<TagDictionaryItem>> =
+        tagDao.observeDictionary(query.trim(), query.trim().replace(' ', '_'), filter.name, category, sort.name)
+
+    suspend fun addCategory(name: String) {
+        name.trim().takeIf(String::isNotBlank)?.let { tagDao.upsertUserCategory(UserTagCategoryEntity(it, now())) }
+    }
+
+    suspend fun setThumbnail(item: TagDictionaryItem, uri: Uri) {
+        val directory = File(context.filesDir, "tag_thumbnails").apply { mkdirs() }
+        val destination = File(directory, "${item.id}.img")
+        context.contentResolver.openInputStream(uri)?.use { input -> destination.outputStream().use(input::copyTo) }
+            ?: return
+        saveThumbnailPath(item, destination.absolutePath)
+    }
+
+    suspend fun setThumbnailFromFile(item: TagDictionaryItem, sourcePath: String) {
+        val source = File(sourcePath)
+        if (!source.exists()) return
+        val directory = File(context.filesDir, "tag_thumbnails").apply { mkdirs() }
+        val destination = File(directory, "${item.id}.img")
+        source.copyTo(destination, overwrite = true)
+        saveThumbnailPath(item, destination.absolutePath)
+    }
+
+    private suspend fun saveThumbnailPath(item: TagDictionaryItem, path: String) {
+        val old = tagDao.findOverride(item.id)
+        tagDao.upsertUserOverride(UserTagOverrideEntity(
+            id = old?.id ?: UUID.nameUUIDFromBytes("override:${item.id}".toByteArray()).toString(),
+            tagId = item.id, korean = old?.korean, koreanAliases = old?.koreanAliases,
+            appCategory = old?.appCategory, favorite = old?.favorite ?: item.favorite,
+            thumbnailPath = path, updatedAt = now(),
+        ))
+    }
+
+    suspend fun setFavorite(item: TagDictionaryItem, favorite: Boolean) {
+        tagDao.setFavorite(UUID.nameUUIDFromBytes("override:${item.id}".toByteArray()).toString(), item.id, favorite, now())
+    }
+
+    suspend fun saveUserDetails(item: TagDictionaryItem, korean: String?, aliases: String?, appCategory: String?) {
+        val old = tagDao.findOverride(item.id)
+        tagDao.upsertUserOverride(UserTagOverrideEntity(
+            id = old?.id ?: UUID.nameUUIDFromBytes("override:${item.id}".toByteArray()).toString(),
+            tagId = item.id,
+            korean = korean?.trim()?.takeIf(String::isNotBlank),
+            koreanAliases = aliases?.trim()?.takeIf(String::isNotBlank),
+            appCategory = appCategory?.trim()?.takeIf(String::isNotBlank),
+            favorite = old?.favorite ?: item.favorite,
+            thumbnailPath = old?.thumbnailPath,
+            updatedAt = now(),
+        ))
+    }
+
+    suspend fun resetUserDetails(item: TagDictionaryItem) {
+        val old = tagDao.findOverride(item.id) ?: return
+        if (old.favorite || old.thumbnailPath != null) {
+            tagDao.upsertUserOverride(old.copy(korean = null, koreanAliases = null, appCategory = null, updatedAt = now()))
+        } else tagDao.clearUserOverride(item.id)
+    }
+
+    suspend fun addUserTag(canonical: String, korean: String?, aliases: String?, appCategory: String?) {
+        val normalized = canonical.trim().replace(' ', '_').lowercase()
+        require(normalized.isNotBlank())
+        val existing = tagDao.findByCanonical(normalized)
+        val id = existing?.id ?: UUID.nameUUIDFromBytes(normalized.toByteArray()).toString()
+        if (existing == null) tagDao.upsertTag(TagEntity(
+            id, normalized, null, appCategory?.trim()?.takeIf(String::isNotBlank), null, null, null, null,
+            novelAiSource = false, danbooruSource = false, userCreated = true, lastSeenAt = now(),
+        ))
+        val item = TagDictionaryItem(
+            id = id,
+            canonicalTag = normalized,
+            danbooruCategory = existing?.danbooruCategory,
+            appCategory = existing?.appCategory,
+            danbooruPostCount = existing?.danbooruPostCount,
+            naiCount = existing?.naiCount,
+            naiConfidence = existing?.naiConfidence,
+            novelAiSource = existing?.novelAiSource == true,
+            danbooruSource = existing?.danbooruSource == true,
+            userCreated = existing?.userCreated ?: true,
+            useCount = existing?.useCount ?: 0,
+            lastUsedAt = existing?.lastUsedAt,
+            lastSeenAt = existing?.lastSeenAt,
+            korean = null,
+            koreanAliases = null,
+            englishAliases = null,
+            favorite = false,
+            thumbnailPath = null,
+        )
+        saveUserDetails(item, korean, aliases, appCategory)
+    }
     private data class Cached(val at: Long, val values: List<TagSuggestion>)
     private val cache = mutableMapOf<String, Cached>()
     private val lastRequest = mutableMapOf<SuggestionSource, Long>()
+
+    suspend fun local(query: String): List<TagSuggestion> = tagDao.searchPrefix(query.replace(' ', '_')).map {
+        TagSuggestion(
+            tag = it.canonicalTag,
+            source = SuggestionSource.LOCAL,
+            danbooruPostCount = it.danbooruPostCount,
+            naiCount = it.naiCount,
+            naiConfidence = it.naiConfidence,
+            category = it.danbooruCategory,
+            useCount = it.useCount,
+            lastUsedAt = it.lastUsedAt,
+        )
+    }
+
+    suspend fun recordUse(tag: String) {
+        tagDao.recordUse(tag.replace(' ', '_'), now())
+    }
 
     suspend fun suggest(query: String, source: AutocompleteSource, token: String?, model: String): AutocompleteResults = coroutineScope {
         val missingNaiToken = source != AutocompleteSource.DANBOORU && token == null
@@ -31,7 +157,8 @@ class AutocompleteRepository(
         AutocompleteResults(
             novelAi = naiResult?.getOrNull().orEmpty(),
             danbooru = danResult?.getOrNull().orEmpty(),
-            failed = missingNaiToken || listOfNotNull(naiResult, danResult).any { it.isFailure },
+            novelAiFailed = missingNaiToken || naiResult?.isFailure == true,
+            danbooruFailed = danResult?.isFailure == true,
         )
     }
 
@@ -52,11 +179,16 @@ class AutocompleteRepository(
             canonicalTag = canonical,
             danbooruCategory = suggestion.category ?: old?.danbooruCategory,
             appCategory = old?.appCategory,
-            postCount = suggestion.postCount ?: old?.postCount,
+            legacyPostCount = old?.legacyPostCount,
+            danbooruPostCount = suggestion.danbooruPostCount ?: old?.danbooruPostCount,
+            naiCount = suggestion.naiCount ?: old?.naiCount,
+            naiConfidence = suggestion.naiConfidence ?: old?.naiConfidence,
             novelAiSource = old?.novelAiSource == true || suggestion.source == SuggestionSource.NOVEL_AI,
             danbooruSource = old?.danbooruSource == true || suggestion.source == SuggestionSource.DANBOORU,
             userCreated = old?.userCreated ?: false,
             lastSeenAt = now(),
+            useCount = old?.useCount ?: 0,
+            lastUsedAt = old?.lastUsedAt,
         ))
     }
 }

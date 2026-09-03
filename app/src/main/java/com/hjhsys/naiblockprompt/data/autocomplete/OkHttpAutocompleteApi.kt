@@ -26,7 +26,9 @@ class OkHttpAutocompleteApi(
             .addQueryParameter("lang", "en")
             .build().toString(),
         token,
-    ) { body -> json.decodeFromString<NaiTagsResponse>(body).tags.map { TagSuggestion(it.tag, SuggestionSource.NOVEL_AI, it.count.toLong(), it.confidence) } }
+    ) { body -> json.decodeFromString<NaiTagsResponse>(body).tags.map {
+        TagSuggestion(tag = it.tag, source = SuggestionSource.NOVEL_AI, naiCount = it.count, naiConfidence = it.confidence)
+    } }
 
     override suspend fun danbooru(query: String) = get(
         danbooruBaseUrl.newBuilder()
@@ -35,7 +37,9 @@ class OkHttpAutocompleteApi(
             .addQueryParameter("search[order]", "count")
             .addQueryParameter("limit", "12")
             .build().toString(),
-    ) { body -> json.decodeFromString<List<DanbooruTag>>(body).map { TagSuggestion(it.name, SuggestionSource.DANBOORU, it.postCount, category = it.category.toString()) } }
+    ) { body -> json.decodeFromString<List<DanbooruTag>>(body).map {
+        TagSuggestion(tag = it.name, source = SuggestionSource.DANBOORU, danbooruPostCount = it.postCount, category = it.category.toString())
+    } }
 
     private suspend fun <T> get(url: String, token: String? = null, parse: (String) -> T): Result<T> = withContext(Dispatchers.IO) {
         try {

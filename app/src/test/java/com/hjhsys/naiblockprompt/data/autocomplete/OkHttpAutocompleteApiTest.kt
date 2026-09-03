@@ -27,6 +27,9 @@ class OkHttpAutocompleteApiTest {
         val request = server.takeRequest()
         assertEquals("red hair", result.tag)
         assertEquals(SuggestionSource.NOVEL_AI, result.source)
+        assertEquals(12.0, result.naiCount!!, 0.0)
+        assertEquals(0.8, result.naiConfidence!!, 0.0)
+        assertNull(result.danbooruPostCount)
         assertEquals("Bearer secret", request.getHeader("Authorization"))
         assertEquals("red", request.requestUrl?.queryParameter("prompt"))
     }
@@ -36,7 +39,8 @@ class OkHttpAutocompleteApiTest {
         val result = api.danbooru("blue").getOrThrow().single()
         val request = server.takeRequest()
         assertEquals("blue_hair", result.tag)
-        assertEquals(99L, result.postCount)
+        assertEquals(99L, result.danbooruPostCount)
+        assertNull(result.naiCount)
         assertEquals("blue*", request.requestUrl?.queryParameter("search[name_matches]"))
     }
 }

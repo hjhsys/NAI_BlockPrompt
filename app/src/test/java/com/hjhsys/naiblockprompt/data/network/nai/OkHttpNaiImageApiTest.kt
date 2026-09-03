@@ -14,6 +14,25 @@ import org.junit.Test
 import java.util.Base64
 
 class OkHttpNaiImageApiTest {
+    @Test fun `parses official subscription balance fields`() = runTest {
+        val server = MockWebServer().apply {
+            enqueue(MockResponse().setResponseCode(200).setBody(
+                """{"trainingStepsLeft":{"fixedTrainingStepsLeft":1200,"purchasedTrainingSteps":34},"usage":{"isNegative":false,"percent":87,"timeUntilNextPercent":120}}"""
+            ))
+            start()
+        }
+        try {
+            val api = OkHttpNaiImageApi(OkHttpClient(), Json { ignoreUnknownKeys = true }, server.url("/"))
+            val result = api.subscriptionStatus("pst-secret") as NaiApiResult.Success
+            val steps = requireNotNull(result.value.trainingStepsLeft)
+            assertEquals(1234, steps.fixedTrainingStepsLeft + steps.purchasedTrainingSteps)
+            assertEquals(87, result.value.usage!!.percent)
+            val request = server.takeRequest()
+            assertEquals("/user/subscription", request.path)
+            assertEquals("Bearer pst-secret", request.getHeader("Authorization"))
+        } finally { server.shutdown() }
+    }
+
     @Test fun `decodes JSON image response and sends bearer without leaking into body`() = runTest {
         val server = MockWebServer()
         server.enqueue(MockResponse().setResponseCode(201).setHeader("Content-Type", "application/json").setBody(

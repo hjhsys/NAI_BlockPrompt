@@ -6,10 +6,11 @@ An Android-first, phone-focused prompt editor and unofficial third-party client 
 
 ## Current status
 
-Phase 0 through Phase 5 foundations are implemented:
+Phase 0 through Phase 5 and the first Phase 6 Tag Dictionary slice are implemented:
 
 - Native Android app written in Kotlin and Jetpack Compose
-- Generate, History, and Saved bottom navigation with Settings in the common screen menu
+- Generate, DB placeholder, and Saved bottom navigation with Settings in the common screen menu
+- Generate-centered horizontal workspace: Generation Settings ← Generate → History
 - English fallback and Korean Android string resources
 - Versioned domain snapshots for the current session
 - Room storage for sessions, one-slot stash, saved blocks/folders, presets, history, and tag data
@@ -26,6 +27,8 @@ Phase 0 through Phase 5 foundations are implemented:
 - Saved Block 검색 및 Base 복사, 전체 Session Preset 저장/복원
 - History/Preset 복원 전 현재 작업을 보존하는 1-slot Stash swap
 - 설정 가능한 History 보관 개수(1~100)와 초과 이미지 파일 정리
+- 앱 재시작 후에도 유지되는 History 즐겨찾기와 즐겨찾기를 제외한 일반 History limit
+- Unlicense Danbooru canonical Tag DB, alias/category/post-count 검색, 즐겨찾기, 최근 사용, 사용자 한국어 번역/별칭 override
 - 직전 성공 요청과 Prompt/설정/Seed가 같을 때 중복 생성 확인
 - Debounced Room autosave with an immediate lifecycle flush when the app stops
 - NovelAI/Danbooru tag autocomplete with cursor-fragment replacement, provider settings, debounce/cooldown, short memory cache, and Room source provenance
@@ -85,4 +88,4 @@ NovelAI 생성 전 Settings에서 API/Persistent Token을 등록하세요. Token
 
 ## License
 
-Application source is available under the [MIT License](LICENSE). Bundled third-party datasets, if added later, retain their respective licenses.
+Application source is available under the [MIT License](LICENSE). Bundled third-party datasets retain their respective licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

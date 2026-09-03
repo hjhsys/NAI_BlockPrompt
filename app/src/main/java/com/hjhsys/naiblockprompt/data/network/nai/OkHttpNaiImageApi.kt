@@ -47,6 +47,14 @@ class OkHttpNaiImageApi(
         ) { NaiApiResult.Success(Unit) }
     }
 
+    override suspend fun subscriptionStatus(token: String): NaiApiResult<NaiSubscriptionStatus> = execute(
+        Request.Builder()
+            .url(baseUrl.resolve("user/subscription")!!)
+            .get()
+            .header("Authorization", bearer(token))
+            .build(),
+    ) { body -> NaiApiResult.Success(json.decodeFromString<NaiSubscriptionStatus>(body)) }
+
     private suspend fun <T> execute(request: Request, parse: (String) -> NaiApiResult<T>): NaiApiResult<T> =
         withContext(Dispatchers.IO) {
             try {

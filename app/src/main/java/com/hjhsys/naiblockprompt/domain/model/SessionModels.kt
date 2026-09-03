@@ -77,6 +77,7 @@ data class GenerationSettings(
     val scale: Float? = null,
     val seedMode: SeedMode = SeedMode.RANDOM,
     val seed: Long? = null,
+    val guidanceRescale: Float? = null,
 )
 
 @Serializable

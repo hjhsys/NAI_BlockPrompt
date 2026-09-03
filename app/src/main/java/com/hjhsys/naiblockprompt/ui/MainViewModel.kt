@@ -20,11 +20,14 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import com.hjhsys.naiblockprompt.domain.autocomplete.PromptFragment
 import com.hjhsys.naiblockprompt.domain.autocomplete.TagSuggestion
+import com.hjhsys.naiblockprompt.domain.autocomplete.AutocompleteDeduplicator
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -46,6 +49,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     val tokenConfigured: StateFlow<Boolean> = _tokenConfigured.asStateFlow()
     private val _connectionState = MutableStateFlow<ConnectionUiState>(ConnectionUiState.Idle)
     val connectionState: StateFlow<ConnectionUiState> = _connectionState.asStateFlow()
+    private val _subscriptionStatus = MutableStateFlow<SubscriptionUiState>(SubscriptionUiState.Unavailable)
+    val subscriptionStatus: StateFlow<SubscriptionUiState> = _subscriptionStatus.asStateFlow()
     val history = container.libraryRepository.history.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val savedBlocks = container.libraryRepository.blocks.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val savedFolders = container.libraryRepository.folders.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -57,6 +62,25 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     val savedWorkflow: StateFlow<SavedWorkflow?> = _savedWorkflow.asStateFlow()
     private val _autocomplete = MutableStateFlow(AutocompleteUiState())
     val autocomplete: StateFlow<AutocompleteUiState> = _autocomplete.asStateFlow()
+    val collectedTags = container.autocompleteRepository.observedTags.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        emptyList(),
+    )
+    val tagCount = container.autocompleteRepository.tagCount.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+    private val tagDictionaryQuery = MutableStateFlow("")
+    private val tagDictionaryFilter = MutableStateFlow(TagDictionaryFilter.ALL)
+    private val tagDictionaryCategory = MutableStateFlow("")
+    private val tagDictionarySort = MutableStateFlow(TagDictionarySort.POPULAR)
+    private var tagInsertTarget: TagInsertTarget? = null
+    private val _tagInsertAvailable = MutableStateFlow(false)
+    val tagInsertAvailable: StateFlow<Boolean> = _tagInsertAvailable.asStateFlow()
+    val usedTagCategories = container.autocompleteRepository.usedCategories.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val userTagCategories = container.autocompleteRepository.userCategories.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val dictionaryTags = combine(tagDictionaryQuery, tagDictionaryFilter, tagDictionaryCategory, tagDictionarySort) { query, filter, category, sort ->
+        DictionarySearch(query, filter, category, sort)
+    }.flatMapLatest { search -> container.autocompleteRepository.dictionary(search.query, search.filter, search.category, search.sort) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     private var autocompleteJob: Job? = null
 
     val settings = container.settingsRepository.settings.stateIn(
@@ -68,6 +92,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     init {
         viewModelScope.launch { _session.value = container.sessionRepository.restoreOrCreate() }
         viewModelScope.launch { _hasStash.value = container.sessionRepository.hasStash() }
+        if (_tokenConfigured.value) refreshSubscriptionStatus()
         viewModelScope.launch {
             saveSignals.debounce(350).collect {
                 persistCurrent()
@@ -169,6 +194,13 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         container.settingsRepository.setAutocompleteSource(value)
     }
 
+    fun setAppearanceMode(value: AppearanceMode) = viewModelScope.launch {
+        container.settingsRepository.setAppearanceMode(value)
+    }
+    fun setImageSaveTreeUri(value: String?) = viewModelScope.launch {
+        container.settingsRepository.setImageSaveTreeUri(value)
+    }
+
     fun requestAutocomplete(blockId: String, fragment: PromptFragment?) {
         autocompleteJob?.cancel()
         if (fragment == null) {
@@ -178,6 +210,10 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         val requestKey = "$blockId:${fragment.text}"
         _autocomplete.value = AutocompleteUiState(blockId, fragment, loading = true)
         autocompleteJob = viewModelScope.launch {
+            val local = container.autocompleteRepository.local(fragment.text)
+            if (requestKey == "$blockId:${_autocomplete.value.fragment?.text}") {
+                _autocomplete.value = _autocomplete.value.copy(local = local)
+            }
             delay(400)
             val source = settings.value.autocompleteSource
             val token = container.tokenStore.load()
@@ -185,7 +221,15 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             val model = "nai-diffusion-3"
             val result = container.autocompleteRepository.suggest(fragment.text, source, token, model)
             if (requestKey == "$blockId:${_autocomplete.value.fragment?.text}") {
-                _autocomplete.value = AutocompleteUiState(blockId, fragment, result.novelAi, result.danbooru, failed = result.failed)
+                _autocomplete.value = AutocompleteUiState(
+                    blockId,
+                    fragment,
+                    local,
+                    AutocompleteDeduplicator.excludeLocal(local, result.novelAi),
+                    AutocompleteDeduplicator.excludeLocal(local, result.danbooru),
+                    novelAiFailed = result.novelAiFailed,
+                    danbooruFailed = result.danbooruFailed,
+                )
             }
         }
     }
@@ -193,6 +237,50 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     fun clearAutocomplete() {
         autocompleteJob?.cancel()
         _autocomplete.value = AutocompleteUiState()
+    }
+
+    fun recordAutocompleteUse(suggestion: TagSuggestion) = viewModelScope.launch {
+        container.autocompleteRepository.recordUse(suggestion.tag)
+    }
+
+    fun searchDictionary(query: String) { tagDictionaryQuery.value = query }
+    fun filterDictionary(filter: TagDictionaryFilter) { tagDictionaryFilter.value = filter }
+    fun filterDictionaryCategory(category: String) { tagDictionaryCategory.value = category }
+    fun sortDictionary(sort: TagDictionarySort) { tagDictionarySort.value = sort }
+    fun addTagCategory(name: String) = viewModelScope.launch { container.autocompleteRepository.addCategory(name) }
+    fun setTagThumbnail(item: TagDictionaryItem, uri: android.net.Uri) = viewModelScope.launch { container.autocompleteRepository.setThumbnail(item, uri) }
+    fun setTagThumbnailFromFile(item: TagDictionaryItem, path: String) = viewModelScope.launch { container.autocompleteRepository.setThumbnailFromFile(item, path) }
+    fun setTagFavorite(item: TagDictionaryItem, favorite: Boolean) = viewModelScope.launch {
+        container.autocompleteRepository.setFavorite(item, favorite)
+    }
+    fun saveTagDetails(item: TagDictionaryItem, korean: String?, aliases: String?, appCategory: String?) = viewModelScope.launch {
+        container.autocompleteRepository.saveUserDetails(item, korean, aliases, appCategory)
+    }
+    fun resetTagDetails(item: TagDictionaryItem) = viewModelScope.launch {
+        container.autocompleteRepository.resetUserDetails(item)
+    }
+    fun addUserTag(canonical: String, korean: String?, aliases: String?, appCategory: String?) = viewModelScope.launch {
+        container.autocompleteRepository.addUserTag(canonical, korean, aliases, appCategory)
+    }
+    fun beginTagInsert(owner: PromptOwner, polarity: PromptPolarity, blockId: String, cursor: Int) {
+        clearAutocomplete()
+        tagInsertTarget = TagInsertTarget(owner, polarity, blockId, cursor)
+        _tagInsertAvailable.value = true
+    }
+    fun insertDictionaryTags(tags: List<String>) {
+        val target = tagInsertTarget ?: return
+        if (tags.isEmpty()) return
+        updateBlock(target.owner, target.polarity, target.blockId) { block ->
+            block.copy(content = TagInsertion.insert(block.content, target.cursor, tags))
+        }
+        tags.forEach { tag ->
+            viewModelScope.launch { container.autocompleteRepository.recordUse(tag) }
+        }
+        cancelTagInsert()
+    }
+    fun cancelTagInsert() {
+        tagInsertTarget = null
+        _tagInsertAvailable.value = false
     }
 
     fun saveBlock(block: PromptBlock, name: String, folderId: String?) = viewModelScope.launch { container.libraryRepository.saveBlock(block, name, folderId) }
@@ -258,6 +346,12 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     fun deletePreset(item: PresetEntity) = viewModelScope.launch { container.libraryRepository.deletePreset(item) }
     fun deleteSavedSet(item: SavedSetEntity) = viewModelScope.launch { container.libraryRepository.deleteSet(item) }
     fun deleteHistory(item: HistoryEntryEntity) = viewModelScope.launch { container.libraryRepository.deleteHistory(item) }
+    fun setHistoryFavorite(item: HistoryEntryEntity, favorite: Boolean) = viewModelScope.launch {
+        container.libraryRepository.setHistoryFavorite(item, favorite)
+    }
+    fun enforceHistoryLimit() = viewModelScope.launch {
+        container.libraryRepository.trimHistory(settings.value.historyLimit)
+    }
 
     fun addSavedBlockToBase(item: SavedBlockEntity) = edit { current ->
         val blocks = current.base.prompts.positiveBlocks
@@ -269,9 +363,10 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         val source = item.snapshot?.session ?: return
         val current = _session.value ?: return
         var generationSettings = if (options.settings) source.generationSettings else current.generationSettings
-        if (!options.settings && options.seed) {
-            generationSettings = generationSettings.copy(seedMode = source.generationSettings.seedMode, seed = source.generationSettings.seed)
-        } else if (options.settings && !options.seed) {
+        if (options.seed) {
+            val importedSeed = item.snapshot.generation?.usedSeed ?: source.generationSettings.seed
+            if (importedSeed != null) generationSettings = generationSettings.copy(seedMode = SeedMode.FIXED, seed = importedSeed)
+        } else if (options.settings) {
             generationSettings = generationSettings.copy(seedMode = current.generationSettings.seedMode, seed = current.generationSettings.seed)
         }
         replaceWithStash(current.copy(
@@ -305,7 +400,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     fun saveToken(token: String) {
         if (token.isBlank()) return
         runCatching { container.tokenStore.save(token) }
-            .onSuccess { _tokenConfigured.value = true }
+            .onSuccess { _tokenConfigured.value = true; refreshSubscriptionStatus() }
             .onFailure { _connectionState.value = ConnectionUiState.Failed }
     }
 
@@ -313,6 +408,21 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         container.tokenStore.clear()
         _tokenConfigured.value = false
         _connectionState.value = ConnectionUiState.Idle
+        _subscriptionStatus.value = SubscriptionUiState.Unavailable
+    }
+
+    fun refreshSubscriptionStatus() {
+        val token = container.tokenStore.load() ?: return
+        viewModelScope.launch {
+            _subscriptionStatus.value = SubscriptionUiState.Loading
+            _subscriptionStatus.value = when (val result = container.generationRepository.subscriptionStatus(token)) {
+                is NaiApiResult.Success -> SubscriptionUiState.Available(
+                    anlas = result.value.trainingStepsLeft?.let { it.fixedTrainingStepsLeft + it.purchasedTrainingSteps },
+                    opusPercent = result.value.usage?.percent?.takeUnless { result.value.usage.isNegative },
+                )
+                is NaiApiResult.Failure -> SubscriptionUiState.Unavailable
+            }
+        }
     }
 
     fun testConnection() {
@@ -331,6 +441,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
                     else -> ConnectionUiState.ApiFailed(null)
                 }
             }
+            if (_connectionState.value == ConnectionUiState.Success) refreshSubscriptionStatus()
         }
     }
 
@@ -372,6 +483,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
                     retryGeneration = null
                     _generationState.value = GenerationUiState.Success(result.record)
                     container.libraryRepository.trimHistory(settings.value.historyLimit)
+                    refreshSubscriptionStatus()
                 }
                 is GenerationResult.Failure -> {
                     retryGeneration = generation
@@ -425,11 +537,33 @@ sealed interface ConnectionUiState {
     data object MissingToken : ConnectionUiState
 }
 
+sealed interface SubscriptionUiState {
+    data object Unavailable : SubscriptionUiState
+    data object Loading : SubscriptionUiState
+    data class Available(val anlas: Int?, val opusPercent: Int?) : SubscriptionUiState
+}
+
 data class AutocompleteUiState(
     val blockId: String? = null,
     val fragment: PromptFragment? = null,
+    val local: List<TagSuggestion> = emptyList(),
     val novelAi: List<TagSuggestion> = emptyList(),
     val danbooru: List<TagSuggestion> = emptyList(),
     val loading: Boolean = false,
-    val failed: Boolean = false,
+    val novelAiFailed: Boolean = false,
+    val danbooruFailed: Boolean = false,
+)
+
+private data class TagInsertTarget(
+    val owner: PromptOwner,
+    val polarity: PromptPolarity,
+    val blockId: String,
+    val cursor: Int,
+)
+
+private data class DictionarySearch(
+    val query: String,
+    val filter: TagDictionaryFilter,
+    val category: String,
+    val sort: TagDictionarySort,
 )

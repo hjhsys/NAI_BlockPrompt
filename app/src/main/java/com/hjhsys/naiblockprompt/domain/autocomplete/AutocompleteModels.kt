@@ -1,13 +1,16 @@
 package com.hjhsys.naiblockprompt.domain.autocomplete
 
-enum class SuggestionSource { NOVEL_AI, DANBOORU }
+enum class SuggestionSource { LOCAL, NOVEL_AI, DANBOORU }
 
 data class TagSuggestion(
     val tag: String,
     val source: SuggestionSource,
-    val postCount: Long? = null,
-    val confidence: Double? = null,
+    val danbooruPostCount: Long? = null,
+    val naiCount: Double? = null,
+    val naiConfidence: Double? = null,
     val category: String? = null,
+    val useCount: Int = 0,
+    val lastUsedAt: Long? = null,
 )
 
 data class PromptFragment(val text: String, val start: Int, val endExclusive: Int)
@@ -33,4 +36,13 @@ object PromptAutocomplete {
         val prefix = text.substring(0, fragment.start)
         return PromptReplacement(prefix + inserted + separator + suffix, prefix.length + inserted.length + separator.length)
     }
+}
+
+object AutocompleteDeduplicator {
+    fun excludeLocal(local: List<TagSuggestion>, remote: List<TagSuggestion>): List<TagSuggestion> {
+        val localKeys = local.mapTo(mutableSetOf()) { canonicalKey(it.tag) }
+        return remote.distinctBy { canonicalKey(it.tag) }.filterNot { canonicalKey(it.tag) in localKeys }
+    }
+
+    private fun canonicalKey(tag: String) = tag.trim().replace(' ', '_').lowercase()
 }

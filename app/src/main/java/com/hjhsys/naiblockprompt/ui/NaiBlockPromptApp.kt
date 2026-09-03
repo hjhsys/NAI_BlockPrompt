@@ -27,22 +27,29 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.hjhsys.naiblockprompt.AppContainer
 import com.hjhsys.naiblockprompt.R
-import com.hjhsys.naiblockprompt.ui.generate.GenerateScreen
-import com.hjhsys.naiblockprompt.ui.library.HistoryScreen
+import com.hjhsys.naiblockprompt.ui.generate.GeneratePagerScreen
+import com.hjhsys.naiblockprompt.ui.generate.GenerationSettingsScreen
 import com.hjhsys.naiblockprompt.ui.library.SavedScreen
 import com.hjhsys.naiblockprompt.ui.components.AppTitleBar
 import com.hjhsys.naiblockprompt.domain.model.AutocompleteSource
+import com.hjhsys.naiblockprompt.ui.database.TagDatabaseScreen
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
+import android.content.Intent
 
 private enum class MainDestination(
     val route: String,
     @param:StringRes val label: Int,
     val icon: ImageVector,
 ) {
+    Database("database", R.string.nav_db, Icons.Default.Storage),
     Generate("generate", R.string.nav_generate, Icons.Default.AutoAwesome),
-    History("history", R.string.nav_history, Icons.Default.History),
     Saved("saved", R.string.nav_saved, Icons.Default.Bookmarks),
     Settings("settings", R.string.nav_settings, Icons.Default.Settings),
+    GenerationSettings("generation-settings", R.string.generation_settings, Icons.Default.Tune),
+    TagPicker("tag-picker", R.string.tag_picker_title, Icons.Default.Storage),
 }
 
 @Composable
@@ -56,6 +63,7 @@ fun NaiBlockPromptApp(container: AppContainer) {
     val savedWorkflow by viewModel.savedWorkflow.collectAsStateWithLifecycle()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
+    var generateReturnSignal by rememberSaveable { mutableIntStateOf(0) }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, viewModel) {
         val observer = LifecycleEventObserver { _, event ->
@@ -72,19 +80,19 @@ fun NaiBlockPromptApp(container: AppContainer) {
 
     Scaffold(
         bottomBar = {
-            if (savedWorkflow == null) NavigationBar {
-                MainDestination.entries.filterNot { it == MainDestination.Settings }.forEach { destination ->
+            if (!(currentRoute == MainDestination.Saved.route && savedWorkflow != null) && currentRoute != MainDestination.TagPicker.route) NavigationBar {
+                listOf(MainDestination.Database, MainDestination.Generate, MainDestination.Saved).forEach { destination ->
                     NavigationBarItem(
                         selected = currentRoute == destination.route,
                         onClick = {
+                            if (destination == MainDestination.Generate) generateReturnSignal++
                             navController.navigate(destination.route) {
-                                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                                popUpTo(MainDestination.Generate.route)
                                 launchSingleTop = true
-                                restoreState = true
                             }
                         },
-                        icon = { Icon(destination.icon, contentDescription = null) },
-                        label = { Text(stringResource(destination.label)) },
+                        icon = { Icon(destination.icon, contentDescription = null, modifier = Modifier.size(20.dp)) },
+                        label = { Text(stringResource(destination.label), style = MaterialTheme.typography.labelSmall) },
                     )
                 }
             }
@@ -96,18 +104,31 @@ fun NaiBlockPromptApp(container: AppContainer) {
             modifier = Modifier.padding(padding),
         ) {
             composable(MainDestination.Generate.route) {
-                GenerateScreen(session, settings, viewModel) {
-                    navController.navigate(MainDestination.Settings.route) { launchSingleTop = true }
-                }
+                GeneratePagerScreen(
+                    session = session,
+                    appSettings = settings,
+                    viewModel = viewModel,
+                    onOpenSettings = { navController.navigate(MainDestination.Settings.route) { launchSingleTop = true } },
+                    onOpenGenerationSettings = { navController.navigate(MainDestination.GenerationSettings.route) { launchSingleTop = true } },
+                    returnToPromptSignal = generateReturnSignal,
+                    onOpenTagDatabase = { navController.navigate(MainDestination.TagPicker.route) },
+                )
             }
-            composable(MainDestination.History.route) {
-                HistoryScreen(viewModel, onOpenSettings = {
-                    navController.navigate(MainDestination.Settings.route) { launchSingleTop = true }
-                }) {
-                    navController.navigate(MainDestination.Generate.route) {
-                        launchSingleTop = true
-                    }
-                }
+            composable(MainDestination.Database.route) {
+                TagDatabaseScreen(
+                    viewModel,
+                    onOpenSettings = { navController.navigate(MainDestination.Settings.route) { launchSingleTop = true } },
+                )
+            }
+            composable(MainDestination.TagPicker.route) {
+                com.hjhsys.naiblockprompt.ui.database.TagPickerScreen(
+                    viewModel = viewModel,
+                    onDismiss = { viewModel.cancelTagInsert(); navController.popBackStack() },
+                    onInserted = {
+                        generateReturnSignal++
+                        navController.popBackStack()
+                    },
+                )
             }
             composable(MainDestination.Saved.route) {
                 SavedScreen(viewModel, onOpenSettings = {
@@ -122,16 +143,28 @@ fun NaiBlockPromptApp(container: AppContainer) {
                     normalizeWeights = settings.normalizeWeightClosings,
                     historyLimit = settings.historyLimit,
                     autocompleteSource = settings.autocompleteSource,
+                    appearanceMode = settings.appearanceMode,
+                    imageSaveTreeUri = settings.imageSaveTreeUri,
                     tokenConfigured = tokenConfigured,
                     connectionState = connectionState,
                     onShowFormatterChange = viewModel::setShowFormatter,
                     onNormalizeWeightsChange = viewModel::setNormalizeWeights,
                     onHistoryLimitChange = viewModel::setHistoryLimit,
                     onAutocompleteSourceChange = viewModel::setAutocompleteSource,
+                    onAppearanceModeChange = viewModel::setAppearanceMode,
+                    onImageSaveTreeUriChange = viewModel::setImageSaveTreeUri,
                     onSaveToken = viewModel::saveToken,
                     onClearToken = viewModel::clearToken,
                     onTestConnection = viewModel::testConnection,
                     onBack = { navController.popBackStack() },
+                )
+            }
+            composable(MainDestination.GenerationSettings.route) {
+                GenerationSettingsScreen(
+                    session = session,
+                    viewModel = viewModel,
+                    onBack = { navController.popBackStack() },
+                    onOpenSettings = { navController.navigate(MainDestination.Settings.route) { launchSingleTop = true } },
                 )
             }
         }
@@ -139,15 +172,17 @@ fun NaiBlockPromptApp(container: AppContainer) {
 }
 
 @Composable
-private fun PlaceholderScreen(@StringRes title: Int, @StringRes message: Int) {
-    Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        Text(stringResource(title), style = MaterialTheme.typography.headlineMedium)
-        Text(stringResource(message), style = MaterialTheme.typography.bodyLarge)
-        Spacer(Modifier.weight(1f))
-        Text(stringResource(R.string.not_official_notice), style = MaterialTheme.typography.bodySmall)
+private fun PlaceholderScreen(@StringRes title: Int, @StringRes message: Int, onOpenSettings: () -> Unit) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        AppTitleBar(title, menuItems = listOf(com.hjhsys.naiblockprompt.ui.components.AppTitleMenuItem(R.string.nav_settings, Icons.Default.Settings, onClick = onOpenSettings)))
+        Column(
+            modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Text(stringResource(message), style = MaterialTheme.typography.bodyLarge)
+            Spacer(Modifier.weight(1f))
+            Text(stringResource(R.string.not_official_notice), style = MaterialTheme.typography.bodySmall)
+        }
     }
 }
 
@@ -157,26 +192,64 @@ private fun SettingsScreen(
     normalizeWeights: Boolean,
     historyLimit: Int,
     autocompleteSource: AutocompleteSource,
+    appearanceMode: com.hjhsys.naiblockprompt.domain.model.AppearanceMode,
+    imageSaveTreeUri: String?,
     tokenConfigured: Boolean,
     connectionState: ConnectionUiState,
     onShowFormatterChange: (Boolean) -> Unit,
     onNormalizeWeightsChange: (Boolean) -> Unit,
     onHistoryLimitChange: (Int) -> Unit,
     onAutocompleteSourceChange: (AutocompleteSource) -> Unit,
+    onAppearanceModeChange: (com.hjhsys.naiblockprompt.domain.model.AppearanceMode) -> Unit,
+    onImageSaveTreeUriChange: (String?) -> Unit,
     onSaveToken: (String) -> Unit,
     onClearToken: () -> Unit,
     onTestConnection: () -> Unit,
     onBack: () -> Unit,
 ) {
     var token by rememberSaveable { mutableStateOf("") }
+    val context = LocalContext.current
+    val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        uri?.let {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    it,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                )
+            }
+            onImageSaveTreeUriChange(it.toString())
+        }
+    }
     Column(modifier = Modifier.fillMaxSize()) {
         AppTitleBar(R.string.settings_title, onBack = onBack)
         Column(
-            modifier = Modifier.fillMaxSize().padding(20.dp),
+            modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
         SettingSwitch(R.string.settings_formatter, showFormatter, onShowFormatterChange)
         SettingSwitch(R.string.settings_weight_normalization, normalizeWeights, onNormalizeWeightsChange)
+        Text(stringResource(R.string.settings_appearance), style = MaterialTheme.typography.titleMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            com.hjhsys.naiblockprompt.domain.model.AppearanceMode.entries.forEach { mode ->
+                FilterChip(
+                    selected = appearanceMode == mode,
+                    onClick = { onAppearanceModeChange(mode) },
+                    label = { Text(stringResource(mode.labelResource)) },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+        Text(stringResource(R.string.image_save_location), style = MaterialTheme.typography.titleMedium)
+        Text(
+            if (imageSaveTreeUri == null) stringResource(R.string.default_image_save_path)
+            else stringResource(R.string.custom_image_save_path),
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { folderPicker.launch(null) }) { Text(stringResource(R.string.choose_save_folder)) }
+            TextButton(onClick = { onImageSaveTreeUriChange(null) }, enabled = imageSaveTreeUri != null) { Text(stringResource(R.string.use_default_folder)) }
+        }
+        Text(stringResource(R.string.save_folder_history_warning), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(stringResource(R.string.settings_history_limit_value, historyLimit))
         Slider(value = historyLimit.toFloat(), onValueChange = { onHistoryLimitChange(it.toInt()) }, valueRange = 1f..100f, steps = 98)
         Text(stringResource(R.string.settings_autocomplete), style = MaterialTheme.typography.titleMedium)
@@ -221,6 +294,12 @@ private val AutocompleteSource.labelResource: Int get() = when (this) {
     AutocompleteSource.NOVEL_AI -> R.string.autocomplete_nai_only
     AutocompleteSource.DANBOORU -> R.string.autocomplete_danbooru_only
     AutocompleteSource.BOTH -> R.string.autocomplete_both
+}
+
+private val com.hjhsys.naiblockprompt.domain.model.AppearanceMode.labelResource: Int get() = when (this) {
+    com.hjhsys.naiblockprompt.domain.model.AppearanceMode.SYSTEM -> R.string.appearance_system
+    com.hjhsys.naiblockprompt.domain.model.AppearanceMode.LIGHT -> R.string.appearance_light
+    com.hjhsys.naiblockprompt.domain.model.AppearanceMode.DARK -> R.string.appearance_dark
 }
 
 @Composable
