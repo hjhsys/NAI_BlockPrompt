@@ -338,4 +338,9 @@
     <string name="reference_character_and_style">캐릭터 &amp; 스타일</string>
     <string name="reference_character">캐릭터</string>
     <string name="reference_style">스타일</string>
+    <string name="vibe_encoding_cost_notice">이 이미지·모델·정보 추출량의 최초 인코딩에는 2 Anlas가 듭니다. 캐시가 있으면 추가 비용 없이 재사용합니다.</string>
+    <string name="generate_one_image_vibe_encoding">이미지 1장 생성 · 최초 인코딩 2 Anlas</string>
+    <string name="restore_image_to_image_input">Image2Image 원본 이미지</string>
+    <string name="restore_vibe_reference">Vibe Transfer 참조 이미지</string>
+    <string name="restore_precise_reference">Precise Reference 이미지</string>
 </resources>

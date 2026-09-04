@@ -338,4 +338,9 @@
     <string name="reference_character_and_style">Character &amp; Style</string>
     <string name="reference_character">Character</string>
     <string name="reference_style">Style</string>
+    <string name="vibe_encoding_cost_notice">The first encoding for this image, model, and information level costs 2 Anlas. Cached encodings are reused without that cost.</string>
+    <string name="generate_one_image_vibe_encoding">Generate 1 image · first encode 2 Anlas</string>
+    <string name="restore_image_to_image_input">Image2Image source image</string>
+    <string name="restore_vibe_reference">Vibe Transfer reference</string>
+    <string name="restore_precise_reference">Precise Reference image</string>
 </resources>

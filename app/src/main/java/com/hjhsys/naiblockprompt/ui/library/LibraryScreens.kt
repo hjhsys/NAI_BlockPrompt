@@ -125,15 +125,23 @@ private fun RestoreDialog(item: HistoryItem, dismiss: () -> Unit, confirm: (Rest
             CheckRow(R.string.restore_settings, settings) { settings = it }; CheckRow(R.string.restore_base, base) { base = it }
             CheckRow(R.string.restore_characters, characters) { characters = it }; CheckRow(R.string.restore_seed, seed) { seed = it }
             if (item.snapshot?.session?.generationSettings?.imageInput != null) {
-                if (item.inputImageExists) CheckRow(R.string.restore_input_image, inputImage) { inputImage = it }
+                val input = item.snapshot.session.generationSettings.imageInput
+                val label = stringResource(when (input?.mode) {
+                    com.hjhsys.naiblockprompt.domain.model.ImageInputMode.VIBE_TRANSFER -> R.string.restore_vibe_reference
+                    com.hjhsys.naiblockprompt.domain.model.ImageInputMode.PRECISE_REFERENCE -> R.string.restore_precise_reference
+                    else -> R.string.restore_image_to_image_input
+                })
+                if (item.inputImageExists) CheckRow(label, inputImage) { inputImage = it }
                 else Text(stringResource(R.string.restore_input_image_missing_warning), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
         }
     }, confirmButton = { Button(onClick = { confirm(RestoreOptions(settings, base, characters, seed, inputImage)) }, enabled = item.snapshot != null) { Text(stringResource(R.string.load)) } }, dismissButton = { TextButton(onClick = dismiss) { Text(stringResource(R.string.cancel)) } })
 }
 
-@Composable private fun CheckRow(label: Int, checked: Boolean, change: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable { change(!checked) }, verticalAlignment = Alignment.CenterVertically) { Checkbox(checked, change); Text(stringResource(label)) }
+@Composable private fun CheckRow(label: Int, checked: Boolean, change: (Boolean) -> Unit) = CheckRow(stringResource(label), checked, change)
+
+@Composable private fun CheckRow(label: String, checked: Boolean, change: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable { change(!checked) }, verticalAlignment = Alignment.CenterVertically) { Checkbox(checked, change); Text(label) }
 }
 
 @Composable

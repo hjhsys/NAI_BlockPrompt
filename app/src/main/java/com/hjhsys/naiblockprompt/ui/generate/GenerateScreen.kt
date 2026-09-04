@@ -1016,6 +1016,9 @@ private fun GenerationSettingsCard(settings: GenerationSettings, viewModel: Main
                             Icon(Icons.Default.Close, stringResource(R.string.remove_imported_image))
                         }
                     }
+                    if (input.mode == ImageInputMode.VIBE_TRANSFER) {
+                        Text(stringResource(R.string.vibe_encoding_cost_notice), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                     SliderSettingRow(R.string.image_strength, input.strength, 0f..1f, 19, decimal = true) { value ->
                         viewModel.updateGenerationSettings { current -> current.copy(imageInput = input.copy(strength = (value * 20).toInt() / 20f)) }
                     }
@@ -1147,6 +1150,7 @@ private fun generateButtonLabel(state: GenerationUiState, input: ImageInputState
     if (state is GenerationUiState.Loading) return stringResource(R.string.generating)
     val extra = if (input?.mode == ImageInputMode.PRECISE_REFERENCE) 5 else 0
     return if (extra > 0) stringResource(R.string.generate_one_image_with_extra_anlas, extra)
+    else if (input?.mode == ImageInputMode.VIBE_TRANSFER) stringResource(R.string.generate_one_image_vibe_encoding)
     else stringResource(R.string.generate_one_image)
 }
 
