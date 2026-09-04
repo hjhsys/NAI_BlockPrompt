@@ -208,7 +208,12 @@ private fun CharacterPositioningButton(session: Session, viewModel: MainViewMode
     OutlinedButton(onClick = { open = true }, modifier = Modifier.fillMaxWidth()) {
         Icon(Icons.Default.ControlCamera, contentDescription = null)
         Spacer(Modifier.width(8.dp))
-        Text(stringResource(R.string.character_positioning))
+        Text(
+            stringResource(
+                R.string.character_positioning_status,
+                stringResource(if (session.characters.all { it.position != null }) R.string.position_custom else R.string.position_ai_choice),
+            ),
+        )
     }
     if (open) CharacterPositioningDialog(session, viewModel) { open = false }
 }
@@ -226,7 +231,7 @@ private fun CharacterPositioningDialog(session: Session, viewModel: MainViewMode
                 SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                     SegmentedButton(
                         selected = !custom,
-                        onClick = { viewModel.setCharacterPositioningEnabled(false) },
+                        onClick = { viewModel.setCharacterPositioningEnabled(false); onDismiss() },
                         shape = SegmentedButtonDefaults.itemShape(0, 2),
                     ) { Text(stringResource(R.string.position_ai_choice)) }
                     SegmentedButton(
