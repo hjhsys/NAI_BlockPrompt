@@ -27,5 +27,5 @@ enum class TagDictionarySort { POPULAR, APP_USAGE, RECENT, NAME }
 
 enum class AppTagCategory(val value: String) {
     CLOTHES("clothes"), POSE("pose"), HAIR("hair"), BODY("body"), EXPRESSION("expression"),
-    ACCESSORY("accessory"), BACKGROUND("background"), COMPOSITION("composition"), EFFECT("effect"), OTHER("other"),
+    ACCESSORY("accessory"), BACKGROUND("background"), COMPOSITION("composition"), LIGHTING("lighting"), EFFECT("effect"), OTHER("other"),
 }

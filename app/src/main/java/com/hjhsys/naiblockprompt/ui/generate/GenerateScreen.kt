@@ -3,6 +3,8 @@ package com.hjhsys.naiblockprompt.ui.generate
 import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -51,6 +53,12 @@ import androidx.compose.ui.layout.ContentScale
 import java.io.File
 import android.net.Uri
 import androidx.compose.ui.window.Dialog
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
+import com.hjhsys.naiblockprompt.domain.image.NaiPngMetadataParser
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.hjhsys.naiblockprompt.domain.autocomplete.PromptAutocomplete
 import com.hjhsys.naiblockprompt.domain.autocomplete.TagSuggestion
 
@@ -111,7 +119,6 @@ fun GenerateScreen(
                     AppTitleMenuItem(R.string.load_preset, Icons.Default.FolderOpen, onClick = viewModel::beginPresetLoad),
                     AppTitleMenuItem(R.string.save_preset, Icons.Default.Save, onClick = viewModel::beginPresetSave),
                     AppTitleMenuItem(R.string.previous_work, Icons.Default.Restore, enabled = hasStash, onClick = viewModel::swapStash),
-                    AppTitleMenuItem(R.string.import_image_coming_soon, Icons.Default.AddPhotoAlternate, enabled = false, onClick = {}),
                     AppTitleMenuItem(R.string.nav_settings, Icons.Default.Settings, onClick = onOpenSettings),
                 ),
             )
@@ -128,7 +135,7 @@ fun GenerateScreen(
                             CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
                             Spacer(Modifier.width(8.dp))
                         }
-                        Text(stringResource(if (generationState is GenerationUiState.Loading) R.string.generating else R.string.generate_one_image))
+                        Text(generateButtonLabel(generationState, session.generationSettings.imageInput))
                     }
                 }
             }
@@ -209,7 +216,7 @@ fun GenerationSettingsScreen(session: Session?, viewModel: MainViewModel, onBack
                 contentPadding = PaddingValues(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                item { GenerationSettingsCard(session.generationSettings, viewModel) }
+                item { GenerationSettingsCard(session.generationSettings, viewModel, onMetadataImported = onBack) }
                 item { Text(stringResource(R.string.generation_settings_swipe_hint), style = MaterialTheme.typography.bodySmall) }
             }
         }
@@ -803,8 +810,71 @@ private fun SuggestionRow(@StringRes label: Int, suggestions: List<TagSuggestion
 }
 
 @Composable
-private fun GenerationSettingsCard(settings: GenerationSettings, viewModel: MainViewModel) {
+private fun GenerationSettingsCard(settings: GenerationSettings, viewModel: MainViewModel, onMetadataImported: () -> Unit) {
     var advancedExpanded by rememberSaveable { mutableStateOf(false) }
+    val context = LocalContext.current
+    var pendingImageUri by rememberSaveable { mutableStateOf<String?>(null) }
+    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let {
+            runCatching { context.contentResolver.takePersistableUriPermission(it, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            pendingImageUri = it.toString()
+        }
+    }
+    pendingImageUri?.let { uri ->
+        val metadata by produceState<com.hjhsys.naiblockprompt.domain.image.NaiImageMetadata?>(initialValue = null, uri) {
+            value = withContext(Dispatchers.IO) {
+                runCatching { context.contentResolver.openInputStream(Uri.parse(uri))?.use { NaiPngMetadataParser.parse(it.readBytes()) } }.getOrNull()
+            }
+        }
+        var includePrompt by rememberSaveable(uri) { mutableStateOf(true) }
+        var includeNegative by rememberSaveable(uri) { mutableStateOf(true) }
+        var includeCharacters by rememberSaveable(uri) { mutableStateOf(true) }
+        var includeSettings by rememberSaveable(uri) { mutableStateOf(true) }
+        var includeSeed by rememberSaveable(uri) { mutableStateOf(true) }
+        val importedBlockName = stringResource(R.string.imported_block_name)
+        AlertDialog(
+            onDismissRequest = { pendingImageUri = null },
+            title = { Text(stringResource(R.string.choose_image_use)) },
+            text = {
+                Column(Modifier.heightIn(max = 620.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    AsyncImage(model = Uri.parse(uri), contentDescription = stringResource(R.string.import_image), modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp), contentScale = ContentScale.Fit)
+                    Button(onClick = {
+                        viewModel.updateGenerationSettings { it.copy(imageInput = ImageInputState(uri)) }
+                        pendingImageUri = null
+                    }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.image_to_image)) }
+                    OutlinedButton(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.vibe_transfer_mapping_pending)) }
+                    OutlinedButton(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.precise_reference_mapping_pending)) }
+                    if (metadata != null) {
+                        HorizontalDivider()
+                        Text(stringResource(R.string.nai_metadata_found), style = MaterialTheme.typography.titleSmall)
+                        if (metadata?.usedExternalImageGuidance == true) {
+                            Text(
+                                stringResource(R.string.external_reference_not_restored_warning),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                        Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                            MetadataChoice(R.string.import_prompt, includePrompt) { includePrompt = it }
+                            MetadataChoice(R.string.import_negative, includeNegative) { includeNegative = it }
+                            MetadataChoice(R.string.import_characters, includeCharacters) { includeCharacters = it }
+                            MetadataChoice(R.string.import_settings, includeSettings) { includeSettings = it }
+                            MetadataChoice(R.string.import_seed, includeSeed) { includeSeed = it }
+                        }
+                        Button(onClick = {
+                            viewModel.importImageMetadata(metadata!!, importedBlockName, includePrompt, includeNegative, includeCharacters, includeSettings, includeSeed)
+                            pendingImageUri = null
+                            onMetadataImported()
+                        }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.import_metadata)) }
+                    } else {
+                        Text(stringResource(R.string.nai_metadata_not_found), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { pendingImageUri = null }) { Text(stringResource(R.string.cancel)) } },
+        )
+    }
     LaunchedEffect(settings.steps, settings.scale, settings.guidanceRescale) {
         if (settings.steps == null || settings.scale == null || settings.guidanceRescale == null) {
             viewModel.updateGenerationSettings {
@@ -818,6 +888,30 @@ private fun GenerationSettingsCard(settings: GenerationSettings, viewModel: Main
                 Text(stringResource(R.string.model_id), style = MaterialTheme.typography.titleMedium)
                 CatalogDropdown(R.string.model_id, settings.modelId, NaiGenerationCatalog.models) { value ->
                     viewModel.updateGenerationSettings { it.copy(modelId = value) }
+                }
+                settings.imageInput?.let { input ->
+                    AsyncImage(
+                        model = Uri.parse(input.uri),
+                        contentDescription = stringResource(R.string.import_image),
+                        modifier = Modifier.fillMaxWidth().height(150.dp),
+                        contentScale = ContentScale.Fit,
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(stringResource(R.string.image_to_image), style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+                        IconButton(onClick = { viewModel.updateGenerationSettings { it.copy(imageInput = null) } }) {
+                            Icon(Icons.Default.Close, stringResource(R.string.remove_imported_image))
+                        }
+                    }
+                    SliderSettingRow(R.string.image_strength, input.strength, 0f..1f, 19, decimal = true) { value ->
+                        viewModel.updateGenerationSettings { current -> current.copy(imageInput = input.copy(strength = (value * 20).toInt() / 20f)) }
+                    }
+                    SliderSettingRow(R.string.image_noise, input.noise, 0f..1f, 19, decimal = true) { value ->
+                        viewModel.updateGenerationSettings { current -> current.copy(imageInput = input.copy(noise = (value * 20).toInt() / 20f)) }
+                    }
+                } ?: OutlinedButton(onClick = { imagePicker.launch(arrayOf("image/png", "image/jpeg", "image/webp")) }, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.AddPhotoAlternate, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.import_image))
                 }
             }
         }
@@ -901,6 +995,24 @@ private fun GenerationSettingsCard(settings: GenerationSettings, viewModel: Main
             }
         }
     }
+}
+
+@Composable
+private fun MetadataChoice(@StringRes label: Int, checked: Boolean, onChecked: (Boolean) -> Unit) {
+    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 36.dp) {
+    Row(Modifier.fillMaxWidth().height(38.dp).clickable { onChecked(!checked) }, verticalAlignment = Alignment.CenterVertically) {
+        Checkbox(checked = checked, onCheckedChange = onChecked, modifier = Modifier.scale(.82f))
+        Text(stringResource(label))
+    }
+    }
+}
+
+@Composable
+private fun generateButtonLabel(state: GenerationUiState, input: ImageInputState?): String {
+    if (state is GenerationUiState.Loading) return stringResource(R.string.generating)
+    val extra = if (input?.mode == ImageInputMode.PRECISE_REFERENCE) 5 else 0
+    return if (extra > 0) stringResource(R.string.generate_one_image_with_extra_anlas, extra)
+    else stringResource(R.string.generate_one_image)
 }
 
 private enum class ResolutionPreset(@param:StringRes val label: Int, val width: Int, val height: Int) {

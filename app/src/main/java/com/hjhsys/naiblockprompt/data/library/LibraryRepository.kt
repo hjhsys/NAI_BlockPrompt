@@ -14,7 +14,7 @@ import kotlinx.serialization.json.Json
 import java.io.File
 import java.util.UUID
 
-data class HistoryItem(val entity: HistoryEntryEntity, val snapshot: SessionSnapshot?, val originalExists: Boolean)
+data class HistoryItem(val entity: HistoryEntryEntity, val snapshot: SessionSnapshot?, val originalExists: Boolean, val inputImageExists: Boolean)
 data class PresetItem(val entity: PresetEntity, val session: Session?)
 data class SavedSetItem(val entity: SavedSetEntity, val set: SavedPromptSet?)
 
@@ -92,7 +92,12 @@ class LibraryRepository(
     suspend fun setHistoryFavorite(item: HistoryEntryEntity, favorite: Boolean) =
         historyDao.setFavorite(item.id, favorite)
 
-    suspend fun latestSnapshot(): SessionSnapshot? = historyDao.latest()?.let { decode(it.snapshotVersion, it.snapshotJson) }
+    suspend fun latestGenerationWithOriginal(): GeneratedPromptSnapshot? = historyDao.latest()?.let { row ->
+        if (imageStore.exists(row.imagePath)) decode(row.snapshotVersion, row.snapshotJson)?.generation else null
+    }
+    suspend fun latestHistoryWithOriginal(): HistoryItem? = historyDao.latest()
+        ?.let(::historyItem)
+        ?.takeIf { it.originalExists }
     suspend fun trimHistory(limit: Int) {
         val keep = limit.coerceIn(1, 100)
         HistoryRetentionPolicy.entriesToTrim(historyDao.listAll(), keep).forEach {
@@ -102,7 +107,11 @@ class LibraryRepository(
         }
     }
 
-    private fun historyItem(row: HistoryEntryEntity) = HistoryItem(row, decode(row.snapshotVersion, row.snapshotJson), imageStore.exists(row.imagePath))
+    private fun historyItem(row: HistoryEntryEntity): HistoryItem {
+        val snapshot = decode(row.snapshotVersion, row.snapshotJson)
+        val inputReference = snapshot?.session?.generationSettings?.imageInput?.uri
+        return HistoryItem(row, snapshot, imageStore.exists(row.imagePath), inputReference != null && imageStore.exists(inputReference))
+    }
     private fun decode(version: Int, value: String): SessionSnapshot? = runCatching {
         require(version == CURRENT_SNAPSHOT_VERSION)
         json.decodeFromString<SessionSnapshot>(value)

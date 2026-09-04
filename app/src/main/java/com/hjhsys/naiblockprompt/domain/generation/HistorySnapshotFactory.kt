@@ -21,6 +21,14 @@ object HistorySnapshotFactory {
                 height = parameters.height,
                 steps = parameters.steps,
                 scale = parameters.scale,
+                guidanceRescale = parameters.guidanceRescale,
+                noiseSchedule = parameters.noiseSchedule,
+                sm = parameters.sm,
+                smDynamic = parameters.smDynamic,
+                dynamicThresholding = parameters.dynamicThresholding,
+                useCoordinates = parameters.v4Prompt.useCoordinates,
+                useOrder = parameters.v4Prompt.useOrder,
+                imageInput = generation.sourceSession.generationSettings.imageInput,
             ),
         )
     }

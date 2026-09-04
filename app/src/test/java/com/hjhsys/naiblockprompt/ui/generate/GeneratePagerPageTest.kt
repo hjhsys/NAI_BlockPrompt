@@ -14,5 +14,6 @@ class GeneratePagerPageTest {
         assertEquals(SecondaryTarget.HISTORY, GenerateNavigationPolicy.afterHistoryReturn())
         assertFalse(GenerateNavigationPolicy.shouldAutoOpenResult("image-a", "image-a"))
         assertTrue(GenerateNavigationPolicy.shouldAutoOpenResult("image-b", "image-a"))
+        assertFalse(GenerateNavigationPolicy.shouldAutoOpenResult("restored", null, autoOpenResult = false))
     }
 }

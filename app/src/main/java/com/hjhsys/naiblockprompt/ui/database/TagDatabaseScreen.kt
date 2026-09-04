@@ -39,15 +39,28 @@ import com.hjhsys.naiblockprompt.ui.components.AppTitleBar
 import com.hjhsys.naiblockprompt.ui.components.AppTitleMenuItem
 import java.text.DateFormat
 import java.util.Date
+import androidx.compose.ui.platform.LocalContext
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun TagDatabaseScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit) {
     val tags by viewModel.dictionaryTags.collectAsStateWithLifecycle()
     val totalCount by viewModel.tagCount.collectAsStateWithLifecycle()
+    val missingTranslationCount by viewModel.missingTranslationCount.collectAsStateWithLifecycle()
+    val missingCategoryCount by viewModel.missingCategoryCount.collectAsStateWithLifecycle()
     val usedCategories by viewModel.usedTagCategories.collectAsStateWithLifecycle()
     val userCategories by viewModel.userTagCategories.collectAsStateWithLifecycle()
     val history by viewModel.history.collectAsStateWithLifecycle()
+    val importPreview by viewModel.translationImportPreview.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    var exportContent by remember { mutableStateOf(byteArrayOf()) }
+    var exportFileName by remember { mutableStateOf("nai_tags_translation_batch.zip") }
+    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        uri?.let { context.contentResolver.openOutputStream(it)?.use { output -> output.write(exportContent) } }
+    }
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let { context.contentResolver.openInputStream(it)?.bufferedReader()?.use { reader -> viewModel.previewTranslationImport(reader.readText()) } }
+    }
     var query by rememberSaveable { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf(TagDictionaryFilter.ALL) }
     var category by rememberSaveable { mutableStateOf("") }
@@ -56,6 +69,16 @@ fun TagDatabaseScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit) {
     var adding by rememberSaveable { mutableStateOf(false) }
     var showAddMenu by remember { mutableStateOf(false) }
     var addingCategory by rememberSaveable { mutableStateOf(false) }
+    var showExportOptions by rememberSaveable { mutableStateOf(false) }
+    var exportAllBatches by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        viewModel.translationExport.collect { content ->
+            exportContent = content.content
+            exportFileName = content.fileName
+            exportLauncher.launch(exportFileName)
+        }
+    }
 
     LaunchedEffect(Unit) {
         viewModel.filterDictionary(TagDictionaryFilter.ALL)
@@ -78,6 +101,21 @@ fun TagDatabaseScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit) {
         viewModel.addUserTag(canonical, ko, aliases, category); adding = false
     }
     if (addingCategory) AddCategoryDialog({ addingCategory = false }) { viewModel.addTagCategory(it); addingCategory = false }
+    if (showExportOptions) TranslationExportOptionsDialog(
+        onDismiss = { showExportOptions = false },
+        onExport = { missingTranslation, missingCategory ->
+            showExportOptions = false
+            if (exportAllBatches) viewModel.prepareAllTranslationExport(missingTranslation, missingCategory)
+            else viewModel.prepareTranslationExport(missingTranslation, missingCategory)
+        },
+    )
+    importPreview?.let { preview ->
+        TranslationImportDialog(
+            preview = preview,
+            onDismiss = viewModel::dismissTranslationImport,
+            onApply = viewModel::applyTranslationImport,
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -96,6 +134,25 @@ fun TagDatabaseScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit) {
         },
     ) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            item {
+                ElevatedCard(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(stringResource(R.string.ai_translation_tools), style = MaterialTheme.typography.titleMedium)
+                        Row(Modifier.fillMaxWidth()) {
+                            Text(stringResource(R.string.missing_translation_count, missingTranslationCount), modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                            Text(stringResource(R.string.missing_category_count, missingCategoryCount), style = MaterialTheme.typography.bodySmall)
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            OutlinedButton(onClick = { exportAllBatches = false; showExportOptions = true }, modifier = Modifier.weight(1f)) {
+                                Icon(Icons.Default.UploadFile, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.export_for_ai), maxLines = 1)
+                            }
+                            OutlinedButton(onClick = { importLauncher.launch(arrayOf("application/json", "application/x-ndjson", "text/plain")) }, modifier = Modifier.weight(1f)) {
+                                Icon(Icons.Default.Download, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.import_ai_result), maxLines = 1)
+                            }
+                        }
+                    }
+                }
+            }
             item {
                 OutlinedTextField(
                     value = query,
@@ -142,6 +199,11 @@ fun TagDatabaseScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit) {
                             tag.danbooruPostCount?.let { Text(compactCount(it), style = MaterialTheme.typography.labelSmall) }
                         }
                     }
+                }
+            }
+            item {
+                TextButton(onClick = { exportAllBatches = true; showExportOptions = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.developer_export_all_batches), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
@@ -380,6 +442,72 @@ private fun AddCategoryDialog(onDismiss: () -> Unit, onSave: (String) -> Unit) {
 }
 
 @Composable
+private fun TranslationImportDialog(
+    preview: com.hjhsys.naiblockprompt.domain.tags.TagTranslationImportPreview,
+    onDismiss: () -> Unit,
+    onApply: (Boolean) -> Unit,
+) {
+    var overwrite by rememberSaveable { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.translation_import_preview)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(stringResource(R.string.translation_import_valid, preview.validRows.size - preview.reviewCount))
+                Text(stringResource(R.string.translation_import_invalid, preview.invalidLines))
+                Text(stringResource(R.string.translation_import_unknown, preview.unknownTags.size))
+                Text(stringResource(R.string.translation_import_review, preview.reviewCount))
+                if (preview.newCategories.isNotEmpty()) {
+                    Text(stringResource(R.string.translation_import_new_categories, preview.newCategories.joinToString(", ")))
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(overwrite, { overwrite = it })
+                    Text(stringResource(R.string.overwrite_existing_user_translation))
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = preview.validRows.isNotEmpty(), onClick = { onApply(overwrite) }) {
+                Text(stringResource(R.string.apply_import))
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+    )
+}
+
+@Composable
+private fun TranslationExportOptionsDialog(
+    onDismiss: () -> Unit,
+    onExport: (Boolean, Boolean) -> Unit,
+) {
+    var missingTranslation by rememberSaveable { mutableStateOf(true) }
+    var missingCategory by rememberSaveable { mutableStateOf(true) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.translation_export_options)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(stringResource(R.string.translation_export_options_hint), style = MaterialTheme.typography.bodySmall)
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable { missingTranslation = !missingTranslation }) {
+                    Checkbox(missingTranslation, { missingTranslation = it })
+                    Text(stringResource(R.string.export_missing_translation))
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable { missingCategory = !missingCategory }) {
+                    Checkbox(missingCategory, { missingCategory = it })
+                    Text(stringResource(R.string.export_missing_category))
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = missingTranslation || missingCategory, onClick = { onExport(missingTranslation, missingCategory) }) {
+                Text(stringResource(R.string.export_file))
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+    )
+}
+
+@Composable
 private fun categoryLabel(value: String): String = when (value) {
     "" -> ""
     "clothes" -> stringResource(R.string.category_clothes)
@@ -390,6 +518,7 @@ private fun categoryLabel(value: String): String = when (value) {
     "accessory" -> stringResource(R.string.category_accessory)
     "background" -> stringResource(R.string.category_background)
     "composition" -> stringResource(R.string.category_composition)
+    "lighting" -> stringResource(R.string.category_lighting)
     "effect" -> stringResource(R.string.category_effect)
     "other" -> stringResource(R.string.category_other)
     "general" -> stringResource(R.string.category_danbooru_general)

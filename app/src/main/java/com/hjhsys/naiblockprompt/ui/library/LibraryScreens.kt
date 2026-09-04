@@ -118,13 +118,18 @@ private fun historyImageModel(reference: String): Any =
 private fun RestoreDialog(item: HistoryItem, dismiss: () -> Unit, confirm: (RestoreOptions) -> Unit) {
     var settings by rememberSaveable { mutableStateOf(true) }; var base by rememberSaveable { mutableStateOf(true) }
     var characters by rememberSaveable { mutableStateOf(true) }; var seed by rememberSaveable { mutableStateOf(true) }
+    var inputImage by rememberSaveable { mutableStateOf(false) }
     AlertDialog(onDismissRequest = dismiss, title = { Text(stringResource(R.string.load_from_history)) }, text = {
         Column {
             Text(stringResource(R.string.restore_stash_notice))
             CheckRow(R.string.restore_settings, settings) { settings = it }; CheckRow(R.string.restore_base, base) { base = it }
             CheckRow(R.string.restore_characters, characters) { characters = it }; CheckRow(R.string.restore_seed, seed) { seed = it }
+            if (item.snapshot?.session?.generationSettings?.imageInput != null) {
+                if (item.inputImageExists) CheckRow(R.string.restore_input_image, inputImage) { inputImage = it }
+                else Text(stringResource(R.string.restore_input_image_missing_warning), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
         }
-    }, confirmButton = { Button(onClick = { confirm(RestoreOptions(settings, base, characters, seed)) }, enabled = item.snapshot != null) { Text(stringResource(R.string.load)) } }, dismissButton = { TextButton(onClick = dismiss) { Text(stringResource(R.string.cancel)) } })
+    }, confirmButton = { Button(onClick = { confirm(RestoreOptions(settings, base, characters, seed, inputImage)) }, enabled = item.snapshot != null) { Text(stringResource(R.string.load)) } }, dismissButton = { TextButton(onClick = dismiss) { Text(stringResource(R.string.cancel)) } })
 }
 
 @Composable private fun CheckRow(label: Int, checked: Boolean, change: (Boolean) -> Unit) {

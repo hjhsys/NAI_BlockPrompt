@@ -17,6 +17,10 @@ import com.hjhsys.naiblockprompt.data.local.entity.UserTagOverrideEntity
 import com.hjhsys.naiblockprompt.data.local.entity.UserTagCategoryEntity
 import kotlinx.coroutines.flow.Flow
 import java.io.File
+import com.hjhsys.naiblockprompt.domain.tags.*
+import com.hjhsys.naiblockprompt.domain.model.AppTagCategory
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 data class AutocompleteResults(
     val novelAi: List<TagSuggestion> = emptyList(),
@@ -33,6 +37,8 @@ class AutocompleteRepository(
 ) {
     val observedTags = tagDao.observeAll()
     val tagCount = tagDao.observeCount()
+    val missingTranslationCount = tagDao.observeMissingTranslationCount()
+    val missingCategoryCount = tagDao.observeMissingCategoryCount()
     val usedCategories = tagDao.observeUsedCategories()
     val userCategories = tagDao.observeUserCategories()
     fun dictionary(query: String, filter: TagDictionaryFilter, category: String, sort: TagDictionarySort): Flow<List<TagDictionaryItem>> =
@@ -40,6 +46,62 @@ class AutocompleteRepository(
 
     suspend fun addCategory(name: String) {
         name.trim().takeIf(String::isNotBlank)?.let { tagDao.upsertUserCategory(UserTagCategoryEntity(it, now())) }
+    }
+
+    suspend fun exportTranslationBatch(
+        missingTranslation: Boolean,
+        missingCategory: Boolean,
+        limit: Int = 1_000,
+        allBatches: Boolean = false,
+    ): TagTranslationExportFile = withContext(Dispatchers.IO) {
+        require(missingTranslation || missingCategory)
+        val candidates = tagDao.translationCandidates(if (allBatches) Int.MAX_VALUE else limit, missingTranslation, missingCategory).map {
+            TagTranslationCandidate(it.canonicalTag, it.danbooruCategory, it.danbooruPostCount, it.korean, it.appCategory)
+        }
+        val categories = (AppTagCategory.entries.map { it.value } + tagDao.getUsedCategories() + tagDao.getUserCategories()).distinct()
+        TagTranslationExportFile(
+            fileName = if (allBatches) "nai_tags_translation_all_batches.zip" else "nai_tags_translation_batch.zip",
+            content = TagTranslationExchange.exportBundle(candidates, categories, splitBatches = allBatches),
+        )
+    }
+
+    suspend fun previewTranslationImport(text: String): TagTranslationImportPreview {
+        val parsed = TagTranslationExchange.parse(text)
+        val knownCategories = (AppTagCategory.entries.map { it.value } + tagDao.getUsedCategories() + tagDao.getUserCategories()).toSet()
+        val valid = mutableListOf<ValidatedTagTranslation>()
+        val unknown = mutableListOf<String>()
+        val newCategories = linkedSetOf<String>()
+        parsed.rows.distinctBy { it.tag }.forEach { row ->
+            val tag = tagDao.findByCanonical(row.tag)
+            if (tag == null) unknown += row.tag
+            else {
+                val category = row.appCategory ?: row.suggestedCategory
+                if (category != null && category !in knownCategories) newCategories += category
+                valid += ValidatedTagTranslation(tag.id, row)
+            }
+        }
+        return TagTranslationImportPreview(valid, parsed.invalidLines, unknown, newCategories.toList(), valid.count { it.row.needsReview })
+    }
+
+    suspend fun applyTranslationImport(preview: TagTranslationImportPreview, overwriteExisting: Boolean) {
+        val applicable = preview.validRows.filterNot { it.row.needsReview }
+        val knownCategories = (AppTagCategory.entries.map { it.value } + tagDao.getUsedCategories() + tagDao.getUserCategories()).toSet()
+        val categories = emptyList<UserTagCategoryEntity>()
+        val overrides = applicable.map { validated ->
+            val old = tagDao.findOverride(validated.tagId)
+            val row = validated.row
+            UserTagOverrideEntity(
+                id = old?.id ?: UUID.nameUUIDFromBytes("override:${validated.tagId}".toByteArray()).toString(),
+                tagId = validated.tagId,
+                korean = if (!overwriteExisting && !old?.korean.isNullOrBlank()) old?.korean else row.korean ?: old?.korean,
+                koreanAliases = if (!overwriteExisting && !old?.koreanAliases.isNullOrBlank()) old?.koreanAliases else row.aliases.takeIf { it.isNotEmpty() }?.joinToString(", ") ?: old?.koreanAliases,
+                appCategory = if (!overwriteExisting && !old?.appCategory.isNullOrBlank()) old?.appCategory else row.appCategory?.takeIf { it in knownCategories } ?: old?.appCategory,
+                favorite = old?.favorite ?: false,
+                thumbnailPath = old?.thumbnailPath,
+                updatedAt = now(),
+            )
+        }
+        tagDao.applyTranslationImport(overrides, categories)
     }
 
     suspend fun setThumbnail(item: TagDictionaryItem, uri: Uri) {

@@ -444,9 +444,9 @@ History 원본 Snapshot 자체는 이후 편집으로 변경하지 않습니다.
 
 ---
 
-## 중복 생성 Warning
+## 동일 생성 상태와 원본 복구
 
-Generate 직전 현재 생성 데이터와 **직전에 생성한 History 1개**를 비교합니다.
+Generate 직전 현재 생성 데이터와 **직전에 생성한 History 1개**를 비교합니다. 단, 중복 경고는 해당 History의 원본 이미지가 실제로 존재할 때만 표시합니다.
 
 비교 대상 예:
 
@@ -459,14 +459,16 @@ Generate 직전 현재 생성 데이터와 **직전에 생성한 History 1개**�
 
 접힘 상태 등 UI 상태는 비교 대상에서 제외합니다.
 
-완전히 동일해도 생성을 막지는 않고 Warning만 표시합니다.
+완전히 동일하고 원본 이미지가 존재하면 Warning을 표시한 뒤 사용자가 계속 생성할 수 있습니다.
 
 ```text
 직전 생성과 동일한 설정입니다.
 그래도 생성하시겠습니까?
 ```
 
-사용자가 미세 조정 중 같은 설정을 다시 생성해 History 순서를 위로 올리고 싶을 수 있으므로 계속 생성 가능해야 합니다.
+원본 이미지가 삭제되거나 이동되어 Thumbnail만 남아 있다면 중복으로 취급하지 않고 동일 설정과 Seed의 재생성을 바로 허용합니다. 재생성에 성공하면 새 History 항목을 추가하지 않고 기존 항목의 원본 경로와 Thumbnail을 복구합니다. 즐겨찾기와 기존 생성 시각은 유지합니다.
+
+비교에는 최종 처리된 Base/Character Positive/Negative, Character 순서/Positioning, 모델, Seed 및 실제 결과에 영향을 주는 모든 Generation Settings를 포함하고, 접힘 상태 같은 편집 전용 UI 상태는 제외합니다. 구현에서는 이 생성 상태를 안정적으로 비교할 수 있는 generation identity/fingerprint를 유지합니다.
 
 ---
 
@@ -559,6 +561,8 @@ Prompt를 조금씩 수정하며 반복 생성하는 흐름을 위해 **Generate
 - Preview 이미지를 누르면 원본 크게 보기 가능
 - 다음 이미지를 생성하면 Preview는 최신 이미지로 교체
 - 이전 결과는 History에 남김
+- 앱 재실행 시 최신 History의 원본 이미지가 실제로 존재하면 Latest Result로 다시 연결하되, 시작 화면은 Prompt 편집 화면을 유지
+- 최신 History의 원본이 삭제되거나 이동했다면 Thumbnail만으로 Latest Result를 복원하지 않음
 - 모바일 화면을 과도하게 차지하지 않도록 Preview 크기와 접힘 상태를 조절
 
 결과 확인을 위해 매번 History 화면으로 이동해야 하는 구조는 피합니다.
@@ -768,7 +772,25 @@ looking_back
 
 AI에게는 영문 `tag` 값을 변경하지 말고 `ko`, `aliases`만 채우도록 안내합니다.
 
-AI가 반환한 결과를 앱에 붙여넣으면:
+초기 구현의 외부 AI 교환 형식은 **JSONL**을 사용하며, 사용 편의를 위해 다음 세 파일을 하나의 ZIP으로 Export합니다.
+
+- `translation_instructions.md`
+- `categories.json` — category ID, 한국어 이름, 짧은 분류 설명
+- `tags_to_process.jsonl`
+
+- Export 전에 `한국어 번역 없음` / `앱 카테고리 없음` 조건을 각각 선택하며, 선택한 조건 중 하나라도 일치하는 태그를 한 번에 최대 1,000개씩 Export
+- 일반 사용자는 결과를 Import한 뒤 다음 최대 1,000개를 다시 Export하는 단순한 순차 흐름을 사용
+- 초기 DB 구축처럼 전체 대상이 필요한 개발자용 내보내기는 Tag Dictionary 맨 아래에 낮은 강조도로 분리하며, 하나의 ZIP 안에 `tags_to_process_0001.jsonl` 형식으로 1,000개씩 자동 분할
+- 첫 JSONL 행에는 처리 지침과 현재 존재하는 카테고리 목록을 포함
+- 이후 행은 `tag`, `ko`, `aliases_ko`, `app_category`, `suggested_category`, `needs_review` 및 참고용 원본 category/post count를 포함
+- `tag` canonical 값은 절대 변경하지 않음
+- AI는 기존 카테고리를 우선 사용하고 맞는 분류가 없을 때만 `suggested_category`로 새 카테고리를 제안
+- `suggested_category`는 Import 시 자동 생성하지 않고 검토 대상으로만 표시
+- 특정 AI 서비스에 종속하지 않고 사용자가 GPT, Gemini, Claude 또는 로컬 모델에 파일을 전달할 수 있게 함
+- Import 전 유효 행, 잘못된 행, DB에 없는 tag, 검토 필요 항목, 신규 카테고리를 요약하고 사용자 확인 후 반영
+- 기존 사용자 번역/분류는 기본적으로 덮어쓰지 않고 사용자가 명시적으로 선택한 경우만 덮어씀
+
+AI가 반환한 결과를 앱에 붙여넣거나 JSONL 파일로 가져오면:
 
 - 기존 canonical tag와 일치하는지 검증
 - 일치하는 항목의 한국어 번역 / 별칭만 import
@@ -950,6 +972,18 @@ Import 시 canonical tag 존재 여부를 검사하고,
 Settings에서 원본 이미지 저장 경로를 사용자 지정 폴더로 변경할 수 있습니다.
 
 History는 **생성 당시 저장된 원본 파일 경로**를 기준으로 원본 존재 여부를 확인합니다.
+
+### 이미지 가져오기
+
+- Generate overflow의 임시 이미지 버튼은 제거하고 Generation Settings의 모델 선택 바로 아래에 진입점을 둠
+- PNG/JPEG/WebP를 선택하고 미리보기 후 용도를 선택
+- 공식 Swagger에서 확인된 `img2img` action은 원본 이미지를 Base64로 전송하며 Strength/Noise를 설정
+- NovelAI PNG의 `Description`/`Comment` metadata가 있으면 Prompt, Undesired Content, Characters, Settings, Seed를 항목별로 선택해 복원
+- 외부 PNG에서 Image2Image/Vibe/Precise Reference 사용 흔적은 감지하되 원본 입력 이미지가 포함되어 있지 않거나 완전히 복원되지 않으면, 동일 Prompt/설정만으로 같은 결과가 나오지 않을 수 있음을 비차단 Warning으로 표시
+- 앱 History가 입력 이미지 URI를 보존했더라도 파일 삭제·이동·권한 만료로 접근할 수 없으면 입력 이미지 복원을 비활성화하고 동일 결과를 보장할 수 없다는 Warning을 표시
+- 선택한 이미지 URI와 Image2Image 설정은 Session/Preset/Stash/History snapshot에 포함
+- Vibe Transfer와 Precise Reference는 공개 Swagger가 model-specific parameter schema를 제공하지 않으므로 실제 필드와 Vibe encoding endpoint를 확인하기 전 API 전송을 활성화하지 않음
+- 공식 문서 기준 Precise Reference는 V4.5 전용이며 Vibe Transfer와 동시 사용할 수 없음
 
 ---
 

@@ -30,6 +30,10 @@ import com.hjhsys.naiblockprompt.domain.autocomplete.TagSuggestion
 import com.hjhsys.naiblockprompt.domain.autocomplete.AutocompleteDeduplicator
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.flow.asSharedFlow
+import com.hjhsys.naiblockprompt.domain.tags.TagTranslationImportPreview
+import com.hjhsys.naiblockprompt.domain.tags.TagTranslationExportFile
+import com.hjhsys.naiblockprompt.domain.image.NaiImageMetadata
 
 @OptIn(FlowPreview::class)
 class MainViewModel(private val container: AppContainer) : ViewModel() {
@@ -68,6 +72,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         emptyList(),
     )
     val tagCount = container.autocompleteRepository.tagCount.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+    val missingTranslationCount = container.autocompleteRepository.missingTranslationCount.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+    val missingCategoryCount = container.autocompleteRepository.missingCategoryCount.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
     private val tagDictionaryQuery = MutableStateFlow("")
     private val tagDictionaryFilter = MutableStateFlow(TagDictionaryFilter.ALL)
     private val tagDictionaryCategory = MutableStateFlow("")
@@ -82,6 +88,10 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     }.flatMapLatest { search -> container.autocompleteRepository.dictionary(search.query, search.filter, search.category, search.sort) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     private var autocompleteJob: Job? = null
+    private val _translationExport = MutableSharedFlow<TagTranslationExportFile>(extraBufferCapacity = 1)
+    val translationExport = _translationExport.asSharedFlow()
+    private val _translationImportPreview = MutableStateFlow<TagTranslationImportPreview?>(null)
+    val translationImportPreview = _translationImportPreview.asStateFlow()
 
     val settings = container.settingsRepository.settings.stateIn(
         viewModelScope,
@@ -91,6 +101,17 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
     init {
         viewModelScope.launch { _session.value = container.sessionRepository.restoreOrCreate() }
+        viewModelScope.launch {
+            container.libraryRepository.latestHistoryWithOriginal()?.let { latest ->
+                val seed = latest.snapshot?.generation?.usedSeed
+                    ?: latest.snapshot?.session?.generationSettings?.seed
+                    ?: return@let
+                _generationState.value = GenerationUiState.Success(
+                    GenerationRecord(latest.entity.imagePath, latest.entity.thumbnailPath, seed),
+                    autoOpenResult = false,
+                )
+            }
+        }
         viewModelScope.launch { _hasStash.value = container.sessionRepository.hasStash() }
         if (_tokenConfigured.value) refreshSubscriptionStatus()
         viewModelScope.launch {
@@ -158,6 +179,48 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
     fun updateGenerationSettings(transform: (GenerationSettings) -> GenerationSettings) = edit {
         it.copy(generationSettings = transform(it.generationSettings))
+    }
+
+    fun importImageMetadata(
+        metadata: NaiImageMetadata,
+        blockName: String,
+        includePrompt: Boolean,
+        includeNegative: Boolean,
+        includeCharacters: Boolean,
+        includeSettings: Boolean,
+        includeSeed: Boolean,
+    ) = edit { current ->
+        fun blocks(value: String?) = value?.let { listOf(PromptBlock(name = blockName, content = it)) }.orEmpty()
+        val base = current.base.copy(prompts = current.base.prompts.copy(
+            positiveBlocks = if (includePrompt && metadata.prompt != null) blocks(metadata.prompt) else current.base.prompts.positiveBlocks,
+            negativeBlocks = if (includeNegative && metadata.negativePrompt != null) blocks(metadata.negativePrompt) else current.base.prompts.negativeBlocks,
+        ))
+        val characters = if (includeCharacters && metadata.characterPrompts.isNotEmpty()) {
+            metadata.characterPrompts.mapIndexed { index, positive ->
+                CharacterPrompt(
+                    type = CharacterType.OTHER,
+                    order = index,
+                    prompts = PromptPair(
+                        positiveBlocks = blocks(positive),
+                        negativeBlocks = blocks(metadata.characterNegativePrompts.getOrNull(index)),
+                    ),
+                )
+            }
+        } else current.characters
+        val old = current.generationSettings
+        val importedModel = metadata.model?.takeIf { id -> NaiGenerationCatalog.models.any { it.apiId == id } }
+        val importedSampler = metadata.sampler?.takeIf { id -> NaiGenerationCatalog.samplers.any { it.apiId == id } }
+        val generationSettings = old.copy(
+            modelId = if (includeSettings) importedModel ?: old.modelId else old.modelId,
+            width = if (includeSettings) metadata.width ?: old.width else old.width,
+            height = if (includeSettings) metadata.height ?: old.height else old.height,
+            samplerId = if (includeSettings) importedSampler ?: old.samplerId else old.samplerId,
+            steps = if (includeSettings) metadata.steps ?: old.steps else old.steps,
+            scale = if (includeSettings) metadata.scale ?: old.scale else old.scale,
+            seedMode = if (includeSeed && metadata.seed != null) SeedMode.FIXED else old.seedMode,
+            seed = if (includeSeed && metadata.seed != null) metadata.seed else old.seed,
+        )
+        current.copy(base = base, characters = characters, generationSettings = generationSettings)
     }
 
     private fun edit(transform: (Session) -> Session) {
@@ -250,6 +313,21 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     fun addTagCategory(name: String) = viewModelScope.launch { container.autocompleteRepository.addCategory(name) }
     fun setTagThumbnail(item: TagDictionaryItem, uri: android.net.Uri) = viewModelScope.launch { container.autocompleteRepository.setThumbnail(item, uri) }
     fun setTagThumbnailFromFile(item: TagDictionaryItem, path: String) = viewModelScope.launch { container.autocompleteRepository.setThumbnailFromFile(item, path) }
+    fun prepareTranslationExport(missingTranslation: Boolean, missingCategory: Boolean) = viewModelScope.launch {
+        _translationExport.emit(container.autocompleteRepository.exportTranslationBatch(missingTranslation, missingCategory))
+    }
+    fun prepareAllTranslationExport(missingTranslation: Boolean, missingCategory: Boolean) = viewModelScope.launch {
+        _translationExport.emit(container.autocompleteRepository.exportTranslationBatch(missingTranslation, missingCategory, allBatches = true))
+    }
+    fun previewTranslationImport(text: String) = viewModelScope.launch {
+        _translationImportPreview.value = container.autocompleteRepository.previewTranslationImport(text)
+    }
+    fun dismissTranslationImport() { _translationImportPreview.value = null }
+    fun applyTranslationImport(overwriteExisting: Boolean) = viewModelScope.launch {
+        val preview = _translationImportPreview.value ?: return@launch
+        container.autocompleteRepository.applyTranslationImport(preview, overwriteExisting)
+        _translationImportPreview.value = null
+    }
     fun setTagFavorite(item: TagDictionaryItem, favorite: Boolean) = viewModelScope.launch {
         container.autocompleteRepository.setFavorite(item, favorite)
     }
@@ -362,7 +440,11 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     fun restoreHistory(item: HistoryItem, options: RestoreOptions) {
         val source = item.snapshot?.session ?: return
         val current = _session.value ?: return
-        var generationSettings = if (options.settings) source.generationSettings else current.generationSettings
+        var generationSettings = if (options.settings) {
+            source.generationSettings.copy(imageInput = if (options.inputImage) source.generationSettings.imageInput else current.generationSettings.imageInput)
+        } else {
+            current.generationSettings.copy(imageInput = if (options.inputImage) source.generationSettings.imageInput else current.generationSettings.imageInput)
+        }
         if (options.seed) {
             val importedSeed = item.snapshot.generation?.usedSeed ?: source.generationSettings.seed
             if (importedSeed != null) generationSettings = generationSettings.copy(seedMode = SeedMode.FIXED, seed = importedSeed)
@@ -450,7 +532,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         when (val prepared = requestMapper.prepare(current, settings.value.normalizeWeightClosings)) {
             is PrepareGenerationResult.Invalid -> _generationState.value = GenerationUiState.Invalid(prepared.field)
             is PrepareGenerationResult.Ready -> viewModelScope.launch {
-                val previous = container.libraryRepository.latestSnapshot()?.generation
+                val previous = container.libraryRepository.latestGenerationWithOriginal()
                 val candidate = HistorySnapshotFactory.from(prepared.generation, prepared.generation.usedSeed).generation
                 if (previous != null && previous == candidate) {
                     duplicateGeneration = prepared.generation
@@ -481,7 +563,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             when (val result = container.generationRepository.generate(token, generation)) {
                 is GenerationResult.Success -> {
                     retryGeneration = null
-                    _generationState.value = GenerationUiState.Success(result.record)
+                    _generationState.value = GenerationUiState.Success(result.record, autoOpenResult = true)
                     container.libraryRepository.trimHistory(settings.value.historyLimit)
                     refreshSubscriptionStatus()
                 }
@@ -506,6 +588,7 @@ data class RestoreOptions(
     val base: Boolean = true,
     val characters: Boolean = true,
     val seed: Boolean = true,
+    val inputImage: Boolean = false,
 )
 
 sealed interface SavedWorkflow {
@@ -522,7 +605,7 @@ sealed interface GenerationUiState {
     data object Loading : GenerationUiState
     data object MissingToken : GenerationUiState
     data class Invalid(val field: MissingGenerationField) : GenerationUiState
-    data class Success(val record: GenerationRecord) : GenerationUiState
+    data class Success(val record: GenerationRecord, val autoOpenResult: Boolean = true) : GenerationUiState
     data class Failed(val error: NaiApiFailure) : GenerationUiState
 }
 

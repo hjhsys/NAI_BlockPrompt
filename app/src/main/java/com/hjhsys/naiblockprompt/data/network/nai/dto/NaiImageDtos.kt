@@ -30,6 +30,10 @@ data class NaiRequestParameters(
     @SerialName("sm_dyn") val smDynamic: Boolean = false,
     @SerialName("dynamic_thresholding") val dynamicThresholding: Boolean = false,
     @SerialName("image_format") val imageFormat: String = "png",
+    /** Base64 source image for Swagger's img2img action. */
+    val image: String? = null,
+    val strength: Float? = null,
+    val noise: Float? = null,
     @SerialName("v4_prompt") val v4Prompt: NaiV4ConditionInput,
     @SerialName("v4_negative_prompt") val v4NegativePrompt: NaiV4ConditionInput,
 )

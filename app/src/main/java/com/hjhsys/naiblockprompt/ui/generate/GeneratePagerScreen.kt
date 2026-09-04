@@ -43,8 +43,8 @@ internal object GenerateNavigationPolicy {
     const val SECONDARY_PAGE = 2
     fun afterGenerationSuccess() = SecondaryTarget.RESULT
     fun afterHistoryReturn() = SecondaryTarget.HISTORY
-    fun shouldAutoOpenResult(imagePath: String?, lastOpenedImagePath: String?) =
-        imagePath != null && imagePath != lastOpenedImagePath
+    fun shouldAutoOpenResult(imagePath: String?, lastOpenedImagePath: String?, autoOpenResult: Boolean = true) =
+        autoOpenResult && imagePath != null && imagePath != lastOpenedImagePath
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -70,8 +70,9 @@ fun GeneratePagerScreen(
     val activity = LocalContext.current as? Activity
 
     LaunchedEffect(generationState) {
-        val imagePath = (generationState as? GenerationUiState.Success)?.record?.imagePath
-        if (GenerateNavigationPolicy.shouldAutoOpenResult(imagePath, lastAutoOpenedImage)) {
+        val success = generationState as? GenerationUiState.Success
+        val imagePath = success?.record?.imagePath
+        if (GenerateNavigationPolicy.shouldAutoOpenResult(imagePath, lastAutoOpenedImage, success?.autoOpenResult == true)) {
             lastAutoOpenedImage = imagePath
             secondaryTarget = GenerateNavigationPolicy.afterGenerationSuccess()
             pagerState.animateScrollToPage(GenerateNavigationPolicy.SECONDARY_PAGE)

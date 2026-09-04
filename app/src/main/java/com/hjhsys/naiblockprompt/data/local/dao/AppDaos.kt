@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Delete
 import androidx.room.Query
 import androidx.room.Upsert
+import androidx.room.Transaction
 import com.hjhsys.naiblockprompt.data.local.entity.*
 import kotlinx.coroutines.flow.Flow
 import com.hjhsys.naiblockprompt.domain.model.TagDictionaryItem
@@ -62,6 +63,9 @@ interface TagDao {
     fun observeUsedCategories(): Flow<List<String>>
     @Query("SELECT name FROM user_tag_categories ORDER BY name") fun observeUserCategories(): Flow<List<String>>
     @Upsert suspend fun upsertUserCategory(entity: UserTagCategoryEntity)
+    @Query("SELECT DISTINCT COALESCE(u.appCategory, t.appCategory, t.danbooruCategory) FROM tags t LEFT JOIN user_tag_overrides u ON u.tagId = t.id WHERE COALESCE(u.appCategory, t.appCategory, t.danbooruCategory, '') != '' ORDER BY 1")
+    suspend fun getUsedCategories(): List<String>
+    @Query("SELECT name FROM user_tag_categories ORDER BY name") suspend fun getUserCategories(): List<String>
     @Query("SELECT * FROM tags ORDER BY useCount DESC, lastUsedAt DESC, lastSeenAt DESC, danbooruPostCount DESC")
     fun observeAll(): Flow<List<TagEntity>>
     @Query("SELECT * FROM tags WHERE canonicalTag = :canonical LIMIT 1")
@@ -77,6 +81,10 @@ interface TagDao {
     @Upsert suspend fun upsertUserOverride(entity: UserTagOverrideEntity)
     @Query("DELETE FROM user_tag_overrides WHERE tagId = :tagId") suspend fun clearUserOverride(tagId: String)
     @Query("SELECT COUNT(*) FROM tags") fun observeCount(): Flow<Int>
+    @Query("SELECT COUNT(*) FROM tags t LEFT JOIN base_translations b ON b.tagId = t.id LEFT JOIN user_tag_overrides u ON u.tagId = t.id WHERE COALESCE(u.korean, b.korean, '') = ''")
+    fun observeMissingTranslationCount(): Flow<Int>
+    @Query("SELECT COUNT(*) FROM tags t LEFT JOIN user_tag_overrides u ON u.tagId = t.id WHERE COALESCE(u.appCategory, t.appCategory, '') = ''")
+    fun observeMissingCategoryCount(): Flow<Int>
     @Query("""
         SELECT t.id, t.canonicalTag, t.danbooruCategory,
             COALESCE(u.appCategory, t.appCategory) AS appCategory,
@@ -111,4 +119,29 @@ interface TagDao {
         ON CONFLICT(tagId) DO UPDATE SET favorite=:favorite, updatedAt=:updatedAt
     """)
     suspend fun setFavorite(id: String, tagId: String, favorite: Boolean, updatedAt: Long)
+
+    @Query("""
+        SELECT t.id, t.canonicalTag, t.danbooruCategory,
+            COALESCE(u.appCategory, t.appCategory) AS appCategory,
+            t.danbooruPostCount, t.naiCount, t.naiConfidence, t.novelAiSource, t.danbooruSource, t.userCreated,
+            t.useCount, t.lastUsedAt, t.lastSeenAt,
+            COALESCE(u.korean, b.korean) AS korean,
+            COALESCE(u.koreanAliases, b.koreanAliases) AS koreanAliases,
+            (SELECT GROUP_CONCAT(a.alias, ', ') FROM tag_aliases a WHERE a.tagId = t.id) AS englishAliases,
+            COALESCE(u.favorite, 0) AS favorite, u.thumbnailPath AS thumbnailPath
+        FROM tags t
+        LEFT JOIN base_translations b ON b.tagId = t.id
+        LEFT JOIN user_tag_overrides u ON u.tagId = t.id
+        WHERE (:missingTranslation = 1 AND COALESCE(u.korean, b.korean, '') = '')
+           OR (:missingCategory = 1 AND COALESCE(u.appCategory, t.appCategory, '') = '')
+        ORDER BY t.useCount DESC, t.danbooruPostCount DESC, t.canonicalTag ASC
+        LIMIT :limit
+    """)
+    suspend fun translationCandidates(limit: Int, missingTranslation: Boolean, missingCategory: Boolean): List<TagDictionaryItem>
+
+    @Transaction
+    suspend fun applyTranslationImport(overrides: List<UserTagOverrideEntity>, categories: List<UserTagCategoryEntity>) {
+        categories.forEach { upsertUserCategory(it) }
+        overrides.forEach { upsertUserOverride(it) }
+    }
 }

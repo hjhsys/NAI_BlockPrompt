@@ -63,6 +63,17 @@ data class CharacterPrompt(
 @Serializable
 enum class SeedMode { RANDOM, FIXED }
 
+@Serializable
+enum class ImageInputMode { IMAGE_TO_IMAGE, VIBE_TRANSFER, PRECISE_REFERENCE }
+
+@Serializable
+data class ImageInputState(
+    val uri: String,
+    val mode: ImageInputMode = ImageInputMode.IMAGE_TO_IMAGE,
+    val strength: Float = 0.6f,
+    val noise: Float = 0f,
+)
+
 /**
  * App-domain generation state. Values whose NovelAI meaning is not yet verified remain nullable;
  * this model is deliberately not an API request DTO.
@@ -78,6 +89,7 @@ data class GenerationSettings(
     val seedMode: SeedMode = SeedMode.RANDOM,
     val seed: Long? = null,
     val guidanceRescale: Float? = null,
+    val imageInput: ImageInputState? = null,
 )
 
 @Serializable
@@ -134,4 +146,12 @@ data class GeneratedPromptSnapshot(
     val height: Int,
     val steps: Int,
     val scale: Float,
+    val guidanceRescale: Float? = null,
+    val noiseSchedule: String = "karras",
+    val sm: Boolean = false,
+    val smDynamic: Boolean = false,
+    val dynamicThresholding: Boolean = false,
+    val useCoordinates: Boolean = false,
+    val useOrder: Boolean = true,
+    val imageInput: ImageInputState? = null,
 )
