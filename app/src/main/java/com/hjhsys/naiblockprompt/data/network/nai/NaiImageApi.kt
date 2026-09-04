@@ -41,6 +41,7 @@ sealed interface NaiApiResult<out T> {
 
 interface NaiImageApi {
     suspend fun generate(token: String, request: NaiImageGenerationRequest): NaiApiResult<GeneratedImagePayload>
+    suspend fun encodeVibe(token: String, request: NaiEncodeVibeRequest): NaiApiResult<ByteArray>
     suspend fun testConnection(token: String): NaiApiResult<Unit>
     suspend fun subscriptionStatus(token: String): NaiApiResult<NaiSubscriptionStatus>
 }

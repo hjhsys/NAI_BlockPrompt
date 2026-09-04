@@ -22,6 +22,7 @@ import java.util.UUID
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.security.MessageDigest
 
 data class GenerationRecord(val imagePath: String, val thumbnailPath: String, val seed: Long)
 
@@ -40,7 +41,10 @@ class GenerationRepository(
     private val imageStore = GeneratedImageStore(context)
     suspend fun generate(token: String, generation: PreparedGeneration): GenerationResult {
         val prepared = try {
-            attachInputImage(generation)
+            when (val attached = attachInputImage(token, generation)) {
+                is AttachmentResult.Ready -> attached.generation
+                is AttachmentResult.Failed -> return GenerationResult.Failure(attached.error)
+            }
         } catch (error: Exception) {
             return GenerationResult.Failure(NaiApiFailure.Storage(error.message))
         }
@@ -50,22 +54,67 @@ class GenerationRepository(
         }
     }
 
-    private fun attachInputImage(generation: PreparedGeneration): PreparedGeneration {
-        val input = generation.sourceSession.generationSettings.imageInput ?: return generation
-        require(input.mode == com.hjhsys.naiblockprompt.domain.model.ImageInputMode.IMAGE_TO_IMAGE) {
-            "Selected image reference mode is not supported by the verified API mapping"
-        }
+    private sealed interface AttachmentResult {
+        data class Ready(val generation: PreparedGeneration) : AttachmentResult
+        data class Failed(val error: NaiApiFailure) : AttachmentResult
+    }
+
+    private suspend fun attachInputImage(token: String, generation: PreparedGeneration): AttachmentResult {
+        val input = generation.sourceSession.generationSettings.imageInput ?: return AttachmentResult.Ready(generation)
         val bytes = context.contentResolver.openInputStream(Uri.parse(input.uri))?.use { it.readBytes() }
             ?: throw IllegalArgumentException("Selected image could not be read")
-        val request = generation.request.copy(
-            action = "img2img",
-            parameters = generation.request.parameters.copy(
-                image = Base64.encodeToString(bytes, Base64.NO_WRAP),
-                strength = input.strength,
-                noise = input.noise,
-            ),
-        )
-        return generation.copy(request = request)
+        val encodedSource = Base64.encodeToString(bytes, Base64.NO_WRAP)
+        val parameters = when (input.mode) {
+            com.hjhsys.naiblockprompt.domain.model.ImageInputMode.IMAGE_TO_IMAGE -> generation.request.parameters.copy(
+                image = encodedSource, strength = input.strength, noise = input.noise,
+            )
+            com.hjhsys.naiblockprompt.domain.model.ImageInputMode.VIBE_TRANSFER -> {
+                val cacheFile = vibeCacheFile(bytes, generation.request.model, input.informationExtracted)
+                val vibe = if (cacheFile.isFile) cacheFile.readBytes() else when (val result = api.encodeVibe(
+                    token,
+                    com.hjhsys.naiblockprompt.data.network.nai.dto.NaiEncodeVibeRequest(
+                        image = encodedSource,
+                        informationExtracted = input.informationExtracted,
+                        model = generation.request.model,
+                    ),
+                )) {
+                    is NaiApiResult.Failure -> return AttachmentResult.Failed(result.error)
+                    is NaiApiResult.Success -> result.value.also { cacheFile.parentFile?.mkdirs(); cacheFile.writeBytes(it) }
+                }
+                generation.request.parameters.copy(
+                    referenceImages = listOf(Base64.encodeToString(vibe, Base64.NO_WRAP)),
+                    referenceInformationExtracted = listOf(input.informationExtracted),
+                    referenceStrengths = listOf(input.strength),
+                )
+            }
+            com.hjhsys.naiblockprompt.domain.model.ImageInputMode.PRECISE_REFERENCE -> {
+                require(generation.request.model.startsWith("nai-diffusion-4-5-")) { "Precise Reference requires a V4.5 model" }
+                val preparedImage = ReferenceImagePreprocessor.preciseReferencePng(bytes)
+                val description = com.hjhsys.naiblockprompt.data.network.nai.dto.NaiV4ConditionInput(
+                    caption = com.hjhsys.naiblockprompt.data.network.nai.dto.NaiV4ExternalCaption(input.preciseType.apiValue, emptyList()),
+                    useCoordinates = false,
+                    useOrder = false,
+                )
+                generation.request.parameters.copy(
+                    directorReferenceImages = listOf(Base64.encodeToString(preparedImage, Base64.NO_WRAP)),
+                    directorReferenceDescriptions = listOf(description),
+                    directorReferenceInformationExtracted = listOf(input.informationExtracted),
+                    directorReferenceStrengths = listOf(input.strength),
+                    directorReferenceSecondaryStrengths = listOf(input.fidelity),
+                )
+            }
+        }
+        val action = if (input.mode == com.hjhsys.naiblockprompt.domain.model.ImageInputMode.IMAGE_TO_IMAGE) "img2img" else generation.request.action
+        return AttachmentResult.Ready(generation.copy(request = generation.request.copy(action = action, parameters = parameters)))
+    }
+
+    private fun vibeCacheFile(bytes: ByteArray, model: String, informationExtracted: Float): File {
+        val digest = MessageDigest.getInstance("SHA-256")
+        digest.update(bytes)
+        digest.update(model.toByteArray())
+        digest.update(informationExtracted.toString().toByteArray())
+        val name = digest.digest().joinToString("") { "%02x".format(it) }
+        return File(File(context.filesDir, "vibe_cache"), "$name.vibe")
     }
 
     suspend fun testConnection(token: String) = api.testConnection(token)

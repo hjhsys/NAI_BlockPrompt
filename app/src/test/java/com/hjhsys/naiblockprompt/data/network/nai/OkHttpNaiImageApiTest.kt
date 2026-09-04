@@ -12,8 +12,27 @@ import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.*
 import org.junit.Test
 import java.util.Base64
+import com.hjhsys.naiblockprompt.data.network.nai.dto.NaiEncodeVibeRequest
 
 class OkHttpNaiImageApiTest {
+    @Test fun `encode vibe sends official JSON and returns binary`() = runTest {
+        val server = MockWebServer().apply {
+            enqueue(MockResponse().setResponseCode(201).setBody(okio.Buffer().write(byteArrayOf(9, 8, 7))))
+            start()
+        }
+        try {
+            val api = OkHttpNaiImageApi(OkHttpClient(), Json { encodeDefaults = true }, server.url("/"))
+            val result = api.encodeVibe("pst-secret", NaiEncodeVibeRequest("aW1hZ2U=", 0.7f, "nai-diffusion-4-5-full")) as NaiApiResult.Success
+            assertArrayEquals(byteArrayOf(9, 8, 7), result.value)
+            val request = server.takeRequest()
+            assertEquals("/ai/encode-vibe", request.path)
+            val body = request.body.readUtf8()
+            assertTrue(body.contains("\"information_extracted\":0.7"))
+            assertTrue(body.contains("\"image\":\"aW1hZ2U=\""))
+            assertFalse(body.contains("pst-secret"))
+        } finally { server.shutdown() }
+    }
+
     @Test fun `parses official subscription balance fields`() = runTest {
         val server = MockWebServer().apply {
             enqueue(MockResponse().setResponseCode(200).setBody(

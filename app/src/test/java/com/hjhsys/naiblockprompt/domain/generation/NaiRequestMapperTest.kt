@@ -127,6 +127,31 @@ class NaiRequestMapperTest {
         assertTrue(parameters.characterPrompts[0].enabled)
     }
 
+    @Test fun `serializes documented external reference field names without web cache fields`() {
+        val session = Session.empty().copy(
+            generationSettings = GenerationSettings("nai-diffusion-4-5-full", samplerId = "k_euler_ancestral", steps = 28, scale = 5f),
+        )
+        val request = (NaiRequestMapper { 1L }.prepare(session, false) as PrepareGenerationResult.Ready).generation.request
+        val parameters = request.parameters.copy(
+            referenceImages = listOf("vibe"),
+            referenceInformationExtracted = listOf(0.7f),
+            referenceStrengths = listOf(0.6f),
+            directorReferenceImages = listOf("image"),
+            directorReferenceDescriptions = listOf(request.parameters.v4Prompt.copy(useCoordinates = false, useOrder = false)),
+            directorReferenceInformationExtracted = listOf(1f),
+            directorReferenceStrengths = listOf(1f),
+            directorReferenceSecondaryStrengths = listOf(0f),
+        )
+        val encoded = Json.encodeToString(request.copy(parameters = parameters))
+
+        assertTrue(encoded.contains("\"reference_image_multiple\":[\"vibe\"]"))
+        assertTrue(encoded.contains("\"director_reference_images\":[\"image\"]"))
+        assertTrue(encoded.contains("\"director_reference_strength_values\":[1.0]"))
+        assertTrue(encoded.contains("\"director_reference_secondary_strength_values\":[0.0]"))
+        assertFalse(encoded.contains("cache_secret_key"))
+        assertFalse(encoded.contains("_cached"))
+    }
+
     private fun character(id: String, order: Int, positive: String) = CharacterPrompt(
         id=id, order=order, prompts=PromptPair(positiveBlocks=listOf(PromptBlock(name="p",content=positive)))
     )

@@ -47,6 +47,16 @@ class OkHttpNaiImageApi(
         ) { NaiApiResult.Success(Unit) }
     }
 
+    override suspend fun encodeVibe(token: String, request: NaiEncodeVibeRequest): NaiApiResult<ByteArray> =
+        executeBytes(
+            Request.Builder()
+                .url(baseUrl.resolve("ai/encode-vibe")!!)
+                .post(json.encodeToString(request).toRequestBody(JSON_MEDIA_TYPE))
+                .header("Authorization", bearer(token))
+                .header("Accept", "application/binary")
+                .build(),
+        ) { NaiApiResult.Success(it) }
+
     override suspend fun subscriptionStatus(token: String): NaiApiResult<NaiSubscriptionStatus> = execute(
         Request.Builder()
             .url(baseUrl.resolve("user/subscription")!!)
@@ -83,6 +93,26 @@ class OkHttpNaiImageApi(
                     "Network failure host=${request.url.host} path=${request.url.encodedPath} " +
                         "type=${error.javaClass.simpleName} message=${error.message.orEmpty()}",
                 )
+                NaiApiResult.Failure(NaiApiFailure.Network(error.message))
+            }
+        }
+
+    private suspend fun <T> executeBytes(request: Request, parse: (ByteArray) -> NaiApiResult<T>): NaiApiResult<T> =
+        withContext(Dispatchers.IO) {
+            try {
+                client.newCall(request).execute().use { response ->
+                    val body = response.body?.bytes() ?: byteArrayOf()
+                    when {
+                        response.isSuccessful -> try { parse(body) } catch (error: Exception) {
+                            NaiApiResult.Failure(NaiApiFailure.InvalidResponse(error.message))
+                        }
+                        response.code == 401 || response.code == 403 -> NaiApiResult.Failure(NaiApiFailure.Authentication)
+                        response.code == 402 -> NaiApiResult.Failure(NaiApiFailure.PaymentRequired)
+                        response.code == 429 -> NaiApiResult.Failure(NaiApiFailure.RateLimited)
+                        else -> NaiApiResult.Failure(NaiApiFailure.Api(response.code, safeError(body.toString(Charsets.UTF_8))))
+                    }
+                }
+            } catch (error: IOException) {
                 NaiApiResult.Failure(NaiApiFailure.Network(error.message))
             }
         }

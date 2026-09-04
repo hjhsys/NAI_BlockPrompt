@@ -330,4 +330,12 @@
     <string name="position_v45_hint">캐릭터를 고른 뒤 셀을 누르세요. V4/V4.5는 5×5 격자를 사용합니다.</string>
     <string name="position_v5_hint">캐릭터를 고른 뒤 원하는 위치를 누르세요.</string>
     <string name="done">완료</string>
+    <string name="vibe_transfer">Vibe Transfer</string>
+    <string name="precise_reference">Precise Reference</string>
+    <string name="precise_reference_v45_only">Precise Reference는 V4.5 모델에서만 사용할 수 있습니다.</string>
+    <string name="information_extracted">정보 추출량</string>
+    <string name="reference_fidelity">Fidelity</string>
+    <string name="reference_character_and_style">캐릭터 &amp; 스타일</string>
+    <string name="reference_character">캐릭터</string>
+    <string name="reference_style">스타일</string>
 </resources>

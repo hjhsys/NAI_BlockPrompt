@@ -67,11 +67,19 @@ enum class SeedMode { RANDOM, FIXED }
 enum class ImageInputMode { IMAGE_TO_IMAGE, VIBE_TRANSFER, PRECISE_REFERENCE }
 
 @Serializable
+enum class PreciseReferenceType(val apiValue: String) {
+    CHARACTER_AND_STYLE("character&style"), CHARACTER("character"), STYLE("style")
+}
+
+@Serializable
 data class ImageInputState(
     val uri: String,
     val mode: ImageInputMode = ImageInputMode.IMAGE_TO_IMAGE,
     val strength: Float = 0.6f,
     val noise: Float = 0f,
+    val informationExtracted: Float = 1f,
+    val fidelity: Float = 0f,
+    val preciseType: PreciseReferenceType = PreciseReferenceType.CHARACTER_AND_STYLE,
 )
 
 /**

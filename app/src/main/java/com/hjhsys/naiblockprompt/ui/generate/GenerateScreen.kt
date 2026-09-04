@@ -943,8 +943,21 @@ private fun GenerationSettingsCard(settings: GenerationSettings, viewModel: Main
                         viewModel.updateGenerationSettings { it.copy(imageInput = ImageInputState(uri)) }
                         pendingImageUri = null
                     }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.image_to_image)) }
-                    OutlinedButton(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.vibe_transfer_mapping_pending)) }
-                    OutlinedButton(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.precise_reference_mapping_pending)) }
+                    OutlinedButton(onClick = {
+                        viewModel.updateGenerationSettings { it.copy(imageInput = ImageInputState(uri, mode = ImageInputMode.VIBE_TRANSFER)) }
+                        pendingImageUri = null
+                    }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.vibe_transfer)) }
+                    OutlinedButton(
+                        onClick = {
+                            viewModel.updateGenerationSettings { it.copy(imageInput = ImageInputState(uri, mode = ImageInputMode.PRECISE_REFERENCE, strength = 1f)) }
+                            pendingImageUri = null
+                        },
+                        enabled = settings.modelId?.startsWith("nai-diffusion-4-5-") == true,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text(stringResource(R.string.precise_reference)) }
+                    if (settings.modelId?.startsWith("nai-diffusion-4-5-") != true) {
+                        Text(stringResource(R.string.precise_reference_v45_only), style = MaterialTheme.typography.bodySmall)
+                    }
                     if (metadata != null) {
                         HorizontalDivider()
                         Text(stringResource(R.string.nai_metadata_found), style = MaterialTheme.typography.titleSmall)
@@ -998,7 +1011,7 @@ private fun GenerationSettingsCard(settings: GenerationSettings, viewModel: Main
                         contentScale = ContentScale.Fit,
                     )
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(stringResource(R.string.image_to_image), style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+                        Text(stringResource(input.mode.labelResource), style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
                         IconButton(onClick = { viewModel.updateGenerationSettings { it.copy(imageInput = null) } }) {
                             Icon(Icons.Default.Close, stringResource(R.string.remove_imported_image))
                         }
@@ -1006,8 +1019,29 @@ private fun GenerationSettingsCard(settings: GenerationSettings, viewModel: Main
                     SliderSettingRow(R.string.image_strength, input.strength, 0f..1f, 19, decimal = true) { value ->
                         viewModel.updateGenerationSettings { current -> current.copy(imageInput = input.copy(strength = (value * 20).toInt() / 20f)) }
                     }
-                    SliderSettingRow(R.string.image_noise, input.noise, 0f..1f, 19, decimal = true) { value ->
-                        viewModel.updateGenerationSettings { current -> current.copy(imageInput = input.copy(noise = (value * 20).toInt() / 20f)) }
+                    if (input.mode == ImageInputMode.IMAGE_TO_IMAGE) {
+                        SliderSettingRow(R.string.image_noise, input.noise, 0f..1f, 19, decimal = true) { value ->
+                            viewModel.updateGenerationSettings { current -> current.copy(imageInput = input.copy(noise = (value * 20).toInt() / 20f)) }
+                        }
+                    } else {
+                        SliderSettingRow(R.string.information_extracted, input.informationExtracted, 0f..1f, 19, decimal = true) { value ->
+                            viewModel.updateGenerationSettings { current -> current.copy(imageInput = input.copy(informationExtracted = (value * 20).toInt() / 20f)) }
+                        }
+                    }
+                    if (input.mode == ImageInputMode.PRECISE_REFERENCE) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            PreciseReferenceType.entries.forEach { type ->
+                                FilterChip(
+                                    selected = input.preciseType == type,
+                                    onClick = { viewModel.updateGenerationSettings { it.copy(imageInput = input.copy(preciseType = type)) } },
+                                    label = { Text(stringResource(type.labelResource), maxLines = 1) },
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                        }
+                        SliderSettingRow(R.string.reference_fidelity, input.fidelity, 0f..1f, 19, decimal = true) { value ->
+                            viewModel.updateGenerationSettings { current -> current.copy(imageInput = input.copy(fidelity = (value * 20).toInt() / 20f)) }
+                        }
                     }
                 } ?: OutlinedButton(onClick = { imagePicker.launch(arrayOf("image/png", "image/jpeg", "image/webp")) }, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Default.AddPhotoAlternate, null)
@@ -1274,6 +1308,18 @@ private val CharacterType.labelResource: Int get() = when (this) {
     CharacterType.GIRL -> R.string.character_girl
     CharacterType.BOY -> R.string.character_boy
     CharacterType.OTHER -> R.string.character_other
+}
+
+private val ImageInputMode.labelResource: Int get() = when (this) {
+    ImageInputMode.IMAGE_TO_IMAGE -> R.string.image_to_image
+    ImageInputMode.VIBE_TRANSFER -> R.string.vibe_transfer
+    ImageInputMode.PRECISE_REFERENCE -> R.string.precise_reference
+}
+
+private val PreciseReferenceType.labelResource: Int get() = when (this) {
+    PreciseReferenceType.CHARACTER_AND_STYLE -> R.string.reference_character_and_style
+    PreciseReferenceType.CHARACTER -> R.string.reference_character
+    PreciseReferenceType.STYLE -> R.string.reference_style
 }
 
 internal fun compactModelName(modelId: String?): String = when (modelId) {

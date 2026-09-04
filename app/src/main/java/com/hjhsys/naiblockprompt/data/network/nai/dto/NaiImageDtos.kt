@@ -36,6 +36,14 @@ data class NaiRequestParameters(
     val image: String? = null,
     val strength: Float? = null,
     val noise: Float? = null,
+    @SerialName("reference_image_multiple") val referenceImages: List<String>? = null,
+    @SerialName("reference_information_extracted_multiple") val referenceInformationExtracted: List<Float>? = null,
+    @SerialName("reference_strength_multiple") val referenceStrengths: List<Float>? = null,
+    @SerialName("director_reference_images") val directorReferenceImages: List<String>? = null,
+    @SerialName("director_reference_descriptions") val directorReferenceDescriptions: List<NaiV4ConditionInput>? = null,
+    @SerialName("director_reference_information_extracted") val directorReferenceInformationExtracted: List<Float>? = null,
+    @SerialName("director_reference_strength_values") val directorReferenceStrengths: List<Float>? = null,
+    @SerialName("director_reference_secondary_strength_values") val directorReferenceSecondaryStrengths: List<Float>? = null,
     @SerialName("v4_prompt") val v4Prompt: NaiV4ConditionInput,
     @SerialName("v4_negative_prompt") val v4NegativePrompt: NaiV4ConditionInput,
 )
@@ -83,6 +91,13 @@ data class NaiGeneratedImage(
     val image: String,
     val index: Int? = null,
     val seed: Long? = null,
+)
+
+@Serializable
+data class NaiEncodeVibeRequest(
+    val image: String,
+    @SerialName("information_extracted") val informationExtracted: Float,
+    val model: String,
 )
 
 @Serializable

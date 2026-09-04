@@ -330,4 +330,12 @@
     <string name="position_v45_hint">Select a character, then tap a cell. V4/V4.5 use a 5×5 grid.</string>
     <string name="position_v5_hint">Select a character, then tap anywhere to place its center.</string>
     <string name="done">Done</string>
+    <string name="vibe_transfer">Vibe Transfer</string>
+    <string name="precise_reference">Precise Reference</string>
+    <string name="precise_reference_v45_only">Precise Reference is available only with V4.5 models.</string>
+    <string name="information_extracted">Information extracted</string>
+    <string name="reference_fidelity">Fidelity</string>
+    <string name="reference_character_and_style">Character &amp; Style</string>
+    <string name="reference_character">Character</string>
+    <string name="reference_style">Style</string>
 </resources>
