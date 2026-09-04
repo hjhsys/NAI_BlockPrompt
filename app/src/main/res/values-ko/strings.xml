@@ -323,4 +323,10 @@
     <string name="export_for_ai">AI용 내보내기</string>
     <string name="import_ai_result">결과 가져오기</string>
     <string name="developer_export_all_batches">개발자용: 전체 대상을 1,000개씩 분할 내보내기</string>
+    <string name="character_positioning">캐릭터 위치 지정</string>
+    <string name="position_ai_choice">AI 선택</string>
+    <string name="position_custom">직접 지정</string>
+    <string name="position_v45_hint">캐릭터를 고른 뒤 셀을 누르세요. V4/V4.5는 5×5 격자를 사용합니다.</string>
+    <string name="position_v5_hint">캐릭터를 고른 뒤 원하는 위치를 누르세요.</string>
+    <string name="done">완료</string>
 </resources>

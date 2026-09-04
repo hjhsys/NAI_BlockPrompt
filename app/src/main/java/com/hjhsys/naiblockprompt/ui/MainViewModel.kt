@@ -132,6 +132,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     fun removeCharacter(id: String) = edit { SessionEditor.removeCharacter(it, id) }
     fun moveCharacter(id: String, direction: MoveDirection) = edit { SessionEditor.moveCharacter(it, id, direction) }
     fun setCharacterType(id: String, type: CharacterType) = edit { SessionEditor.setCharacterType(it, id, type) }
+    fun setCharacterPositioningEnabled(enabled: Boolean) = edit { SessionEditor.setCharacterPositioningEnabled(it, enabled) }
+    fun setCharacterPosition(id: String, position: CharacterPosition) = edit { SessionEditor.setCharacterPosition(it, id, position) }
 
     fun addBlock(owner: PromptOwner, polarity: PromptPolarity, name: String) = edit {
         SessionEditor.addBlock(it, owner, polarity, name)
@@ -200,6 +202,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
                 CharacterPrompt(
                     type = CharacterType.OTHER,
                     order = index,
+                    position = metadata.characterPositions.getOrNull(index),
                     prompts = PromptPair(
                         positiveBlocks = blocks(positive),
                         negativeBlocks = blocks(metadata.characterNegativePrompts.getOrNull(index)),

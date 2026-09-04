@@ -43,10 +43,16 @@ class NaiRequestMapper(
         val basePositive = positive(session.base.prompts.positiveBlocks, session.base.textRendering)
         val baseNegative = joined(session.base.prompts.negativeBlocks)
         val characters = session.characters.sortedBy { it.order }
+        val useCoordinates = characters.isNotEmpty() && characters.all { it.position != null }
         val positiveCharacters = characters.map {
-            NaiV4CharacterCaption(positive(it.prompts.positiveBlocks, it.textRendering))
+            NaiV4CharacterCaption(
+                positive(it.prompts.positiveBlocks, it.textRendering),
+                centers = listOf(it.position.toApiCoordinate()),
+            )
         }
-        val negativeCharacters = characters.map { NaiV4CharacterCaption(joined(it.prompts.negativeBlocks)) }
+        val negativeCharacters = characters.map {
+            NaiV4CharacterCaption(joined(it.prompts.negativeBlocks), centers = listOf(it.position.toApiCoordinate()))
+        }
 
         val request = NaiImageGenerationRequest(
             input = basePositive,
@@ -63,16 +69,29 @@ class NaiRequestMapper(
                 prompt = basePositive,
                 negativePrompt = baseNegative,
                 uc = baseNegative,
-                v4Prompt = condition(basePositive, positiveCharacters),
-                v4NegativePrompt = condition(baseNegative, negativeCharacters),
+                useCoordinates = useCoordinates,
+                characterPrompts = characters.mapIndexed { index, character ->
+                    NaiLegacyCharacterPrompt(
+                        prompt = positiveCharacters[index].characterCaption,
+                        uc = negativeCharacters[index].characterCaption,
+                        center = character.position.toApiCoordinate(),
+                    )
+                },
+                v4Prompt = condition(basePositive, positiveCharacters, useCoordinates),
+                v4NegativePrompt = condition(baseNegative, negativeCharacters, false),
             ),
         )
         return PrepareGenerationResult.Ready(PreparedGeneration(session, request, seed))
     }
 
-    private fun condition(base: String, characters: List<NaiV4CharacterCaption>) = NaiV4ConditionInput(
+    private fun condition(base: String, characters: List<NaiV4CharacterCaption>, useCoordinates: Boolean) = NaiV4ConditionInput(
         caption = NaiV4ExternalCaption(baseCaption = base, characterCaptions = characters),
-        useCoordinates = false,
+        useCoordinates = useCoordinates,
         useOrder = true,
+    )
+
+    private fun CharacterPosition?.toApiCoordinate() = NaiCoordinate(
+        x = this?.normalizedX ?: 0.5f,
+        y = this?.normalizedY ?: 0.5f,
     )
 }

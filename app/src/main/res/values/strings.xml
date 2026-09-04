@@ -323,4 +323,10 @@
     <string name="export_for_ai">Export for AI</string>
     <string name="import_ai_result">Import result</string>
     <string name="developer_export_all_batches">Developer: export all in 1,000-tag batches</string>
+    <string name="character_positioning">Character positioning</string>
+    <string name="position_ai_choice">AI choice</string>
+    <string name="position_custom">Custom</string>
+    <string name="position_v45_hint">Select a character, then tap a cell. V4/V4.5 use a 5×5 grid.</string>
+    <string name="position_v5_hint">Select a character, then tap anywhere to place its center.</string>
+    <string name="done">Done</string>
 </resources>

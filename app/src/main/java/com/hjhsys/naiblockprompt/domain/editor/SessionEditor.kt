@@ -57,6 +57,22 @@ object SessionEditor {
         characters = session.characters.map { if (it.id == characterId) it.copy(type = type) else it },
     )
 
+    fun setCharacterPositioningEnabled(session: Session, enabled: Boolean): Session = session.copy(
+        characters = session.characters.mapIndexed { index, character ->
+            character.copy(position = if (enabled) character.position ?: defaultPosition(index, session.characters.size) else null)
+        },
+    )
+
+    fun setCharacterPosition(session: Session, characterId: String, position: CharacterPosition): Session = session.copy(
+        characters = session.characters.map { character ->
+            if (character.id == characterId) character.copy(
+                position = CharacterPosition(position.normalizedX.coerceIn(0f, 1f), position.normalizedY.coerceIn(0f, 1f)),
+            ) else character
+        },
+    )
+
+    private fun defaultPosition(index: Int, count: Int) = CharacterPosition((index + 1f) / (count + 1f), 0.5f)
+
     fun addBlock(session: Session, owner: PromptOwner, polarity: PromptPolarity, name: String): Session =
         session.updateBlocks(owner, polarity) { blocks -> blocks + PromptBlock(name = name, order = blocks.size) }
 

@@ -1,5 +1,6 @@
 package com.hjhsys.naiblockprompt.domain.generation
 
+import com.hjhsys.naiblockprompt.data.network.nai.dto.NaiCoordinate
 import com.hjhsys.naiblockprompt.domain.model.*
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -103,6 +104,27 @@ class NaiRequestMapperTest {
         val request = (NaiRequestMapper { 13L }.prepare(session, false) as PrepareGenerationResult.Ready).generation.request
         assertEquals(0.4f, request.parameters.guidanceRescale)
         assertTrue(Json.encodeToString(request).contains("\"cfg_rescale\":0.4"))
+    }
+
+    @Test fun `maps custom character centers and enables coordinates only for positive condition`() {
+        val session = Session.empty().copy(
+            characters = listOf(
+                character("a", 0, "girl").copy(position = CharacterPosition(0.1f, 0.3f)),
+                character("b", 1, "boy").copy(position = CharacterPosition(0.7f, 0.9f)),
+            ),
+            generationSettings = GenerationSettings("nai-diffusion-4-5-full", samplerId = "k_euler_ancestral", steps = 28, scale = 5f),
+        )
+        val parameters = (NaiRequestMapper { 1L }.prepare(session, false) as PrepareGenerationResult.Ready).generation.request.parameters
+
+        assertTrue(parameters.useCoordinates)
+        assertTrue(parameters.v4Prompt.useCoordinates)
+        assertFalse(parameters.v4NegativePrompt.useCoordinates)
+        assertEquals(NaiCoordinate(0.1f, 0.3f), parameters.v4Prompt.caption.characterCaptions[0].centers.single())
+        assertEquals(NaiCoordinate(0.7f, 0.9f), parameters.v4Prompt.caption.characterCaptions[1].centers.single())
+        assertEquals(parameters.v4Prompt.caption.characterCaptions.map { it.centers }, parameters.v4NegativePrompt.caption.characterCaptions.map { it.centers })
+        assertEquals(NaiCoordinate(0.1f, 0.3f), parameters.characterPrompts[0].center)
+        assertEquals("girl,", parameters.characterPrompts[0].prompt)
+        assertTrue(parameters.characterPrompts[0].enabled)
     }
 
     private fun character(id: String, order: Int, positive: String) = CharacterPrompt(

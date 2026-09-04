@@ -42,7 +42,7 @@ data class BasePrompt(
 @Serializable
 enum class CharacterType { GIRL, BOY, OTHER }
 
-/** Domain-level position only. Its future API mapping must be based on the Phase 0.5 spike. */
+/** Normalized image-space center. V4/V4.5 values are snapped to 5x5 cell centers. */
 @Serializable
 data class CharacterPosition(
     val normalizedX: Float,
@@ -153,5 +153,6 @@ data class GeneratedPromptSnapshot(
     val dynamicThresholding: Boolean = false,
     val useCoordinates: Boolean = false,
     val useOrder: Boolean = true,
+    val characterPositions: List<CharacterPosition?> = emptyList(),
     val imageInput: ImageInputState? = null,
 )

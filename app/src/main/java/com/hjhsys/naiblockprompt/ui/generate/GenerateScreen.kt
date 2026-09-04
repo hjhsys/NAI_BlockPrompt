@@ -3,6 +3,8 @@ package com.hjhsys.naiblockprompt.ui.generate
 import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
@@ -20,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
@@ -47,6 +50,7 @@ import com.hjhsys.naiblockprompt.data.network.nai.NaiApiFailure
 import com.hjhsys.naiblockprompt.domain.generation.MissingGenerationField
 import com.hjhsys.naiblockprompt.domain.generation.NaiCatalogOption
 import com.hjhsys.naiblockprompt.domain.generation.NaiGenerationCatalog
+import com.hjhsys.naiblockprompt.domain.generation.CharacterPositioning
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import androidx.compose.ui.layout.ContentScale
@@ -167,6 +171,9 @@ fun GenerateScreen(
                 else activeTagTarget?.takeUnless { it.blockId == blockId }
             }
         }
+        if (session.characters.isNotEmpty()) item {
+            CharacterPositioningButton(session, viewModel)
+        }
         item {
             OutlinedButton(
                 onClick = { showCharacterTypeDialog = true },
@@ -193,6 +200,95 @@ fun GenerateScreen(
           ) { Icon(Icons.Default.Storage, stringResource(R.string.open_tag_dictionary)) }
       }
     } }
+}
+
+@Composable
+private fun CharacterPositioningButton(session: Session, viewModel: MainViewModel) {
+    var open by rememberSaveable { mutableStateOf(false) }
+    OutlinedButton(onClick = { open = true }, modifier = Modifier.fillMaxWidth()) {
+        Icon(Icons.Default.ControlCamera, contentDescription = null)
+        Spacer(Modifier.width(8.dp))
+        Text(stringResource(R.string.character_positioning))
+    }
+    if (open) CharacterPositioningDialog(session, viewModel) { open = false }
+}
+
+@Composable
+private fun CharacterPositioningDialog(session: Session, viewModel: MainViewModel, onDismiss: () -> Unit) {
+    val characters = session.characters.sortedBy { it.order }
+    var selectedId by rememberSaveable { mutableStateOf(characters.first().id) }
+    val custom = characters.all { it.position != null }
+    val continuous = CharacterPositioning.supportsContinuousCoordinates(session.generationSettings.modelId)
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(shape = MaterialTheme.shapes.extraLarge, tonalElevation = 6.dp) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(stringResource(R.string.character_positioning), style = MaterialTheme.typography.titleLarge)
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    SegmentedButton(
+                        selected = !custom,
+                        onClick = { viewModel.setCharacterPositioningEnabled(false) },
+                        shape = SegmentedButtonDefaults.itemShape(0, 2),
+                    ) { Text(stringResource(R.string.position_ai_choice)) }
+                    SegmentedButton(
+                        selected = custom,
+                        onClick = { viewModel.setCharacterPositioningEnabled(true) },
+                        shape = SegmentedButtonDefaults.itemShape(1, 2),
+                    ) { Text(stringResource(R.string.position_custom)) }
+                }
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    itemsIndexed(characters, key = { _, item -> item.id }) { index, character ->
+                        FilterChip(
+                            selected = selectedId == character.id,
+                            onClick = { selectedId = character.id },
+                            label = { Text("${index + 1}") },
+                        )
+                    }
+                }
+                if (custom) {
+                    val gridColor = MaterialTheme.colorScheme.outlineVariant
+                    BoxWithConstraints(
+                        Modifier.fillMaxWidth().aspectRatio(session.generationSettings.width.toFloat() / session.generationSettings.height)
+                            .pointerInput(selectedId, continuous) {
+                                detectTapGestures { offset ->
+                                    viewModel.setCharacterPosition(
+                                        selectedId,
+                                        CharacterPositioning.normalize(
+                                            session.generationSettings.modelId,
+                                            offset.x / size.width,
+                                            offset.y / size.height,
+                                        ),
+                                    )
+                                }
+                            },
+                    ) {
+                        Canvas(Modifier.matchParentSize()) {
+                            drawRect(gridColor.copy(alpha = 0.18f))
+                            if (!continuous) for (i in 1..4) {
+                                val x = size.width * i / 5f
+                                val y = size.height * i / 5f
+                                drawLine(gridColor, start = androidx.compose.ui.geometry.Offset(x, 0f), end = androidx.compose.ui.geometry.Offset(x, size.height))
+                                drawLine(gridColor, start = androidx.compose.ui.geometry.Offset(0f, y), end = androidx.compose.ui.geometry.Offset(size.width, y))
+                            }
+                        }
+                        characters.forEachIndexed { index, character ->
+                            val position = character.position ?: CharacterPosition(0.5f, 0.5f)
+                            Surface(
+                                modifier = Modifier.offset(maxWidth * position.normalizedX - 18.dp, maxHeight * position.normalizedY - 18.dp).size(36.dp),
+                                shape = MaterialTheme.shapes.extraLarge,
+                                color = if (selectedId == character.id) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer,
+                                onClick = { selectedId = character.id },
+                            ) { Box(contentAlignment = Alignment.Center) { Text("${index + 1}") } }
+                        }
+                    }
+                    Text(
+                        stringResource(if (continuous) R.string.position_v5_hint else R.string.position_v45_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) { Text(stringResource(R.string.done)) }
+            }
+        }
+    }
 }
 
 private data class TagEditorTarget(val owner: PromptOwner, val polarity: PromptPolarity, val blockId: String, val cursor: Int)

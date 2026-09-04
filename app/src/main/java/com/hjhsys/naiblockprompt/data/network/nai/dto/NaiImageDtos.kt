@@ -29,6 +29,8 @@ data class NaiRequestParameters(
     val sm: Boolean = false,
     @SerialName("sm_dyn") val smDynamic: Boolean = false,
     @SerialName("dynamic_thresholding") val dynamicThresholding: Boolean = false,
+    @SerialName("use_coords") val useCoordinates: Boolean = false,
+    @SerialName("characterPrompts") val characterPrompts: List<NaiLegacyCharacterPrompt> = emptyList(),
     @SerialName("image_format") val imageFormat: String = "png",
     /** Base64 source image for Swagger's img2img action. */
     val image: String? = null,
@@ -64,6 +66,14 @@ data class NaiV4CharacterCaption(
 
 @Serializable
 data class NaiCoordinate(val x: Float, val y: Float)
+
+@Serializable
+data class NaiLegacyCharacterPrompt(
+    val prompt: String,
+    val uc: String,
+    val center: NaiCoordinate,
+    val enabled: Boolean = true,
+)
 
 @Serializable
 data class NaiImageGenerationResponse(val images: List<NaiGeneratedImage> = emptyList())

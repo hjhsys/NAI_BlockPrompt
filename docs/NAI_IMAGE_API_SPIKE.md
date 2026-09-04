@@ -37,10 +37,30 @@ V4/V4.5의 최소 생성 payload에는 `params_version=3`, `action=generate`, `n
 
 enabled Block만 order 순으로 결합하고 `## ... ##` 주석 제거와 설정된 trailing-digit weight normalization을 Generate 직전에 적용한다. Block 경계와 Character type은 API에 보내지 않는다. Random Seed는 요청 생성 시 정하며 성공 응답 seed를 우선해 History에 실제 값을 저장한다.
 
+## Character Positioning 실측 확인 (2026-09-04)
+
+NovelAI 공식 웹에서 같은 캐릭터 배치를 V4.5와 V5로 생성한 PNG metadata를 비교했다.
+
+- V4/V4.5는 공식 문서와 동일한 5×5 grid이며 셀 중심 좌표 `0.1, 0.3, 0.5, 0.7, 0.9`를 사용한다.
+- V5는 grid에 고정되지 않은 normalized continuous coordinate를 사용한다.
+- Custom일 때 root `parameters.use_coords=true`, `v4_prompt.use_coords=true`, `v4_prompt.use_order=true`이다.
+- `v4_prompt.caption.char_captions[].centers[0]` 및 legacy `characterPrompts[].center`에 같은 좌표를 보낸다.
+- Negative character captions는 같은 centers와 순서를 유지하지만 `v4_negative_prompt.use_coords=false`이다.
+- AI 선택일 때 `use_coords=false`이며 호환용 center `(0.5, 0.5)`를 유지한다.
+
+## Reference 기능 실측 확인 (2026-09-04)
+
+- Vibe encoding: `POST /ai/encode-vibe`, multipart `image` binary + `request` JSON(`image`, `information_extracted`, `model`), binary response.
+- Vibe 생성: multipart `ref_multiple_N`과 `reference_strength_multiple`, `reference_image_multiple_cached`를 대응시킨다.
+- Precise Reference: multipart `director_ref_N`과 `director_reference_*`, `director_reference_images_cached`를 대응시킨다.
+- Precise type wire value는 `character&style`, `character`, `style`이다.
+- `cache_secret_key` 생성 규칙은 확인되지 않았다. 임의 hash 생성은 하지 않는다.
+- PNG metadata의 Vibe encoding은 원본 이미지와 다른 재사용 표현이며, Precise 원본 이미지는 PNG metadata만으로 복구가 보장되지 않는다.
+
 ## 확인되지 않아 제외한 항목
 
 - `action`: Primary API의 공식 OpenAPI enum 및 default 설명에 따라 text-to-image 요청은 `generate`를 전송한다.
-- Character Positioning: `centers`/`use_coords`의 공식 좌표 mapping은 확인되지 않아 `use_coords=false`를 유지한다. 공식 schema상 Character caption에 `centers`가 존재하며, 실서비스가 생략/빈 배열 요청에 HTTP 500을 반환하므로 좌표가 비활성화된 상태에서 무시되는 중립값 `(0.5, 0.5)` 하나를 호환성 값으로 전송한다. Character 순서 기반 좌표 mapping은 구현하지 않는다.
+- Reference server cache의 `cache_secret_key` 생성 및 만료 규칙.
 - V5 전용 동작: 공식 Swagger에서 V5별 mapping을 확정할 수 없어 구현하지 않는다.
 - 모델 전환은 Session/Block을 변경하지 않고 Mapper에서 처리한다. V4/V4.5는 `params_version=3`, V5는 `params_version=4`를 선택하며 양쪽 모두 구조화된 `v4_prompt`/`v4_negative_prompt` conditioning을 사용한다. V5에서 아직 지원이 확인되지 않은 부가기능은 Session에는 보존하되 request에서 제외하는 capability 정책을 따른다.
 - model/sampler ID enum: Swagger에 없다. 사용자가 입력한 정확한 API ID를 그대로 보내며 임의 default나 변환을 두지 않는다.

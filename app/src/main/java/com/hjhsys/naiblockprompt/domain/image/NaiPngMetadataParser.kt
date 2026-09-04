@@ -1,5 +1,6 @@
 package com.hjhsys.naiblockprompt.domain.image
 
+import com.hjhsys.naiblockprompt.domain.model.CharacterPosition
 import kotlinx.serialization.json.*
 import java.io.ByteArrayInputStream
 import java.util.zip.InflaterInputStream
@@ -16,6 +17,7 @@ data class NaiImageMetadata(
     val scale: Float?,
     val characterPrompts: List<String> = emptyList(),
     val characterNegativePrompts: List<String> = emptyList(),
+    val characterPositions: List<CharacterPosition?> = emptyList(),
     val usedExternalImageGuidance: Boolean = false,
 )
 
@@ -50,6 +52,7 @@ object NaiPngMetadataParser {
             prompt, negative, text["Source"] ?: comment.string("model"), comment.long("seed"),
             comment.int("width"), comment.int("height"), comment.string("sampler"), comment.int("steps"), comment.float("scale"),
             comment.characterCaptions("v4_prompt"), comment.characterCaptions("v4_negative_prompt"),
+            comment.characterPositions(),
             comment.usedExternalImageGuidance(),
         )
     }
@@ -86,6 +89,18 @@ object NaiPngMetadataParser {
     private fun JsonObject?.characterCaptions(key: String): List<String> = runCatching {
         this?.get(key)?.jsonObject?.get("caption")?.jsonObject?.get("char_captions")?.jsonArray
             ?.mapNotNull { it.jsonObject["char_caption"]?.jsonPrimitive?.contentOrNull }.orEmpty()
+    }.getOrDefault(emptyList())
+
+    private fun JsonObject?.characterPositions(): List<CharacterPosition?> = runCatching {
+        val prompt = this?.get("v4_prompt")?.jsonObject ?: return emptyList()
+        if (prompt["use_coords"]?.jsonPrimitive?.booleanOrNull != true) return emptyList()
+        prompt["caption"]?.jsonObject?.get("char_captions")?.jsonArray?.map { caption ->
+            caption.jsonObject["centers"]?.jsonArray?.firstOrNull()?.jsonObject?.let { center ->
+                val x = center["x"]?.jsonPrimitive?.floatOrNull
+                val y = center["y"]?.jsonPrimitive?.floatOrNull
+                if (x != null && y != null) CharacterPosition(x, y) else null
+            }
+        }.orEmpty()
     }.getOrDefault(emptyList())
 
     private fun JsonObject?.usedExternalImageGuidance(): Boolean {
