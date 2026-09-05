@@ -108,9 +108,20 @@ private val MIGRATION_6_7 = object : Migration(6, 7) {
 
 private val MIGRATION_7_8 = object : Migration(7, 8) {
     override fun migrate(db: SupportSQLiteDatabase) {
-        db.execSQL("ALTER TABLE tags ADD COLUMN bundled INTEGER NOT NULL DEFAULT 0")
+        // Some development builds created this column before advancing Room's
+        // schema version. Keep those installations upgradeable without data loss.
+        if (!db.hasColumn("tags", "bundled")) {
+            db.execSQL("ALTER TABLE tags ADD COLUMN bundled INTEGER NOT NULL DEFAULT 0")
+        }
     }
 }
+
+private fun SupportSQLiteDatabase.hasColumn(table: String, column: String): Boolean =
+    query("PRAGMA table_info(`$table`)").use { cursor ->
+        val nameIndex = cursor.getColumnIndex("name")
+        generateSequence { if (cursor.moveToNext()) cursor.getString(nameIndex) else null }
+            .any { it == column }
+    }
 
 data class AppContainer(
     val sessionRepository: SessionRepository,

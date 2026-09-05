@@ -77,7 +77,6 @@ fun GenerateScreen(
     onOpenSettings: () -> Unit,
     onOpenGenerationSettings: () -> Unit,
     onOpenTagDatabase: () -> Unit,
-    onTagEditorActiveChange: (Boolean) -> Unit = {},
 ) {
     if (session == null) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -99,12 +98,6 @@ fun GenerateScreen(
     val modelSummary = compactModelName(session.generationSettings.modelId)
     val seedSummary = stringResource(if (session.generationSettings.seedMode == SeedMode.RANDOM) R.string.seed_status_random else R.string.seed_status_fixed)
     var activeTagTarget by remember { mutableStateOf<TagEditorTarget?>(null) }
-    LaunchedEffect(activeTagTarget != null) {
-        onTagEditorActiveChange(activeTagTarget != null)
-    }
-    DisposableEffect(Unit) {
-        onDispose { onTagEditorActiveChange(false) }
-    }
     val promptListState = rememberLazyListState()
     if (duplicateWarning) AlertDialog(
         onDismissRequest = viewModel::cancelDuplicateGeneration,
@@ -208,7 +201,7 @@ fun GenerateScreen(
                   viewModel.beginTagInsert(target.owner, target.polarity, target.blockId, target.cursor)
                   onOpenTagDatabase()
               },
-              modifier = Modifier.align(Alignment.CenterEnd).padding(end = 14.dp),
+              modifier = Modifier.align(Alignment.CenterEnd).offset(y = 72.dp).padding(end = 14.dp),
               containerColor = MaterialTheme.colorScheme.secondaryContainer,
           ) { Icon(Icons.Default.Storage, stringResource(R.string.open_tag_dictionary)) }
       }

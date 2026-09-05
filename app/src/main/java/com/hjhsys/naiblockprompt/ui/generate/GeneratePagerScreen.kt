@@ -68,7 +68,6 @@ fun GeneratePagerScreen(
     }
     var secondaryTarget by rememberSaveable { mutableStateOf(SecondaryTarget.RESULT) }
     var showExitDialog by rememberSaveable { mutableStateOf(false) }
-    var tagEditorActive by remember { mutableStateOf(false) }
     val activity = LocalContext.current as? Activity
 
     LaunchedEffect(generationState) {
@@ -109,8 +108,7 @@ fun GeneratePagerScreen(
                 onOpenSettings = onOpenSettings,
             )
             GenerateNavigationPolicy.GENERATE_PAGE -> GenerateScreen(
-                session, appSettings, viewModel, onOpenSettings, onOpenGenerationSettings,
-                onOpenTagDatabase, onTagEditorActiveChange = { tagEditorActive = it },
+                session, appSettings, viewModel, onOpenSettings, onOpenGenerationSettings, onOpenTagDatabase,
             )
             else -> when (secondaryTarget) {
                 SecondaryTarget.RESULT -> ResultScreen(viewModel) { secondaryTarget = SecondaryTarget.HISTORY }
@@ -142,7 +140,7 @@ fun GeneratePagerScreen(
                     tint = MaterialTheme.colorScheme.onPrimaryContainer,
                 )
             }
-        } else if (autocomplete.blockId == null && !tagEditorActive) {
+        } else {
             EdgePageHint(Alignment.CenterStart, Icons.Default.ChevronLeft, R.string.generation_settings) {
                 scope.launch { pagerState.animateScrollToPage(GenerateNavigationPolicy.SETTINGS_PAGE) }
             }
