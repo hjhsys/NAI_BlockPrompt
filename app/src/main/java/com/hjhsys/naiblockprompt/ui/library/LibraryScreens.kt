@@ -2,6 +2,9 @@ package com.hjhsys.naiblockprompt.ui.library
 
 import androidx.annotation.StringRes
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -40,6 +43,7 @@ import java.io.File
 import android.net.Uri
 import java.text.DateFormat
 import java.util.Date
+import kotlinx.coroutines.launch
 
 @Composable
 fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, isActive: Boolean = true, onOpenResult: () -> Unit, onRestored: () -> Unit) {
@@ -144,24 +148,47 @@ private fun RestoreDialog(item: HistoryItem, dismiss: () -> Unit, confirm: (Rest
     Row(Modifier.fillMaxWidth().clickable { change(!checked) }, verticalAlignment = Alignment.CenterVertically) { Checkbox(checked, change); Text(label) }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SavedScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onWorkflowFinished: () -> Unit) {
     val blocks by viewModel.savedBlocks.collectAsState(); val folders by viewModel.savedFolders.collectAsState(); val presets by viewModel.presets.collectAsState(); val sets by viewModel.savedSets.collectAsState()
     val workflow by viewModel.savedWorkflow.collectAsState()
-    var tab by rememberSaveable { mutableIntStateOf(0) }; var search by rememberSaveable { mutableStateOf("") }
+    val pagerState = rememberPagerState { 3 }
+    val scope = rememberCoroutineScope()
+    val tab = pagerState.currentPage
+    var search by rememberSaveable { mutableStateOf("") }
     var searchScope by rememberSaveable { mutableStateOf(SavedSearchScope.TITLE_ONLY) }
     var searchMenuExpanded by remember { mutableStateOf(false) }
     var workflowName by rememberSaveable(workflow) { mutableStateOf(when (val active = workflow) { is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveBlock -> active.block.name; is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SavePreset -> "Preset"; else -> "" }) }
     var workflowFolderId by rememberSaveable(workflow) { mutableStateOf<String?>(null) }
     var folderFilter by rememberSaveable { mutableStateOf("ALL") }
     var overwriteWorkflow by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(workflow) { if (workflow != null) tab = when (workflow) { is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveSet, is com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadSet -> 1; is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SavePreset, com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadPreset -> 2; else -> 0 } }
+    LaunchedEffect(workflow) { if (workflow != null) pagerState.scrollToPage(when (workflow) { is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveSet, is com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadSet -> 1; is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SavePreset, com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadPreset -> 2; else -> 0 }) }
     var folderDialog by rememberSaveable { mutableStateOf(false) }
+    var folderSelector by rememberSaveable { mutableStateOf(false) }
     var movingBlock by remember { mutableStateOf<com.hjhsys.naiblockprompt.data.local.entity.SavedBlockEntity?>(null) }
     var movingPreset by remember { mutableStateOf<com.hjhsys.naiblockprompt.data.local.entity.PresetEntity?>(null) }
     var movingSet by remember { mutableStateOf<com.hjhsys.naiblockprompt.data.local.entity.SavedSetEntity?>(null) }
     var deletingFolder by remember { mutableStateOf<SavedFolderEntity?>(null) }
     if (folderDialog) NameDialog(R.string.new_folder, { folderDialog = false }) { viewModel.createFolder(it); folderDialog = false }
+    if (folderSelector) AlertDialog(
+        onDismissRequest = { folderSelector = false },
+        title = { Text(stringResource(R.string.select_folder_filter)) },
+        text = {
+            LazyColumn(Modifier.heightIn(max = 420.dp)) {
+                item { TextButton(onClick = { folderFilter = "ALL"; folderSelector = false }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.all_folders)) } }
+                item { TextButton(onClick = { folderFilter = "NONE"; folderSelector = false }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.no_folder)) } }
+                items(folders, key = { it.id }) { folder ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = { folderFilter = folder.id; folderSelector = false }, modifier = Modifier.weight(1f)) { Text(folder.name, modifier = Modifier.fillMaxWidth()) }
+                        IconButton(onClick = { folderSelector = false; deletingFolder = folder }) { Icon(Icons.Default.DeleteOutline, stringResource(R.string.delete)) }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = { folderSelector = false }) { Text(stringResource(R.string.cancel)) } },
+    )
     if (overwriteWorkflow) AlertDialog(onDismissRequest = { overwriteWorkflow = false }, title = { Text(stringResource(R.string.overwrite_title)) }, text = { Text(stringResource(R.string.overwrite_message, workflowName.trim())) }, confirmButton = { Button(onClick = { overwriteWorkflow = false; when (workflow) { is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SavePreset -> viewModel.finishPresetSave(workflowName, workflowFolderId); is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveSet -> viewModel.finishSetSave(workflowName, workflowFolderId); else -> viewModel.finishBlockSave(workflowName, workflowFolderId) }; onWorkflowFinished() }) { Text(stringResource(R.string.overwrite)) } }, dismissButton = { TextButton(onClick = { overwriteWorkflow = false }) { Text(stringResource(R.string.cancel)) } })
     deletingFolder?.let { folder -> AlertDialog(onDismissRequest = { deletingFolder = null }, title = { Text(stringResource(R.string.delete_folder_title)) }, text = { Text(stringResource(R.string.delete_folder_message, folder.name)) }, confirmButton = { TextButton(onClick = { viewModel.deleteFolder(folder); if (folderFilter == folder.id) folderFilter = "ALL"; deletingFolder = null }) { Text(stringResource(R.string.delete), color = MaterialTheme.colorScheme.error) } }, dismissButton = { TextButton(onClick = { deletingFolder = null }) { Text(stringResource(R.string.cancel)) } }) }
     movingBlock?.let { block -> AlertDialog(onDismissRequest = { movingBlock = null }, title = { Text(stringResource(R.string.choose_folder)) }, text = { Column { TextButton(onClick = { viewModel.moveSavedBlock(block, null); movingBlock = null }) { Text(stringResource(R.string.no_folder)) }; folders.forEach { folder -> TextButton(onClick = { viewModel.moveSavedBlock(block, folder.id); movingBlock = null }) { Text(folder.name) } } } }, confirmButton = {}) }
@@ -192,7 +219,7 @@ fun SavedScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onWorkflow
                 } else Text(stringResource(R.string.choose_block_to_load), style = MaterialTheme.typography.bodySmall)
             } }
         }
-        if (workflow == null) PrimaryTabRow(selectedTabIndex = tab) { Tab(tab == 0, { tab = 0 }, text = { Text(stringResource(R.string.saved_blocks)) }); Tab(tab == 1, { tab = 1 }, text = { Text(stringResource(R.string.saved_sets)) }); Tab(tab == 2, { tab = 2 }, text = { Text(stringResource(R.string.presets)) }) }
+        if (workflow == null) PrimaryTabRow(selectedTabIndex = tab) { Tab(tab == 0, { scope.launch { pagerState.animateScrollToPage(0) } }, text = { Text(stringResource(R.string.saved_blocks)) }); Tab(tab == 1, { scope.launch { pagerState.animateScrollToPage(1) } }, text = { Text(stringResource(R.string.saved_sets)) }); Tab(tab == 2, { scope.launch { pagerState.animateScrollToPage(2) } }, text = { Text(stringResource(R.string.presets)) }) }
         OutlinedTextField(
             search,
             { search = it },
@@ -216,19 +243,24 @@ fun SavedScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onWorkflow
             supportingText = { Text(stringResource(searchScope.label)) },
             singleLine = true,
         )
-        Row(verticalAlignment = Alignment.CenterVertically) { TextButton(onClick = { folderDialog = true }) { Icon(Icons.Default.CreateNewFolder, null); Text(stringResource(R.string.new_folder)) } }
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            item { FilterChip(folderFilter == "ALL", { folderFilter = "ALL" }, { Text(stringResource(R.string.all_folders)) }) }
-            item { FilterChip(folderFilter == "NONE", { folderFilter = "NONE" }, { Text(stringResource(R.string.no_folder)) }) }
-            items(folders, key = { it.id }) { folder -> InputChip(folderFilter == folder.id, { folderFilter = folder.id }, { Text(folder.name) }, trailingIcon = { Icon(Icons.Default.Close, stringResource(R.string.delete), Modifier.size(16.dp).clickable { deletingFolder = folder }) }) }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedButton(onClick = { folderSelector = true }, modifier = Modifier.weight(1f)) {
+                Icon(Icons.Default.FolderOpen, null)
+                Spacer(Modifier.width(6.dp))
+                Text(when (folderFilter) { "ALL" -> stringResource(R.string.all_folders); "NONE" -> stringResource(R.string.no_folder); else -> folders.firstOrNull { it.id == folderFilter }?.name ?: stringResource(R.string.all_folders) }, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.weight(1f))
+                Icon(Icons.Default.ArrowDropDown, null)
+            }
+            IconButton(onClick = { folderDialog = true }) { Icon(Icons.Default.CreateNewFolder, stringResource(R.string.new_folder)) }
         }
-        if (tab == 0) {
+        HorizontalPager(state = pagerState, modifier = Modifier.weight(1f), userScrollEnabled = workflow == null) { page ->
+        if (page == 0) {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 val filtered = blocks.filter { (search.isBlank() || it.name.contains(search, true) || (searchScope == SavedSearchScope.INCLUDE_CONTENT && it.content.contains(search, true))) && (folderFilter == "ALL" || (folderFilter == "NONE" && it.folderId == null) || it.folderId == folderFilter) }
                 if (filtered.isEmpty()) item { Text(stringResource(R.string.saved_empty)) }
                 items(filtered, key = { it.id }) { block -> ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp)) { Text(block.name, style = MaterialTheme.typography.titleMedium); Text(block.content.ifBlank { stringResource(R.string.empty_prompt) }, maxLines = 3, overflow = TextOverflow.Ellipsis); Row { if (workflow is com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadBlock) Button(onClick = { viewModel.finishBlockLoad(block); onWorkflowFinished() }) { Text(stringResource(R.string.load)) } else TextButton(onClick = { viewModel.addSavedBlockToBase(block) }) { Text(stringResource(R.string.add_to_base)) }; TextButton(onClick = { movingBlock = block }) { Text(folders.firstOrNull { it.id == block.folderId }?.name ?: stringResource(R.string.no_folder)) }; IconButton(onClick = { viewModel.deleteSavedBlock(block) }) { Icon(Icons.Default.Delete, stringResource(R.string.delete)) } } } } }
             }
-        } else if (tab == 1) LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        } else if (page == 1) LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             val kind = (workflow as? com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadSet)?.owner?.let { if (it is PromptOwner.Base) SavedSetKind.BASE else SavedSetKind.CHARACTER }
             val filtered = sets.filter { item -> (kind == null || item.set?.kind == kind) && (search.isBlank() || item.entity.name.contains(search, true) || (searchScope == SavedSearchScope.INCLUDE_CONTENT && (item.set?.prompts?.allBlocks()?.any { it.name.contains(search, true) || it.content.contains(search, true) } == true || item.set?.textRendering?.content?.contains(search, true) == true))) && (folderFilter == "ALL" || (folderFilter == "NONE" && item.entity.folderId == null) || item.entity.folderId == folderFilter) }
             if (filtered.isEmpty()) item { Text(stringResource(R.string.saved_empty)) }
@@ -236,6 +268,7 @@ fun SavedScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onWorkflow
         } else LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (presets.isEmpty()) item { Text(stringResource(R.string.saved_empty)) }
             items(presets.filter { item -> (search.isBlank() || item.entity.name.contains(search, true) || (searchScope == SavedSearchScope.INCLUDE_CONTENT && item.session?.containsPromptText(search) == true)) && (folderFilter == "ALL" || (folderFilter == "NONE" && item.entity.folderId == null) || item.entity.folderId == folderFilter) }, key = { it.entity.id }) { preset -> ElevatedCard(Modifier.fillMaxWidth()) { Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(preset.entity.name, style = MaterialTheme.typography.titleMedium); Text(preset.session?.generationSettings?.modelId ?: "-", style = MaterialTheme.typography.bodySmall) }; if (workflow == com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadPreset) Button(onClick = { viewModel.restorePreset(preset); viewModel.cancelSavedWorkflow(); onWorkflowFinished() }, enabled = preset.session != null) { Text(stringResource(R.string.load)) }; TextButton(onClick = { movingPreset = preset.entity }) { Text(folders.firstOrNull { it.id == preset.entity.folderId }?.name ?: stringResource(R.string.no_folder)) }; IconButton(onClick = { viewModel.deletePreset(preset.entity) }) { Icon(Icons.Default.Delete, stringResource(R.string.delete)) } } } }
+        }
         }
     } }
 }

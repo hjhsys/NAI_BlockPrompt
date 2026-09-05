@@ -110,6 +110,7 @@ fun TagDatabaseScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit) {
         generatedImages = history.map { it.entity.thumbnailPath to it.entity.imagePath },
         onChooseThumbnail = { viewModel.setTagThumbnail(item, it) },
         onUseGeneratedThumbnail = { viewModel.setTagThumbnailFromFile(item, it) },
+        onRemoveThumbnail = { viewModel.removeTagThumbnail(item) },
     ) }
     if (adding) AddTagDialog({ adding = false }, (AppTagCategory.entries.map { it.value } + userCategories).distinct()) { canonical, ko, aliases, category ->
         viewModel.addUserTag(canonical, ko, aliases, category); adding = false
@@ -196,6 +197,14 @@ fun TagDatabaseScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit) {
                     onLongClick = { editing = tag },
                 )) {
                     Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        tag.thumbnailPath?.let { path ->
+                            AsyncImage(
+                                model = File(path),
+                                contentDescription = stringResource(R.string.tag_thumbnail),
+                                modifier = Modifier.size(52.dp).padding(end = 8.dp),
+                                contentScale = ContentScale.Crop,
+                            )
+                        }
                         Column(Modifier.weight(1f)) {
                             Text(tag.canonicalTag.replace('_', ' '), style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             tag.korean?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary) }
@@ -239,14 +248,17 @@ private fun TagEditDialog(
     generatedImages: List<Pair<String, String>>,
     onChooseThumbnail: (android.net.Uri) -> Unit,
     onUseGeneratedThumbnail: (String) -> Unit,
+    onRemoveThumbnail: () -> Unit,
 ) {
     var korean by rememberSaveable(item.id) { mutableStateOf(item.korean.orEmpty()) }
     var aliases by rememberSaveable(item.id) { mutableStateOf(item.koreanAliases.orEmpty()) }
     var category by rememberSaveable(item.id) { mutableStateOf(item.appCategory.orEmpty()) }
     var showGeneratedImages by rememberSaveable(item.id) { mutableStateOf(false) }
     var confirmDelete by rememberSaveable(item.id) { mutableStateOf(false) }
+    var previewModel by remember(item.id) { mutableStateOf<Any?>(item.thumbnailPath?.let(::File)) }
+    var advanced by rememberSaveable(item.id) { mutableStateOf(false) }
     val canDelete = item.userCreated && !item.novelAiSource && !item.danbooruSource && !item.bundled
-    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> uri?.let(onChooseThumbnail) }
+    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> uri?.let { previewModel = it; onChooseThumbnail(it) } }
     if (showGeneratedImages) AlertDialog(
         onDismissRequest = { showGeneratedImages = false },
         title = { Text(stringResource(R.string.choose_generated_image)) },
@@ -257,6 +269,7 @@ private fun TagEditDialog(
                         model = File(thumbnail),
                         contentDescription = stringResource(R.string.generated_image),
                         modifier = Modifier.fillMaxWidth().height(150.dp).clickable {
+                            previewModel = if (original.startsWith("content://")) android.net.Uri.parse(original) else File(original)
                             onUseGeneratedThumbnail(original)
                             showGeneratedImages = false
                         },
@@ -277,25 +290,32 @@ private fun TagEditDialog(
     )
     AlertDialog(onDismissRequest = onDismiss, title = { Text(item.canonicalTag) }, text = {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(stringResource(R.string.tag_sources, sourceBadges(item)), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            item.thumbnailPath?.let { AsyncImage(File(it), stringResource(R.string.tag_thumbnail), Modifier.fillMaxWidth().height(120.dp), contentScale = ContentScale.Crop) }
-            item.danbooruPostCount?.let { Text(stringResource(R.string.tag_metric_public_uses, compactCount(it)), style = MaterialTheme.typography.bodySmall) }
-            item.naiCount?.let { Text(stringResource(R.string.tag_metric_nai_count, compactCount(it)), style = MaterialTheme.typography.bodySmall) }
-            Text(stringResource(R.string.tag_metric_app_uses, item.useCount), style = MaterialTheme.typography.bodySmall)
-            item.lastUsedAt?.let { Text(stringResource(R.string.tag_metric_last_used, shortDate(it)), style = MaterialTheme.typography.bodySmall) }
+            if (previewModel != null) AsyncImage(previewModel, stringResource(R.string.tag_thumbnail), Modifier.fillMaxWidth().height(140.dp), contentScale = ContentScale.Crop)
+            else Box(Modifier.fillMaxWidth().height(100.dp), contentAlignment = Alignment.Center) { Text(stringResource(R.string.no_preview_image), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            Row(Modifier.fillMaxWidth()) {
+                TextButton(onClick = { imagePicker.launch("image/*") }) { Text(stringResource(if (previewModel == null) R.string.choose_image_file else R.string.change_image)) }
+                if (generatedImages.isNotEmpty()) TextButton(onClick = { showGeneratedImages = true }) { Text(stringResource(R.string.choose_generated_image)) }
+            }
+            if (previewModel != null) TextButton(onClick = { previewModel = null; onRemoveThumbnail() }) { Text(stringResource(R.string.remove_image)) }
             OutlinedTextField(korean, { korean = it }, label = { Text(stringResource(R.string.korean_translation)) }, singleLine = true)
             OutlinedTextField(aliases, { aliases = it }, label = { Text(stringResource(R.string.korean_aliases)) })
             CategoryDropdown(category, categories) { category = it }
-            Row {
-                TextButton(onClick = { imagePicker.launch("image/*") }) { Text(stringResource(R.string.choose_image_file)) }
-                if (generatedImages.isNotEmpty()) TextButton(onClick = { showGeneratedImages = true }) { Text(stringResource(R.string.choose_generated_image)) }
+            TextButton(onClick = { advanced = !advanced }) {
+                Text(stringResource(R.string.advanced_information))
+                Icon(if (advanced) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null)
             }
-            item.englishAliases?.let { Text(stringResource(R.string.english_aliases, it), style = MaterialTheme.typography.bodySmall) }
+            if (advanced) {
+                Text(stringResource(R.string.tag_sources, sourceBadges(item)), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                item.danbooruPostCount?.let { Text(stringResource(R.string.tag_metric_public_uses, compactCount(it)), style = MaterialTheme.typography.bodySmall) }
+                item.naiCount?.let { Text(stringResource(R.string.tag_metric_nai_count, compactCount(it)), style = MaterialTheme.typography.bodySmall) }
+                Text(stringResource(R.string.tag_metric_app_uses, item.useCount), style = MaterialTheme.typography.bodySmall)
+                item.lastUsedAt?.let { Text(stringResource(R.string.tag_metric_last_used, shortDate(it)), style = MaterialTheme.typography.bodySmall) }
+                item.englishAliases?.let { Text(stringResource(R.string.english_aliases, it), style = MaterialTheme.typography.bodySmall) }
+                if (!canDelete) Text(stringResource(R.string.delete_tag_protected), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             TextButton(onClick = onReset) { Text(stringResource(R.string.restore_base_translation)) }
             if (canDelete) {
                 TextButton(onClick = { confirmDelete = true }) { Text(stringResource(R.string.delete_tag), color = MaterialTheme.colorScheme.error) }
-            } else {
-                Text(stringResource(R.string.delete_tag_protected), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }, confirmButton = { TextButton(onClick = { onSave(korean, aliases, category) }) { Text(stringResource(R.string.save)) } }, dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } })

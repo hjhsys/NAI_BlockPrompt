@@ -106,12 +106,20 @@ object NaiPngMetadataParser {
     private fun JsonObject?.usedExternalImageGuidance(): Boolean {
         if (this == null) return false
         val action = string("action")
-        if (action == "img2img" || action == "infill") return true
-        return entries.any { (key, value) ->
-            (key == "image" || key == "mask" || key.startsWith("reference_image") ||
-                key.startsWith("director_reference") || key.contains("vibe", ignoreCase = true)) &&
-                value.hasMeaningfulGuidanceValue()
-        }
+        if (action.equals("img2img", ignoreCase = true) || action.equals("infill", ignoreCase = true)) return true
+
+        // NovelAI PNG metadata also contains strength, extraction and seed fields
+        // with non-zero defaults when no reference image was used. Only an actual
+        // source/reference payload is evidence of external image guidance.
+        val payloadKeys = setOf(
+            "image",
+            "reference_image",
+            "reference_image_multiple",
+            "reference_image_multiple_cached",
+            "director_reference_images",
+            "director_reference_images_cached",
+        )
+        return payloadKeys.any { key -> get(key)?.hasMeaningfulGuidanceValue() == true }
     }
 
     private fun JsonElement.hasMeaningfulGuidanceValue(): Boolean = when (this) {

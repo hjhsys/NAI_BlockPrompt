@@ -320,6 +320,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     fun addTagCategory(name: String) = viewModelScope.launch { container.autocompleteRepository.addCategory(name) }
     fun setTagThumbnail(item: TagDictionaryItem, uri: android.net.Uri) = viewModelScope.launch { container.autocompleteRepository.setThumbnail(item, uri) }
     fun setTagThumbnailFromFile(item: TagDictionaryItem, path: String) = viewModelScope.launch { container.autocompleteRepository.setThumbnailFromFile(item, path) }
+    fun removeTagThumbnail(item: TagDictionaryItem) = viewModelScope.launch { container.autocompleteRepository.removeThumbnail(item) }
     fun prepareTranslationExport(missingTranslation: Boolean, missingCategory: Boolean) = viewModelScope.launch {
         _translationExport.emit(container.autocompleteRepository.exportTranslationBatch(missingTranslation, missingCategory))
     }

@@ -24,6 +24,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.alpha
@@ -570,6 +572,7 @@ private fun CharacterSectionCard(
                     showFormatter = showFormatter,
                     viewModel = viewModel,
                     onTagEditorState = onTagEditorState,
+                    blockContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                 )
             }
         }
@@ -587,14 +590,20 @@ private fun PromptSectionCard(
     viewModel: MainViewModel,
     onTagEditorState: (PromptOwner, PromptPolarity, String, Boolean, Int) -> Unit,
 ) {
-    ElevatedCard(colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)) {
+    val containerColor = if (owner == PromptOwner.Base) {
+        val tintFraction = if (MaterialTheme.colorScheme.background.luminance() < 0.5f) 0.15f else 0.58f
+        lerp(MaterialTheme.colorScheme.surfaceContainerHigh, MaterialTheme.colorScheme.secondaryContainer, tintFraction)
+    } else {
+        MaterialTheme.colorScheme.surfaceContainerHigh
+    }
+    ElevatedCard(colors = CardDefaults.elevatedCardColors(containerColor = containerColor)) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
                 SmallIconButton(R.string.load_set, Icons.Default.FolderOpen, true) { viewModel.beginSetLoad(owner) }
                 SmallIconButton(R.string.save_set, Icons.Default.Save, true) { viewModel.beginSetSave(owner) }
             }
-            PromptSectionContent(owner, pair, selectedPolarity, textRendering, showFormatter, viewModel, onTagEditorState)
+            PromptSectionContent(owner, pair, selectedPolarity, textRendering, showFormatter, viewModel, onTagEditorState, containerColor)
         }
     }
 }
@@ -608,6 +617,7 @@ private fun PromptSectionContent(
     showFormatter: Boolean,
     viewModel: MainViewModel,
     onTagEditorState: (PromptOwner, PromptPolarity, String, Boolean, Int) -> Unit,
+    blockContainerColor: Color,
 ) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         PromptPolarity.entries.forEach { polarity ->
@@ -627,6 +637,7 @@ private fun PromptSectionContent(
     blocks.forEachIndexed { index, block ->
         PromptBlockCard(
             block = block,
+            containerColor = blockContainerColor,
             canMoveUp = index > 0,
             canMoveDown = index < blocks.lastIndex,
             showFormatter = showFormatter,
@@ -707,6 +718,7 @@ private fun TextRenderingSlot(
 @Composable
 private fun PromptBlockCard(
     block: PromptBlock,
+    containerColor: Color,
     canMoveUp: Boolean,
     canMoveDown: Boolean,
     showFormatter: Boolean,
@@ -775,7 +787,7 @@ private fun PromptBlockCard(
             dismissButton = { TextButton(onClick = { renameBlock = false }) { Text(stringResource(R.string.cancel)) } },
         )
     }
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)) {
+    Card(colors = CardDefaults.cardColors(containerColor = containerColor)) {
         Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {

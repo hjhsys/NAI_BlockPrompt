@@ -4,6 +4,7 @@ import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -27,12 +28,14 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.hjhsys.naiblockprompt.AppContainer
 import com.hjhsys.naiblockprompt.R
+import com.hjhsys.naiblockprompt.BuildConfig
 import com.hjhsys.naiblockprompt.ui.generate.GeneratePagerScreen
 import com.hjhsys.naiblockprompt.ui.generate.GenerationSettingsScreen
 import com.hjhsys.naiblockprompt.ui.library.SavedScreen
 import com.hjhsys.naiblockprompt.ui.components.AppTitleBar
 import com.hjhsys.naiblockprompt.domain.model.AutocompleteSource
 import com.hjhsys.naiblockprompt.ui.database.TagDatabaseScreen
+import com.hjhsys.naiblockprompt.ui.help.HelpScreen
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -50,6 +53,7 @@ private enum class MainDestination(
     Settings("settings", R.string.nav_settings, Icons.Default.Settings),
     GenerationSettings("generation-settings", R.string.generation_settings, Icons.Default.Tune),
     TagPicker("tag-picker", R.string.tag_picker_title, Icons.Default.Storage),
+    Help("help", R.string.help_title, Icons.AutoMirrored.Filled.HelpOutline),
 }
 
 @Composable
@@ -80,7 +84,10 @@ fun NaiBlockPromptApp(container: AppContainer) {
 
     Scaffold(
         bottomBar = {
-            if (!(currentRoute == MainDestination.Saved.route && savedWorkflow != null) && currentRoute != MainDestination.TagPicker.route) NavigationBar {
+            if (!(currentRoute == MainDestination.Saved.route && savedWorkflow != null) &&
+                currentRoute != MainDestination.TagPicker.route &&
+                currentRoute != MainDestination.Help.route
+            ) NavigationBar {
                 listOf(MainDestination.Database, MainDestination.Generate, MainDestination.Saved).forEach { destination ->
                     NavigationBarItem(
                         selected = currentRoute == destination.route,
@@ -160,8 +167,12 @@ fun NaiBlockPromptApp(container: AppContainer) {
                     onExportBackup = viewModel::exportAppBackup,
                     onImportBackup = viewModel::importAppBackup,
                     transferFiles = viewModel.transferExport,
+                    onOpenHelp = { navController.navigate(MainDestination.Help.route) },
                     onBack = { navController.popBackStack() },
                 )
+            }
+            composable(MainDestination.Help.route) {
+                HelpScreen(onBack = { navController.popBackStack() })
             }
             composable(MainDestination.GenerationSettings.route) {
                 GenerationSettingsScreen(
@@ -213,6 +224,7 @@ private fun SettingsScreen(
     onExportBackup: () -> Unit,
     onImportBackup: (ByteArray) -> Unit,
     transferFiles: kotlinx.coroutines.flow.Flow<MainViewModel.TransferFile>,
+    onOpenHelp: () -> Unit,
     onBack: () -> Unit,
 ) {
     var token by rememberSaveable { mutableStateOf("") }
@@ -277,9 +289,10 @@ private fun SettingsScreen(
             modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+        SettingsSection(R.string.settings_section_prompt_generation)
         SettingSwitch(R.string.settings_formatter, showFormatter, onShowFormatterChange)
         SettingSwitch(R.string.settings_weight_normalization, normalizeWeights, onNormalizeWeightsChange)
-        Text(stringResource(R.string.settings_appearance), style = MaterialTheme.typography.titleMedium)
+        SettingsSection(R.string.settings_section_appearance)
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             com.hjhsys.naiblockprompt.domain.model.AppearanceMode.entries.forEach { mode ->
                 FilterChip(
@@ -290,6 +303,7 @@ private fun SettingsScreen(
                 )
             }
         }
+        SettingsSection(R.string.settings_section_storage_history)
         Text(stringResource(R.string.image_save_location), style = MaterialTheme.typography.titleMedium)
         Text(
             if (imageSaveTreeUri == null) stringResource(R.string.default_image_save_path)
@@ -303,6 +317,7 @@ private fun SettingsScreen(
         Text(stringResource(R.string.save_folder_history_warning), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(stringResource(R.string.settings_history_limit_value, historyLimit))
         Slider(value = historyLimit.toFloat(), onValueChange = { onHistoryLimitChange(it.toInt()) }, valueRange = 1f..100f, steps = 98)
+        SettingsSection(R.string.settings_section_autocomplete_tags)
         Text(stringResource(R.string.settings_autocomplete), style = MaterialTheme.typography.titleMedium)
         AutocompleteSource.entries.forEach { source ->
             FilterChip(
@@ -315,14 +330,13 @@ private fun SettingsScreen(
         Text(stringResource(R.string.tag_database_maintenance), style = MaterialTheme.typography.titleMedium)
         Text(stringResource(R.string.tag_database_maintenance_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         OutlinedButton(onClick = { showTagReset = true }) { Text(stringResource(R.string.reset_to_bundled_tags)) }
-        Text(stringResource(R.string.backup_and_restore), style = MaterialTheme.typography.titleMedium)
+        SettingsSection(R.string.backup_and_restore)
         Text(stringResource(R.string.backup_description), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = onExportBackup, modifier = Modifier.weight(1f)) { Text(stringResource(R.string.export_backup)) }
             OutlinedButton(onClick = { backupImportLauncher.launch(arrayOf("application/zip")) }, modifier = Modifier.weight(1f)) { Text(stringResource(R.string.import_backup)) }
         }
-        HorizontalDivider()
-        Text(stringResource(R.string.novelai_credentials), style = MaterialTheme.typography.titleLarge)
+        SettingsSection(R.string.settings_section_novelai_connection)
         Text(stringResource(R.string.token_security_hint), style = MaterialTheme.typography.bodySmall)
         OutlinedTextField(
             value = token,
@@ -345,9 +359,22 @@ private fun SettingsScreen(
             Text(stringResource(R.string.test_connection))
         }
         ConnectionStatus(connectionState)
+        SettingsSection(R.string.settings_section_help_about)
+        OutlinedButton(onClick = onOpenHelp, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.AutoMirrored.Filled.HelpOutline, null)
+            Spacer(Modifier.width(8.dp))
+            Text(stringResource(R.string.help_user_guide))
+        }
+        Text(stringResource(R.string.app_version, BuildConfig.VERSION_NAME), style = MaterialTheme.typography.bodySmall)
         Text(stringResource(R.string.settings_saved), style = MaterialTheme.typography.bodySmall)
         }
     }
+}
+
+@Composable
+private fun SettingsSection(@StringRes title: Int) {
+    HorizontalDivider(Modifier.padding(top = 8.dp))
+    Text(stringResource(title), style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
 }
 
 private val AutocompleteSource.labelResource: Int get() = when (this) {

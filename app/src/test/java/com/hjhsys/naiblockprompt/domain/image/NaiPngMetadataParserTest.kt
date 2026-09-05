@@ -41,6 +41,15 @@ class NaiPngMetadataParserTest {
         assertEquals(emptyList<Any>(), metadata.characterPositions)
     }
 
+    @Test fun `ignores nonzero reference defaults when image arrays are empty`() {
+        val png = png(
+            "Description" to "1girl",
+            "Comment" to """{"action":"generate","reference_image_multiple":[],"reference_information_extracted_multiple":[1.0],"reference_strength_multiple":[0.6],"director_reference_images":[],"director_reference_information_extracted":[1.0],"director_reference_strength_values":[1.0],"director_reference_secondary_strength_values":[0.0],"vibe_transfer_seed":1234}""",
+        )
+
+        assertEquals(false, NaiPngMetadataParser.parse(png)?.usedExternalImageGuidance)
+    }
+
     private fun png(vararg values: Pair<String, String>): ByteArray {
         val out = ByteArrayOutputStream()
         out.write(byteArrayOf(-119, 80, 78, 71, 13, 10, 26, 10))

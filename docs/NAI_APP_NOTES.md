@@ -1636,3 +1636,26 @@ Prompt parser/formatter/validation은 UI에서 분리된 순수 함수 모듈로
 ```
 
 프로젝트가 충분히 안정되기 전까지는 Codex가 임의로 다음 Phase를 계속 확장하기보다 각 Phase를 build/test 가능한 상태로 닫은 뒤 진행하는 것을 우선합니다.
+
+---
+
+## Current information architecture direction
+
+기능 증가에 따라 다음 명칭과 화면 책임을 기준으로 UI를 정리합니다.
+
+- `Previous Work`: 현재 편집 세션을 잠시 보관하거나 되돌리는 빠른 작업 복구 기능
+- `Library`(기존 Saved): Block, Set, Preset을 장기 보관하고 검색·폴더 분류하는 화면
+- `Settings`: Prompt & Generation, Appearance, Storage & History, Autocomplete & Tags,
+  Backup & Restore, NovelAI Connection, Help & About 순으로 그룹화
+- `Help`: 검색 가능한 접기/펼치기 문서로 제공하며 빠른 도움말과 주제별 도움말을 구분
+- Tag 상세 화면: 대표 미리보기 이미지는 앱 내부 저장소에 축소본으로 저장하고,
+  사용자 override/backup 대상에 포함
+
+Library의 Block/Set/Preset 탭은 좌우 스와이프와 탭 선택을 모두 지원합니다. 폴더는 작은
+화면에서 chip을 길게 나열하지 않고 단일 선택기로 표시합니다. 폴더의 타입별 namespace,
+다단계 하위 폴더, 폴더 트리는 기존 데이터 migration 설계와 함께 후속 구현합니다.
+
+Wildcard는 별도 순수 처리 계층으로 구현해야 합니다. 최종 API prompt와 History에는 실제로
+선택된 resolved 문자열을 저장하되 원본 wildcard 표현도 재실행을 위해 보존합니다. 중첩 참조,
+순환 참조, 누락 파일 경고, TXT import/export, autocomplete는 이 처리 계층과 snapshot schema를
+함께 설계한 뒤 추가하며 단순 formatter 치환으로 구현하지 않습니다.

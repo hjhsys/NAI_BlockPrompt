@@ -2,6 +2,8 @@ package com.hjhsys.naiblockprompt.data.autocomplete
 
 import android.content.Context
 import android.net.Uri
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import com.hjhsys.naiblockprompt.data.local.dao.TagDao
 import com.hjhsys.naiblockprompt.data.local.entity.TagEntity
 import com.hjhsys.naiblockprompt.domain.autocomplete.*
@@ -105,20 +107,35 @@ class AutocompleteRepository(
     }
 
     suspend fun setThumbnail(item: TagDictionaryItem, uri: Uri) {
-        val directory = File(context.filesDir, "tag_thumbnails").apply { mkdirs() }
-        val destination = File(directory, "${item.id}.img")
-        context.contentResolver.openInputStream(uri)?.use { input -> destination.outputStream().use(input::copyTo) }
-            ?: return
-        saveThumbnailPath(item, destination.absolutePath)
+        storeThumbnail(item) { options -> context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) } }
     }
 
     suspend fun setThumbnailFromFile(item: TagDictionaryItem, sourcePath: String) {
-        val source = File(sourcePath)
-        if (!source.exists()) return
+        val uri = sourcePath.takeIf { it.startsWith("content://") }?.let(Uri::parse)
+        if (uri != null) setThumbnail(item, uri)
+        else storeThumbnail(item) { options -> BitmapFactory.decodeFile(sourcePath, options) }
+    }
+
+    private suspend fun storeThumbnail(item: TagDictionaryItem, decode: (BitmapFactory.Options) -> Bitmap?) = withContext(Dispatchers.IO) {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        decode(bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@withContext
+        var sample = 1
+        while (bounds.outWidth / sample > 768 || bounds.outHeight / sample > 768) sample *= 2
+        val bitmap = decode(BitmapFactory.Options().apply { inSampleSize = sample }) ?: return@withContext
         val directory = File(context.filesDir, "tag_thumbnails").apply { mkdirs() }
-        val destination = File(directory, "${item.id}.img")
-        source.copyTo(destination, overwrite = true)
+        val destination = File(directory, "${item.id}.webp")
+        destination.outputStream().use { bitmap.compress(Bitmap.CompressFormat.WEBP, 86, it) }
+        bitmap.recycle()
+        item.thumbnailPath?.takeIf { it != destination.absolutePath }?.let(::File)?.takeIf(File::isFile)?.delete()
         saveThumbnailPath(item, destination.absolutePath)
+    }
+
+    suspend fun removeThumbnail(item: TagDictionaryItem) {
+        item.thumbnailPath?.let(::File)?.takeIf(File::isFile)?.delete()
+        val old = tagDao.findOverride(item.id) ?: return
+        if (!old.favorite && old.korean == null && old.koreanAliases == null && old.appCategory == null) tagDao.clearUserOverride(item.id)
+        else tagDao.upsertUserOverride(old.copy(thumbnailPath = null, updatedAt = now()))
     }
 
     private suspend fun saveThumbnailPath(item: TagDictionaryItem, path: String) {
