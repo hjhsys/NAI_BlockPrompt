@@ -3,6 +3,7 @@ package com.hjhsys.naiblockprompt.ui.generate
 import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.rememberScrollState
@@ -11,6 +12,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
@@ -24,6 +26,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -74,6 +77,7 @@ fun GenerateScreen(
     onOpenSettings: () -> Unit,
     onOpenGenerationSettings: () -> Unit,
     onOpenTagDatabase: () -> Unit,
+    onTagEditorActiveChange: (Boolean) -> Unit = {},
 ) {
     if (session == null) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -95,6 +99,13 @@ fun GenerateScreen(
     val modelSummary = compactModelName(session.generationSettings.modelId)
     val seedSummary = stringResource(if (session.generationSettings.seedMode == SeedMode.RANDOM) R.string.seed_status_random else R.string.seed_status_fixed)
     var activeTagTarget by remember { mutableStateOf<TagEditorTarget?>(null) }
+    LaunchedEffect(activeTagTarget != null) {
+        onTagEditorActiveChange(activeTagTarget != null)
+    }
+    DisposableEffect(Unit) {
+        onDispose { onTagEditorActiveChange(false) }
+    }
+    val promptListState = rememberLazyListState()
     if (duplicateWarning) AlertDialog(
         onDismissRequest = viewModel::cancelDuplicateGeneration,
         title = { Text(stringResource(R.string.duplicate_generation_title)) },
@@ -146,6 +157,7 @@ fun GenerateScreen(
         },
     ) { innerPadding -> Box(Modifier.fillMaxSize().padding(innerPadding)) {
       LazyColumn(
+        state = promptListState,
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -189,6 +201,7 @@ fun GenerateScreen(
             Text(stringResource(R.string.not_official_notice), style = MaterialTheme.typography.bodySmall)
         }
       }
+      PromptScrollIndicator(promptListState, Modifier.align(Alignment.CenterEnd))
       activeTagTarget?.let { target ->
           SmallFloatingActionButton(
               onClick = {
@@ -200,6 +213,31 @@ fun GenerateScreen(
           ) { Icon(Icons.Default.Storage, stringResource(R.string.open_tag_dictionary)) }
       }
     } }
+}
+
+@Composable
+private fun PromptScrollIndicator(state: androidx.compose.foundation.lazy.LazyListState, modifier: Modifier = Modifier) {
+    val layout = state.layoutInfo
+    val total = layout.totalItemsCount
+    val visible = layout.visibleItemsInfo.size
+    if (total <= visible || total == 0) return
+    val alpha by androidx.compose.animation.core.animateFloatAsState(
+        if (state.isScrollInProgress) 0.75f else 0.18f,
+        label = "prompt-scroll-indicator",
+    )
+    BoxWithConstraints(modifier.fillMaxHeight().width(7.dp).padding(vertical = 4.dp)) {
+        val fraction = (visible.toFloat() / total).coerceIn(0.06f, 1f)
+        val progress = (state.firstVisibleItemIndex.toFloat() / (total - visible).coerceAtLeast(1)).coerceIn(0f, 1f)
+        Box(
+            Modifier
+                .align(Alignment.TopCenter)
+                .offset(y = (maxHeight * (1f - fraction)) * progress)
+                .fillMaxWidth()
+                .fillMaxHeight(fraction)
+                .alpha(alpha)
+                .background(MaterialTheme.colorScheme.primary, MaterialTheme.shapes.small),
+        )
+    }
 }
 
 @Composable
@@ -492,11 +530,16 @@ private fun CharacterSectionCard(
     ElevatedCard {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    stringResource(R.string.character_prompt, index + 1),
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.weight(1f),
-                )
+                Row(
+                    Modifier.weight(1f).clickable { viewModel.setCharacterCollapsed(character.id, !character.collapsed) },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(stringResource(R.string.character_prompt, index + 1), style = MaterialTheme.typography.titleLarge)
+                    Icon(
+                        if (character.collapsed) Icons.Default.ChevronRight else Icons.Default.ExpandMore,
+                        contentDescription = stringResource(if (character.collapsed) R.string.expand else R.string.collapse),
+                    )
+                }
                 SmallIconButton(R.string.move_up, Icons.Default.ArrowUpward, index > 0) {
                     viewModel.moveCharacter(character.id, MoveDirection.UP)
                 }
@@ -525,15 +568,17 @@ private fun CharacterSectionCard(
                     }
                 }
             }
-            PromptSectionContent(
-                owner = PromptOwner.Character(character.id),
-                pair = character.prompts,
-                selectedPolarity = character.selectedPolarity,
-                textRendering = character.textRendering,
-                showFormatter = showFormatter,
-                viewModel = viewModel,
-                onTagEditorState = onTagEditorState,
-            )
+            if (!character.collapsed) {
+                PromptSectionContent(
+                    owner = PromptOwner.Character(character.id),
+                    pair = character.prompts,
+                    selectedPolarity = character.selectedPolarity,
+                    textRendering = character.textRendering,
+                    showFormatter = showFormatter,
+                    viewModel = viewModel,
+                    onTagEditorState = onTagEditorState,
+                )
+            }
         }
     }
 }
@@ -549,7 +594,7 @@ private fun PromptSectionCard(
     viewModel: MainViewModel,
     onTagEditorState: (PromptOwner, PromptPolarity, String, Boolean, Int) -> Unit,
 ) {
-    ElevatedCard {
+    ElevatedCard(colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
@@ -741,7 +786,9 @@ private fun PromptBlockCard(
         Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(checked = block.enabled, onCheckedChange = onEnabledChange)
+                    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 36.dp) {
+                        Checkbox(checked = block.enabled, onCheckedChange = onEnabledChange, modifier = Modifier.scale(.82f))
+                    }
                     Text(block.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     SmallIconButton(
                         if (block.collapsed) R.string.expand else R.string.collapse,
@@ -751,9 +798,11 @@ private fun PromptBlockCard(
                 }
                 SmallIconButton(R.string.move_up, Icons.Default.ArrowUpward, canMoveUp && !block.locked) { onMove(MoveDirection.UP) }
                 SmallIconButton(R.string.move_down, Icons.Default.ArrowDownward, canMoveDown && !block.locked) { onMove(MoveDirection.DOWN) }
-                if (block.locked) {
-                    Icon(Icons.Default.Lock, contentDescription = stringResource(R.string.locked), tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
-                }
+                SmallIconButton(
+                    if (block.locked) R.string.unlock_block else R.string.lock_block,
+                    if (block.locked) Icons.Default.Lock else Icons.Default.LockOpen,
+                    true,
+                ) { onLockedChange(!block.locked) }
                 Box {
                     SmallIconButton(R.string.more_actions, Icons.Default.MoreVert, true) { showMore = true }
                     DropdownMenu(expanded = showMore, onDismissRequest = { showMore = false }) {
@@ -762,11 +811,6 @@ private fun PromptBlockCard(
                             leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
                             enabled = !block.locked,
                             onClick = { showMore = false; renameValue = block.name; renameBlock = true },
-                        )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(if (block.locked) R.string.unlock_block else R.string.lock_block)) },
-                            leadingIcon = { Icon(if (block.locked) Icons.Default.LockOpen else Icons.Default.Lock, contentDescription = null) },
-                            onClick = { showMore = false; onLockedChange(!block.locked) },
                         )
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.load_saved_block)) },
@@ -789,7 +833,16 @@ private fun PromptBlockCard(
                     }
                 }
             }
-            if (!block.collapsed) {
+            if (block.collapsed) {
+                Text(
+                    block.content.replace(Regex("\\s+"), " ").trim().ifBlank { stringResource(R.string.empty_prompt) },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                )
+            } else {
                 val highColor = MaterialTheme.colorScheme.error
                 val lowColor = MaterialTheme.colorScheme.primary
                 val commentColor = if (MaterialTheme.colorScheme.surface.luminance() < 0.5f) {
@@ -867,8 +920,6 @@ private fun PromptBlockCard(
                         ) { Text(stringResource(R.string.format_single_line), maxLines = 1) }
                     }
                 }
-            } else {
-                Text(block.content.replace('\n', ' '), maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
         }
     }
@@ -912,6 +963,7 @@ private fun SuggestionRow(@StringRes label: Int, suggestions: List<TagSuggestion
 
 @Composable
 private fun GenerationSettingsCard(settings: GenerationSettings, viewModel: MainViewModel, onMetadataImported: () -> Unit) {
+    var activeSlider by rememberSaveable { mutableStateOf<Int?>(null) }
     var advancedExpanded by rememberSaveable { mutableStateOf(false) }
     val context = LocalContext.current
     var pendingImageUri by rememberSaveable { mutableStateOf<String?>(null) }
@@ -996,7 +1048,13 @@ private fun GenerationSettingsCard(settings: GenerationSettings, viewModel: Main
             }
         }
     }
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(
+        Modifier.clickable(
+            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+            indication = null,
+        ) { activeSlider = null },
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
         ElevatedCard {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(stringResource(R.string.model_id), style = MaterialTheme.typography.titleMedium)
@@ -1019,15 +1077,15 @@ private fun GenerationSettingsCard(settings: GenerationSettings, viewModel: Main
                     if (input.mode == ImageInputMode.VIBE_TRANSFER) {
                         Text(stringResource(R.string.vibe_encoding_cost_notice), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    SliderSettingRow(R.string.image_strength, input.strength, 0f..1f, 19, decimal = true) { value ->
+                    SliderSettingRow(R.string.image_strength, input.strength, 0f..1f, 19, decimal = true, activeKey = activeSlider, onActiveKeyChange = { activeSlider = it }) { value ->
                         viewModel.updateGenerationSettings { current -> current.copy(imageInput = input.copy(strength = (value * 20).toInt() / 20f)) }
                     }
                     if (input.mode == ImageInputMode.IMAGE_TO_IMAGE) {
-                        SliderSettingRow(R.string.image_noise, input.noise, 0f..1f, 19, decimal = true) { value ->
+                        SliderSettingRow(R.string.image_noise, input.noise, 0f..1f, 19, decimal = true, activeKey = activeSlider, onActiveKeyChange = { activeSlider = it }) { value ->
                             viewModel.updateGenerationSettings { current -> current.copy(imageInput = input.copy(noise = (value * 20).toInt() / 20f)) }
                         }
                     } else {
-                        SliderSettingRow(R.string.information_extracted, input.informationExtracted, 0f..1f, 19, decimal = true) { value ->
+                        SliderSettingRow(R.string.information_extracted, input.informationExtracted, 0f..1f, 19, decimal = true, activeKey = activeSlider, onActiveKeyChange = { activeSlider = it }) { value ->
                             viewModel.updateGenerationSettings { current -> current.copy(imageInput = input.copy(informationExtracted = (value * 20).toInt() / 20f)) }
                         }
                     }
@@ -1042,7 +1100,7 @@ private fun GenerationSettingsCard(settings: GenerationSettings, viewModel: Main
                                 )
                             }
                         }
-                        SliderSettingRow(R.string.reference_fidelity, input.fidelity, 0f..1f, 19, decimal = true) { value ->
+                        SliderSettingRow(R.string.reference_fidelity, input.fidelity, 0f..1f, 19, decimal = true, activeKey = activeSlider, onActiveKeyChange = { activeSlider = it }) { value ->
                             viewModel.updateGenerationSettings { current -> current.copy(imageInput = input.copy(fidelity = (value * 20).toInt() / 20f)) }
                         }
                     }
@@ -1083,10 +1141,10 @@ private fun GenerationSettingsCard(settings: GenerationSettings, viewModel: Main
         ElevatedCard {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(stringResource(R.string.ai_settings), style = MaterialTheme.typography.titleMedium)
-                SliderSettingRow(R.string.steps, (settings.steps ?: 28).toFloat(), 1f..50f, 48) { value ->
+                SliderSettingRow(R.string.steps, (settings.steps ?: 28).toFloat(), 1f..50f, 48, activeKey = activeSlider, onActiveKeyChange = { activeSlider = it }) { value ->
                     viewModel.updateGenerationSettings { it.copy(steps = value.toInt()) }
                 }
-                SliderSettingRow(R.string.prompt_guidance, settings.scale ?: 5f, 0f..10f, 99, decimal = true) { value ->
+                SliderSettingRow(R.string.prompt_guidance, settings.scale ?: 5f, 0f..10f, 99, decimal = true, activeKey = activeSlider, onActiveKeyChange = { activeSlider = it }) { value ->
                     viewModel.updateGenerationSettings { it.copy(scale = (value * 10).toInt() / 10f) }
                 }
                 Text(stringResource(R.string.seed), style = MaterialTheme.typography.labelLarge)
@@ -1125,6 +1183,8 @@ private fun GenerationSettingsCard(settings: GenerationSettings, viewModel: Main
                         0f..1f,
                         19,
                         decimal = true,
+                        activeKey = activeSlider,
+                        onActiveKeyChange = { activeSlider = it },
                     ) { value ->
                         viewModel.updateGenerationSettings { it.copy(guidanceRescale = (value * 20).toInt() / 20f) }
                     }
@@ -1167,6 +1227,8 @@ private fun SliderSettingRow(
     range: ClosedFloatingPointRange<Float>,
     steps: Int,
     decimal: Boolean = false,
+    activeKey: Int?,
+    onActiveKeyChange: (Int?) -> Unit,
     onValueChange: (Float) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -1179,7 +1241,17 @@ private fun SliderSettingRow(
                     style = MaterialTheme.typography.labelLarge,
                 )
             }
-            Slider(value = value.coerceIn(range.start, range.endInclusive), onValueChange = onValueChange, valueRange = range, steps = steps, modifier = Modifier.weight(1f))
+            val active = activeKey == label
+            Slider(
+                value = value.coerceIn(range.start, range.endInclusive),
+                onValueChange = onValueChange,
+                valueRange = range,
+                steps = steps,
+                enabled = active,
+                modifier = Modifier.weight(1f).then(
+                    if (active) Modifier else Modifier.clickable { onActiveKeyChange(label) },
+                ),
+            )
         }
     }
 }

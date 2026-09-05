@@ -30,6 +30,17 @@ class NaiPngMetadataParserTest {
         assertEquals(true, NaiPngMetadataParser.parse(png)?.usedExternalImageGuidance)
     }
 
+    @Test fun `ignores inactive default image guidance fields`() {
+        val png = png(
+            "Description" to "1girl",
+            "Comment" to """{"seed":42,"action":"generate","image":"","mask":null,"reference_image_multiple":[],"director_reference_images":[],"v4_prompt":{"use_coords":false,"caption":{"char_captions":[{"centers":[{"x":0.5,"y":0.5}]}]}}}""",
+        )
+
+        val metadata = NaiPngMetadataParser.parse(png)!!
+        assertEquals(false, metadata.usedExternalImageGuidance)
+        assertEquals(emptyList<Any>(), metadata.characterPositions)
+    }
+
     private fun png(vararg values: Pair<String, String>): ByteArray {
         val out = ByteArrayOutputStream()
         out.write(byteArrayOf(-119, 80, 78, 71, 13, 10, 26, 10))

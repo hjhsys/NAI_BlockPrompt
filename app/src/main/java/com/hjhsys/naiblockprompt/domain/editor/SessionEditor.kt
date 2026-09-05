@@ -57,6 +57,10 @@ object SessionEditor {
         characters = session.characters.map { if (it.id == characterId) it.copy(type = type) else it },
     )
 
+    fun setCharacterCollapsed(session: Session, characterId: String, collapsed: Boolean): Session = session.copy(
+        characters = session.characters.map { if (it.id == characterId) it.copy(collapsed = collapsed) else it },
+    )
+
     fun setCharacterPositioningEnabled(session: Session, enabled: Boolean): Session = session.copy(
         characters = session.characters.mapIndexed { index, character ->
             character.copy(position = if (enabled) character.position ?: defaultPosition(index, session.characters.size) else null)

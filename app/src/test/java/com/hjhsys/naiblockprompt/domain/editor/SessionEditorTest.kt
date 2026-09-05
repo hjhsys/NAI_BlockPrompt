@@ -51,6 +51,20 @@ class SessionEditorTest {
         assertEquals(listOf(0, 1), updated.characters.map { it.order })
     }
 
+    @Test fun `character collapse does not alter nested block collapse state`() {
+        val created = SessionEditor.addCharacter(Session.empty(), CharacterType.GIRL, "Block 1")
+        val character = created.characters.single()
+        val block = character.prompts.positiveBlocks.single()
+        val nestedCollapsed = SessionEditor.setBlockCollapsed(
+            created, PromptOwner.Character(character.id), PromptPolarity.POSITIVE, block.id, true,
+        )
+        val collapsed = SessionEditor.setCharacterCollapsed(nestedCollapsed, character.id, true)
+        val reopened = SessionEditor.setCharacterCollapsed(collapsed, character.id, false)
+        assertTrue(collapsed.characters.single().collapsed)
+        assertFalse(reopened.characters.single().collapsed)
+        assertTrue(reopened.characters.single().prompts.positiveBlocks.single().collapsed)
+    }
+
     @Test fun `character type creates one ordinary positive block with matching initial content`() {
         val expected = mapOf(
             CharacterType.GIRL to "girl",

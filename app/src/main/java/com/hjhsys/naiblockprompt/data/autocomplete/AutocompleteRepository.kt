@@ -184,6 +184,7 @@ class AutocompleteRepository(
             englishAliases = null,
             favorite = false,
             thumbnailPath = null,
+            bundled = existing?.bundled ?: false,
         )
         saveUserDetails(item, korean, aliases, appCategory)
     }
@@ -191,14 +192,14 @@ class AutocompleteRepository(
     private val cache = mutableMapOf<String, Cached>()
     private val lastRequest = mutableMapOf<SuggestionSource, Long>()
 
-    suspend fun local(query: String): List<TagSuggestion> = tagDao.searchPrefix(query.replace(' ', '_')).map {
+    suspend fun local(query: String): List<TagSuggestion> = tagDao.searchAutocomplete(query, query.replace(' ', '_')).map {
         TagSuggestion(
             tag = it.canonicalTag,
             source = SuggestionSource.LOCAL,
             danbooruPostCount = it.danbooruPostCount,
             naiCount = it.naiCount,
             naiConfidence = it.naiConfidence,
-            category = it.danbooruCategory,
+            category = it.appCategory ?: it.danbooruCategory,
             useCount = it.useCount,
             lastUsedAt = it.lastUsedAt,
         )
@@ -206,6 +207,23 @@ class AutocompleteRepository(
 
     suspend fun recordUse(tag: String) {
         tagDao.recordUse(tag.replace(' ', '_'), now())
+    }
+
+    suspend fun deleteUserOnlyTag(item: TagDictionaryItem): Boolean {
+        val deleted = tagDao.deleteUserOnlyTag(item.id) > 0
+        if (deleted) item.thumbnailPath?.let { File(it).takeIf(File::isFile)?.delete() }
+        return deleted
+    }
+
+    suspend fun resetToBundledTags() {
+        tagDao.resetToBundledTags()
+        File(context.filesDir, "tag_thumbnails").deleteRecursively()
+    }
+
+    /** Remote suggestions become local data only after the user explicitly selects one. */
+    suspend fun recordSelection(suggestion: TagSuggestion) {
+        persist(suggestion)
+        recordUse(suggestion.tag)
     }
 
     suspend fun suggest(query: String, source: AutocompleteSource, token: String?, model: String): AutocompleteResults = coroutineScope {

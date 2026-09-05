@@ -107,9 +107,17 @@ object NaiPngMetadataParser {
         if (this == null) return false
         val action = string("action")
         if (action == "img2img" || action == "infill") return true
-        return keys.any { key ->
-            key == "image" || key == "mask" || key.startsWith("reference_image") ||
-                key.startsWith("director_reference") || key.contains("vibe", ignoreCase = true)
+        return entries.any { (key, value) ->
+            (key == "image" || key == "mask" || key.startsWith("reference_image") ||
+                key.startsWith("director_reference") || key.contains("vibe", ignoreCase = true)) &&
+                value.hasMeaningfulGuidanceValue()
         }
+    }
+
+    private fun JsonElement.hasMeaningfulGuidanceValue(): Boolean = when (this) {
+        JsonNull -> false
+        is JsonPrimitive -> booleanOrNull ?: contentOrNull?.let { it.isNotBlank() && it != "0" } ?: false
+        is JsonArray -> any { it.hasMeaningfulGuidanceValue() }
+        is JsonObject -> values.any { it.hasMeaningfulGuidanceValue() }
     }
 }

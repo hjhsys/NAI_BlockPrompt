@@ -18,6 +18,7 @@ import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.*
 import com.hjhsys.naiblockprompt.data.tags.BundledTagImporter
+import com.hjhsys.naiblockprompt.data.backup.BackupRepository
 
 class NaiBlockPromptApplication : Application() {
     lateinit var container: AppContainer
@@ -26,7 +27,7 @@ class NaiBlockPromptApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         val database = Room.databaseBuilder(this, AppDatabase::class.java, "nai_block_prompt.db")
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
             .build()
         val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
         val client = OkHttpClient.Builder()
@@ -43,6 +44,7 @@ class NaiBlockPromptApplication : Application() {
             generationRepository = GenerationRepository(this, api, database.historyDao(), json, settingsRepository),
             libraryRepository = LibraryRepository(this, database.savedDao(), database.historyDao(), json),
             autocompleteRepository = AutocompleteRepository(this@NaiBlockPromptApplication, OkHttpAutocompleteApi(client, json), database.tagDao()),
+            backupRepository = BackupRepository(this@NaiBlockPromptApplication, database, settingsRepository, json),
         )
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             BundledTagImporter(this@NaiBlockPromptApplication, database, settingsRepository).importIfNeeded()
@@ -97,6 +99,19 @@ private val MIGRATION_5_6 = object : Migration(5, 6) {
     }
 }
 
+private val MIGRATION_6_7 = object : Migration(6, 7) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE base_translations ADD COLUMN suggestedCategory TEXT DEFAULT NULL")
+        db.execSQL("ALTER TABLE base_translations ADD COLUMN needsReview INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+private val MIGRATION_7_8 = object : Migration(7, 8) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE tags ADD COLUMN bundled INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
 data class AppContainer(
     val sessionRepository: SessionRepository,
     val settingsRepository: SettingsRepository,
@@ -104,4 +119,5 @@ data class AppContainer(
     val generationRepository: GenerationRepository,
     val libraryRepository: LibraryRepository,
     val autocompleteRepository: AutocompleteRepository,
+    val backupRepository: BackupRepository,
 )

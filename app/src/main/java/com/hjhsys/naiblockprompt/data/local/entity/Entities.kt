@@ -5,7 +5,9 @@ import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import androidx.room.ColumnInfo
+import kotlinx.serialization.Serializable
 
+@Serializable
 @Entity(tableName = "current_session")
 data class CurrentSessionEntity(
     @PrimaryKey val id: String = "current",
@@ -14,6 +16,7 @@ data class CurrentSessionEntity(
     val updatedAt: Long,
 )
 
+@Serializable
 @Entity(tableName = "stash")
 data class StashEntity(
     @PrimaryKey val slot: Int = 0,
@@ -22,6 +25,7 @@ data class StashEntity(
     val updatedAt: Long,
 )
 
+@Serializable
 @Entity(tableName = "saved_folders", indices = [Index(value = ["name"], unique = true)])
 data class SavedFolderEntity(
     @PrimaryKey val id: String,
@@ -31,6 +35,7 @@ data class SavedFolderEntity(
     val updatedAt: Long,
 )
 
+@Serializable
 @Entity(
     tableName = "saved_blocks",
     foreignKeys = [ForeignKey(
@@ -53,6 +58,7 @@ data class SavedBlockEntity(
     val updatedAt: Long,
 )
 
+@Serializable
 @Entity(tableName = "presets", foreignKeys = [ForeignKey(entity = SavedFolderEntity::class, parentColumns = ["id"], childColumns = ["folderId"], onDelete = ForeignKey.SET_NULL)], indices = [Index("name"), Index("folderId")])
 data class PresetEntity(
     @PrimaryKey val id: String,
@@ -64,6 +70,7 @@ data class PresetEntity(
     val snapshotJson: String,
 )
 
+@Serializable
 @Entity(tableName = "saved_sets", foreignKeys = [ForeignKey(entity = SavedFolderEntity::class, parentColumns = ["id"], childColumns = ["folderId"], onDelete = ForeignKey.SET_NULL)], indices = [Index("name"), Index("folderId"), Index("kind")])
 data class SavedSetEntity(
     @PrimaryKey val id: String,
@@ -76,6 +83,7 @@ data class SavedSetEntity(
     val updatedAt: Long,
 )
 
+@Serializable
 @Entity(tableName = "history_entries", indices = [Index("createdAt"), Index("model")])
 data class HistoryEntryEntity(
     @PrimaryKey val id: String,
@@ -88,6 +96,7 @@ data class HistoryEntryEntity(
     @ColumnInfo(defaultValue = "0") val favorite: Boolean = false,
 )
 
+@Serializable
 @Entity(tableName = "tags", indices = [Index("canonicalTag", unique = true)])
 data class TagEntity(
     @PrimaryKey val id: String,
@@ -104,8 +113,10 @@ data class TagEntity(
     val lastSeenAt: Long?,
     @ColumnInfo(defaultValue = "0") val useCount: Int = 0,
     @ColumnInfo(defaultValue = "NULL") val lastUsedAt: Long? = null,
+    @ColumnInfo(defaultValue = "0") val bundled: Boolean = false,
 )
 
+@Serializable
 @Entity(
     tableName = "tag_aliases",
     foreignKeys = [ForeignKey(TagEntity::class, ["id"], ["tagId"], onDelete = ForeignKey.CASCADE)],
@@ -118,6 +129,7 @@ data class TagAliasEntity(
     val source: String,
 )
 
+@Serializable
 @Entity(
     tableName = "base_translations",
     foreignKeys = [ForeignKey(TagEntity::class, ["id"], ["tagId"], onDelete = ForeignKey.CASCADE)],
@@ -130,8 +142,11 @@ data class BaseTranslationEntity(
     val koreanAliases: String,
     val source: String,
     val updatedAt: Long,
+    @ColumnInfo(defaultValue = "NULL") val suggestedCategory: String? = null,
+    @ColumnInfo(defaultValue = "0") val needsReview: Boolean = false,
 )
 
+@Serializable
 @Entity(
     tableName = "user_tag_overrides",
     foreignKeys = [ForeignKey(TagEntity::class, ["id"], ["tagId"], onDelete = ForeignKey.CASCADE)],
@@ -148,6 +163,7 @@ data class UserTagOverrideEntity(
     val updatedAt: Long,
 )
 
+@Serializable
 @Entity(tableName = "user_tag_categories")
 data class UserTagCategoryEntity(
     @PrimaryKey val name: String,

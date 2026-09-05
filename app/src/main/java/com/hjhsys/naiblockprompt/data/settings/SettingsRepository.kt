@@ -46,4 +46,13 @@ class SettingsRepository(private val context: Context) {
     }
     suspend fun bundledTagVersion(): Int = context.settingsDataStore.data.map { it[Keys.bundledTagVersion] ?: 0 }.first()
     suspend fun setBundledTagVersion(value: Int) = context.settingsDataStore.edit { it[Keys.bundledTagVersion] = value }
+    suspend fun current(): AppSettings = settings.first()
+    suspend fun apply(settings: AppSettings) {
+        setHistoryLimit(settings.historyLimit)
+        setShowFormatter(settings.showFormatterActions)
+        setNormalizeWeights(settings.normalizeWeightClosings)
+        setAutocompleteSource(settings.autocompleteSource)
+        setAppearanceMode(settings.appearanceMode)
+        setImageSaveTreeUri(settings.imageSaveTreeUri)
+    }
 }

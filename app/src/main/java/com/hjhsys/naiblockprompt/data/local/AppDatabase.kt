@@ -11,7 +11,7 @@ import com.hjhsys.naiblockprompt.data.local.entity.*
         SavedBlockEntity::class, PresetEntity::class, SavedSetEntity::class, HistoryEntryEntity::class,
         TagEntity::class, TagAliasEntity::class, BaseTranslationEntity::class, UserTagOverrideEntity::class, UserTagCategoryEntity::class,
     ],
-    version = 6,
+    version = 8,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {

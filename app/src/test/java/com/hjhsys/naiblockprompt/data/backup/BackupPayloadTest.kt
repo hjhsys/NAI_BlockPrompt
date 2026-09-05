@@ -1,0 +1,37 @@
+package com.hjhsys.naiblockprompt.data.backup
+
+import com.hjhsys.naiblockprompt.data.local.entity.TagEntity
+import com.hjhsys.naiblockprompt.data.local.entity.UserTagOverrideEntity
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
+import org.junit.Test
+
+class BackupPayloadTest {
+    private val json = Json { encodeDefaults = true }
+
+    @Test fun `portable tag payload preserves accumulated sources and overrides`() {
+        val tag = TagEntity(
+            id = "tag", canonicalTag = "sample", danbooruCategory = null, appCategory = null,
+            legacyPostCount = null, danbooruPostCount = null, naiCount = 1.0, naiConfidence = .9,
+            novelAiSource = true, danbooruSource = true, userCreated = true, lastSeenAt = 1,
+            bundled = false,
+        )
+        val override = UserTagOverrideEntity("override", "tag", "샘플", "예시", "other", true, null, 2)
+        val payload = PortableTagData(tags = listOf(tag), aliases = emptyList(), overrides = listOf(override), categories = emptyList())
+        val restored = json.decodeFromString<PortableTagData>(json.encodeToString(payload))
+        assertEquals(payload, restored)
+    }
+
+    @Test fun `app backup payload preserves thumbnail bytes`() {
+        val payload = AppBackupData(
+            settings = com.hjhsys.naiblockprompt.domain.model.AppSettings(), currentSession = null, stash = null,
+            folders = emptyList(), blocks = emptyList(), presets = emptyList(), sets = emptyList(), history = emptyList(),
+            tagData = PortableTagData(tags = emptyList(), aliases = emptyList(), overrides = emptyList(), categories = emptyList()),
+            historyThumbnails = mapOf("history" to byteArrayOf(1, 2, 3)),
+        )
+        val restored = json.decodeFromString<AppBackupData>(json.encodeToString(payload))
+        assertArrayEquals(byteArrayOf(1, 2, 3), restored.historyThumbnails.getValue("history"))
+    }
+}

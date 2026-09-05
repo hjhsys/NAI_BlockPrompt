@@ -61,6 +61,14 @@ fun TagDatabaseScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit) {
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let { context.contentResolver.openInputStream(it)?.bufferedReader()?.use { reader -> viewModel.previewTranslationImport(reader.readText()) } }
     }
+    var sharedExport by remember { mutableStateOf<MainViewModel.TransferFile?>(null) }
+    val sharedExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        val file = sharedExport ?: return@rememberLauncherForActivityResult
+        uri?.let { context.contentResolver.openOutputStream(it)?.use { output -> output.write(file.bytes) } }
+    }
+    val sharedImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let { context.contentResolver.openInputStream(it)?.use { input -> viewModel.importSharedTagDatabase(input.readBytes()) } }
+    }
     var query by rememberSaveable { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf(TagDictionaryFilter.ALL) }
     var category by rememberSaveable { mutableStateOf("") }
@@ -79,6 +87,11 @@ fun TagDatabaseScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit) {
             exportLauncher.launch(exportFileName)
         }
     }
+    LaunchedEffect(Unit) {
+        viewModel.transferExport.collect { file ->
+            if (file.name == "nai_user_tag_db.zip") { sharedExport = file; sharedExportLauncher.launch(file.name) }
+        }
+    }
 
     LaunchedEffect(Unit) {
         viewModel.filterDictionary(TagDictionaryFilter.ALL)
@@ -92,6 +105,7 @@ fun TagDatabaseScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit) {
     editing?.let { item -> TagEditDialog(item, { editing = null }, { ko, aliases, category ->
         viewModel.saveTagDetails(item, ko, aliases, category); editing = null
     }, { viewModel.resetTagDetails(item); editing = null },
+        onDelete = { viewModel.deleteUserOnlyTag(item); editing = null },
         categories = (AppTagCategory.entries.map { it.value } + userCategories).distinct(),
         generatedImages = history.map { it.entity.thumbnailPath to it.entity.imagePath },
         onChooseThumbnail = { viewModel.setTagThumbnail(item, it) },
@@ -125,7 +139,11 @@ fun TagDatabaseScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit) {
                 secondaryDirectAction = AppTitleMenuItem(R.string.filter_favorites, if (filter == TagDictionaryFilter.FAVORITES) Icons.Default.Star else Icons.Default.StarBorder, onClick = {
                     filter = if (filter == TagDictionaryFilter.FAVORITES) TagDictionaryFilter.ALL else TagDictionaryFilter.FAVORITES
                 }),
-                menuItems = listOf(AppTitleMenuItem(R.string.nav_settings, Icons.Default.Settings, onClick = onOpenSettings)),
+                menuItems = listOf(
+                    AppTitleMenuItem(R.string.export_shared_tag_db, Icons.Default.Share, onClick = viewModel::exportSharedTagDatabase),
+                    AppTitleMenuItem(R.string.import_shared_tag_db, Icons.Default.Download, onClick = { sharedImportLauncher.launch(arrayOf("application/zip")) }),
+                    AppTitleMenuItem(R.string.nav_settings, Icons.Default.Settings, onClick = onOpenSettings),
+                ),
             )
             DropdownMenu(expanded = showAddMenu, onDismissRequest = { showAddMenu = false }) {
                 DropdownMenuItem(text = { Text(stringResource(R.string.add_user_tag)) }, leadingIcon = { Icon(Icons.Default.Label, null) }, onClick = { showAddMenu = false; adding = true })
@@ -216,6 +234,7 @@ private fun TagEditDialog(
     onDismiss: () -> Unit,
     onSave: (String, String, String) -> Unit,
     onReset: () -> Unit,
+    onDelete: () -> Unit,
     categories: List<String>,
     generatedImages: List<Pair<String, String>>,
     onChooseThumbnail: (android.net.Uri) -> Unit,
@@ -225,6 +244,8 @@ private fun TagEditDialog(
     var aliases by rememberSaveable(item.id) { mutableStateOf(item.koreanAliases.orEmpty()) }
     var category by rememberSaveable(item.id) { mutableStateOf(item.appCategory.orEmpty()) }
     var showGeneratedImages by rememberSaveable(item.id) { mutableStateOf(false) }
+    var confirmDelete by rememberSaveable(item.id) { mutableStateOf(false) }
+    val canDelete = item.userCreated && !item.novelAiSource && !item.danbooruSource && !item.bundled
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> uri?.let(onChooseThumbnail) }
     if (showGeneratedImages) AlertDialog(
         onDismissRequest = { showGeneratedImages = false },
@@ -247,8 +268,16 @@ private fun TagEditDialog(
         confirmButton = {},
         dismissButton = { TextButton(onClick = { showGeneratedImages = false }) { Text(stringResource(R.string.cancel)) } },
     )
+    if (confirmDelete) AlertDialog(
+        onDismissRequest = { confirmDelete = false },
+        title = { Text(stringResource(R.string.delete_tag_title)) },
+        text = { Text(stringResource(R.string.delete_tag_message, item.canonicalTag)) },
+        confirmButton = { TextButton(onClick = onDelete) { Text(stringResource(R.string.delete), color = MaterialTheme.colorScheme.error) } },
+        dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text(stringResource(R.string.cancel)) } },
+    )
     AlertDialog(onDismissRequest = onDismiss, title = { Text(item.canonicalTag) }, text = {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(stringResource(R.string.tag_sources, sourceBadges(item)), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             item.thumbnailPath?.let { AsyncImage(File(it), stringResource(R.string.tag_thumbnail), Modifier.fillMaxWidth().height(120.dp), contentScale = ContentScale.Crop) }
             item.danbooruPostCount?.let { Text(stringResource(R.string.tag_metric_public_uses, compactCount(it)), style = MaterialTheme.typography.bodySmall) }
             item.naiCount?.let { Text(stringResource(R.string.tag_metric_nai_count, compactCount(it)), style = MaterialTheme.typography.bodySmall) }
@@ -263,9 +292,21 @@ private fun TagEditDialog(
             }
             item.englishAliases?.let { Text(stringResource(R.string.english_aliases, it), style = MaterialTheme.typography.bodySmall) }
             TextButton(onClick = onReset) { Text(stringResource(R.string.restore_base_translation)) }
+            if (canDelete) {
+                TextButton(onClick = { confirmDelete = true }) { Text(stringResource(R.string.delete_tag), color = MaterialTheme.colorScheme.error) }
+            } else {
+                Text(stringResource(R.string.delete_tag_protected), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
     }, confirmButton = { TextButton(onClick = { onSave(korean, aliases, category) }) { Text(stringResource(R.string.save)) } }, dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } })
 }
+
+private fun sourceBadges(item: TagDictionaryItem): String = buildList {
+    if (item.novelAiSource) add("N")
+    if (item.danbooruSource) add("D")
+    if (item.userCreated) add("C")
+    if (item.bundled) add("B")
+}.joinToString(" · ").ifBlank { "—" }
 
 @Composable
 fun TagPickerScreen(

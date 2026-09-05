@@ -156,6 +156,10 @@ fun NaiBlockPromptApp(container: AppContainer) {
                     onSaveToken = viewModel::saveToken,
                     onClearToken = viewModel::clearToken,
                     onTestConnection = viewModel::testConnection,
+                    onResetTagDatabase = viewModel::resetTagDatabaseToBundled,
+                    onExportBackup = viewModel::exportAppBackup,
+                    onImportBackup = viewModel::importAppBackup,
+                    transferFiles = viewModel.transferExport,
                     onBack = { navController.popBackStack() },
                 )
             }
@@ -205,9 +209,15 @@ private fun SettingsScreen(
     onSaveToken: (String) -> Unit,
     onClearToken: () -> Unit,
     onTestConnection: () -> Unit,
+    onResetTagDatabase: () -> Unit,
+    onExportBackup: () -> Unit,
+    onImportBackup: (ByteArray) -> Unit,
+    transferFiles: kotlinx.coroutines.flow.Flow<MainViewModel.TransferFile>,
     onBack: () -> Unit,
 ) {
     var token by rememberSaveable { mutableStateOf("") }
+    var showTagReset by rememberSaveable { mutableStateOf(false) }
+    var tagResetAcknowledged by rememberSaveable { mutableStateOf(false) }
     val context = LocalContext.current
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         uri?.let {
@@ -220,6 +230,47 @@ private fun SettingsScreen(
             onImageSaveTreeUriChange(it.toString())
         }
     }
+    var backupExport by remember { mutableStateOf<MainViewModel.TransferFile?>(null) }
+    var pendingBackupImport by remember { mutableStateOf<ByteArray?>(null) }
+    val backupExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        val file = backupExport ?: return@rememberLauncherForActivityResult
+        uri?.let { context.contentResolver.openOutputStream(it)?.use { output -> output.write(file.bytes) } }
+    }
+    val backupImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let { context.contentResolver.openInputStream(it)?.use { input -> pendingBackupImport = input.readBytes() } }
+    }
+    LaunchedEffect(transferFiles) {
+        transferFiles.collect { file ->
+            if (file.name == "nai_blockprompt_backup.zip") { backupExport = file; backupExportLauncher.launch(file.name) }
+        }
+    }
+    pendingBackupImport?.let { bytes -> AlertDialog(
+        onDismissRequest = { pendingBackupImport = null },
+        title = { Text(stringResource(R.string.import_backup_title)) },
+        text = { Text(stringResource(R.string.import_backup_message)) },
+        confirmButton = { TextButton(onClick = { onImportBackup(bytes); pendingBackupImport = null }) { Text(stringResource(R.string.import_backup)) } },
+        dismissButton = { TextButton(onClick = { pendingBackupImport = null }) { Text(stringResource(R.string.cancel)) } },
+    ) }
+    if (showTagReset) AlertDialog(
+        onDismissRequest = { showTagReset = false; tagResetAcknowledged = false },
+        title = { Text(stringResource(R.string.reset_tag_database_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(stringResource(R.string.reset_tag_database_message))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = tagResetAcknowledged, onCheckedChange = { tagResetAcknowledged = it })
+                    Text(stringResource(R.string.reset_tag_database_acknowledge))
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = tagResetAcknowledged,
+                onClick = { onResetTagDatabase(); showTagReset = false; tagResetAcknowledged = false },
+            ) { Text(stringResource(R.string.reset), color = MaterialTheme.colorScheme.error) }
+        },
+        dismissButton = { TextButton(onClick = { showTagReset = false; tagResetAcknowledged = false }) { Text(stringResource(R.string.cancel)) } },
+    )
     Column(modifier = Modifier.fillMaxSize()) {
         AppTitleBar(R.string.settings_title, onBack = onBack)
         Column(
@@ -260,6 +311,15 @@ private fun SettingsScreen(
                 label = { Text(stringResource(source.labelResource)) },
                 modifier = Modifier.fillMaxWidth(),
             )
+        }
+        Text(stringResource(R.string.tag_database_maintenance), style = MaterialTheme.typography.titleMedium)
+        Text(stringResource(R.string.tag_database_maintenance_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        OutlinedButton(onClick = { showTagReset = true }) { Text(stringResource(R.string.reset_to_bundled_tags)) }
+        Text(stringResource(R.string.backup_and_restore), style = MaterialTheme.typography.titleMedium)
+        Text(stringResource(R.string.backup_description), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = onExportBackup, modifier = Modifier.weight(1f)) { Text(stringResource(R.string.export_backup)) }
+            OutlinedButton(onClick = { backupImportLauncher.launch(arrayOf("application/zip")) }, modifier = Modifier.weight(1f)) { Text(stringResource(R.string.import_backup)) }
         }
         HorizontalDivider()
         Text(stringResource(R.string.novelai_credentials), style = MaterialTheme.typography.titleLarge)

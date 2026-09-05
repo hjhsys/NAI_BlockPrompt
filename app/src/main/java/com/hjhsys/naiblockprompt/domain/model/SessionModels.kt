@@ -58,6 +58,7 @@ data class CharacterPrompt(
     val position: CharacterPosition? = null,
     val selectedPolarity: PromptPolarity = PromptPolarity.POSITIVE,
     val textRendering: TextRenderingState = TextRenderingState(),
+    val collapsed: Boolean = false,
 )
 
 @Serializable

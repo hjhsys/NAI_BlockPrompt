@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.clickable
@@ -67,6 +68,7 @@ fun GeneratePagerScreen(
     }
     var secondaryTarget by rememberSaveable { mutableStateOf(SecondaryTarget.RESULT) }
     var showExitDialog by rememberSaveable { mutableStateOf(false) }
+    var tagEditorActive by remember { mutableStateOf(false) }
     val activity = LocalContext.current as? Activity
 
     LaunchedEffect(generationState) {
@@ -106,7 +108,10 @@ fun GeneratePagerScreen(
                 onBack = { scope.launch { pagerState.animateScrollToPage(GenerateNavigationPolicy.GENERATE_PAGE) } },
                 onOpenSettings = onOpenSettings,
             )
-            GenerateNavigationPolicy.GENERATE_PAGE -> GenerateScreen(session, appSettings, viewModel, onOpenSettings, onOpenGenerationSettings, onOpenTagDatabase)
+            GenerateNavigationPolicy.GENERATE_PAGE -> GenerateScreen(
+                session, appSettings, viewModel, onOpenSettings, onOpenGenerationSettings,
+                onOpenTagDatabase, onTagEditorActiveChange = { tagEditorActive = it },
+            )
             else -> when (secondaryTarget) {
                 SecondaryTarget.RESULT -> ResultScreen(viewModel) { secondaryTarget = SecondaryTarget.HISTORY }
                 SecondaryTarget.HISTORY -> HistoryScreen(
@@ -137,6 +142,24 @@ fun GeneratePagerScreen(
                     tint = MaterialTheme.colorScheme.onPrimaryContainer,
                 )
             }
+        } else if (autocomplete.blockId == null && !tagEditorActive) {
+            EdgePageHint(Alignment.CenterStart, Icons.Default.ChevronLeft, R.string.generation_settings) {
+                scope.launch { pagerState.animateScrollToPage(GenerateNavigationPolicy.SETTINGS_PAGE) }
+            }
+            EdgePageHint(Alignment.CenterEnd, Icons.Default.ChevronRight, R.string.workspace_result) {
+                scope.launch { pagerState.animateScrollToPage(GenerateNavigationPolicy.SECONDARY_PAGE) }
+            }
         }
+    }
+}
+
+@Composable
+private fun BoxScope.EdgePageHint(alignment: Alignment, icon: androidx.compose.ui.graphics.vector.ImageVector, label: Int, onClick: () -> Unit) {
+    Surface(
+        modifier = Modifier.align(alignment).padding(vertical = 72.dp).clickable(onClick = onClick),
+        shape = MaterialTheme.shapes.small,
+        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f),
+    ) {
+        Icon(icon, stringResource(label), Modifier.padding(vertical = 16.dp, horizontal = 2.dp).size(18.dp))
     }
 }

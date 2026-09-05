@@ -1,5 +1,8 @@
 package com.hjhsys.naiblockprompt.domain.model
 
+import kotlinx.serialization.Serializable
+
+@Serializable
 data class AppSettings(
     val historyLimit: Int = 20,
     val showFormatterActions: Boolean = true,
@@ -9,5 +12,5 @@ data class AppSettings(
     val appearanceMode: AppearanceMode = AppearanceMode.SYSTEM,
 )
 
-enum class AutocompleteSource { NOVEL_AI, DANBOORU, BOTH }
-enum class AppearanceMode { SYSTEM, LIGHT, DARK }
+@Serializable enum class AutocompleteSource { NOVEL_AI, DANBOORU, BOTH }
+@Serializable enum class AppearanceMode { SYSTEM, LIGHT, DARK }

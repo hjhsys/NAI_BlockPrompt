@@ -343,4 +343,24 @@
     <string name="restore_image_to_image_input">Image2Image source image</string>
     <string name="restore_vibe_reference">Vibe Transfer reference</string>
     <string name="restore_precise_reference">Precise Reference image</string>
+    <string name="tag_sources">Sources: %1$s</string>
+    <string name="delete_tag">Delete tag</string>
+    <string name="delete_tag_title">Delete user tag?</string>
+    <string name="delete_tag_message">Delete “%1$s” and its user metadata?</string>
+    <string name="delete_tag_protected">Bundled or API-confirmed tags are protected from deletion.</string>
+    <string name="tag_database_maintenance">Tag database maintenance</string>
+    <string name="tag_database_maintenance_hint">N = NovelAI autocomplete, D = Danbooru autocomplete, C = user-created, B = bundled database.</string>
+    <string name="reset_to_bundled_tags">Reset to bundled tags</string>
+    <string name="reset_tag_database_title">Reset the Tag DB?</string>
+    <string name="reset_tag_database_message">This removes all non-bundled tags, favorites, usage history, thumbnails, and user translation/category overrides. Bundled tags and translations remain.</string>
+    <string name="reset_tag_database_acknowledge">I understand that my Tag DB customizations will be deleted.</string>
+    <string name="reset">Reset</string>
+    <string name="export_shared_tag_db">Share user Tag DB</string>
+    <string name="import_shared_tag_db">Import shared Tag DB</string>
+    <string name="backup_and_restore">Backup and restore</string>
+    <string name="backup_description">Transfers settings, current work, saved items, history metadata, and user Tag DB. API tokens and original generated images are excluded.</string>
+    <string name="export_backup">Export backup</string>
+    <string name="import_backup">Import backup</string>
+    <string name="import_backup_title">Import app backup?</string>
+    <string name="import_backup_message">Backup data will be merged with data on this device. Items with the same ID will be updated. The image save folder must be selected again.</string>
 </resources>

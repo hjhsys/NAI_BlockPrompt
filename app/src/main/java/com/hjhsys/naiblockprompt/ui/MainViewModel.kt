@@ -37,6 +37,7 @@ import com.hjhsys.naiblockprompt.domain.image.NaiImageMetadata
 
 @OptIn(FlowPreview::class)
 class MainViewModel(private val container: AppContainer) : ViewModel() {
+    data class TransferFile(val name: String, val mimeType: String, val bytes: ByteArray)
     private val _session = MutableStateFlow<Session?>(null)
     val session: StateFlow<Session?> = _session.asStateFlow()
     private val saveSignals = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
@@ -92,6 +93,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     val translationExport = _translationExport.asSharedFlow()
     private val _translationImportPreview = MutableStateFlow<TagTranslationImportPreview?>(null)
     val translationImportPreview = _translationImportPreview.asStateFlow()
+    private val _transferExport = MutableSharedFlow<TransferFile>(extraBufferCapacity = 1)
+    val transferExport = _transferExport.asSharedFlow()
 
     val settings = container.settingsRepository.settings.stateIn(
         viewModelScope,
@@ -132,6 +135,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     fun removeCharacter(id: String) = edit { SessionEditor.removeCharacter(it, id) }
     fun moveCharacter(id: String, direction: MoveDirection) = edit { SessionEditor.moveCharacter(it, id, direction) }
     fun setCharacterType(id: String, type: CharacterType) = edit { SessionEditor.setCharacterType(it, id, type) }
+    fun setCharacterCollapsed(id: String, collapsed: Boolean) = edit { SessionEditor.setCharacterCollapsed(it, id, collapsed) }
     fun setCharacterPositioningEnabled(enabled: Boolean) = edit { SessionEditor.setCharacterPositioningEnabled(it, enabled) }
     fun setCharacterPosition(id: String, position: CharacterPosition) = edit { SessionEditor.setCharacterPosition(it, id, position) }
 
@@ -306,7 +310,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     fun recordAutocompleteUse(suggestion: TagSuggestion) = viewModelScope.launch {
-        container.autocompleteRepository.recordUse(suggestion.tag)
+        container.autocompleteRepository.recordSelection(suggestion)
     }
 
     fun searchDictionary(query: String) { tagDictionaryQuery.value = query }
@@ -342,6 +346,28 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     }
     fun addUserTag(canonical: String, korean: String?, aliases: String?, appCategory: String?) = viewModelScope.launch {
         container.autocompleteRepository.addUserTag(canonical, korean, aliases, appCategory)
+    }
+    fun deleteUserOnlyTag(item: TagDictionaryItem) = viewModelScope.launch {
+        container.autocompleteRepository.deleteUserOnlyTag(item)
+    }
+    fun resetTagDatabaseToBundled() = viewModelScope.launch {
+        container.autocompleteRepository.resetToBundledTags()
+    }
+    fun exportSharedTagDatabase() = viewModelScope.launch {
+        _transferExport.emit(TransferFile("nai_user_tag_db.zip", "application/zip", container.backupRepository.exportTagData()))
+    }
+    fun importSharedTagDatabase(bytes: ByteArray) = viewModelScope.launch {
+        runCatching { container.backupRepository.importTagData(bytes) }
+    }
+    fun exportAppBackup() = viewModelScope.launch {
+        flushAutosave()
+        _transferExport.emit(TransferFile("nai_blockprompt_backup.zip", "application/zip", container.backupRepository.exportAppBackup()))
+    }
+    fun importAppBackup(bytes: ByteArray) = viewModelScope.launch {
+        runCatching { container.backupRepository.importAppBackup(bytes) }.onSuccess {
+            _session.value = container.sessionRepository.restoreOrCreate()
+            _hasStash.value = container.sessionRepository.hasStash()
+        }
     }
     fun beginTagInsert(owner: PromptOwner, polarity: PromptPolarity, blockId: String, cursor: Int) {
         clearAutocomplete()

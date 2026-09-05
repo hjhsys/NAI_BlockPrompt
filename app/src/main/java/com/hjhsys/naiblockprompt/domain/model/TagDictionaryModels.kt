@@ -19,6 +19,7 @@ data class TagDictionaryItem(
     val englishAliases: String?,
     val favorite: Boolean,
     val thumbnailPath: String?,
+    val bundled: Boolean,
 )
 
 enum class TagDictionaryFilter { ALL, FAVORITES }
