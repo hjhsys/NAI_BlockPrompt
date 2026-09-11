@@ -11,11 +11,11 @@ class SessionSnapshotTest {
     fun snapshotRoundTripPreservesEditingState() {
         val original = SessionSnapshot(
             session = Session.empty().copy(
-                base = Session.empty().base.copy(textRendering = TextRenderingState(true, "BASE TEXT")),
+                base = Session.empty().base.copy(textRendering = TextRenderingState(true, "BASE TEXT", "BASE DESCRIPTION")),
                 characters = listOf(
                     CharacterPrompt(
                         type = CharacterType.GIRL,
-                        textRendering = TextRenderingState(true, "CHARACTER TEXT"),
+                        textRendering = TextRenderingState(true, "CHARACTER TEXT", "CHARACTER DESCRIPTION"),
                         prompts = PromptPair(
                             positiveBlocks = listOf(
                                 PromptBlock(
@@ -51,5 +51,15 @@ class SessionSnapshotTest {
         assertEquals(TextRenderingState(), restored.session.base.textRendering)
         assertEquals(TextRenderingState(), restored.session.characters.single().textRendering)
         assertEquals(false, restored.session.characters.single().collapsed)
+    }
+
+    @Test
+    fun oldTextRenderingStateWithoutDescriptionUsesEmptyDefault() {
+        val restored = json.decodeFromString(
+            TextRenderingState.serializer(),
+            """{"enabled":true,"content":"HELLO"}""",
+        )
+
+        assertEquals(TextRenderingState(true, "HELLO", ""), restored)
     }
 }

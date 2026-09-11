@@ -11,7 +11,16 @@ data class TagTranslationCandidate(
     val postCount: Long?,
     val korean: String?,
     val appCategory: String?,
+    val koreanAliases: String? = null,
 )
+
+enum class TagTranslationStatus(val wireValue: String) {
+    TRANSLATED("translated"), UNCHANGED("unchanged"), REVIEW("review"), EXCLUDED_CANDIDATE("excluded_candidate");
+
+    companion object {
+        fun fromWire(value: String?): TagTranslationStatus? = entries.firstOrNull { it.wireValue == value }
+    }
+}
 
 data class TagTranslationRow(
     val tag: String,
@@ -20,57 +29,102 @@ data class TagTranslationRow(
     val appCategory: String?,
     val suggestedCategory: String?,
     val needsReview: Boolean,
+    val isTypo: Boolean = false,
+    val typoReason: String? = null,
+    val status: TagTranslationStatus = if (needsReview) TagTranslationStatus.REVIEW else TagTranslationStatus.TRANSLATED,
+    val exclusionReasonCode: String? = null,
+    val exclusionReasonText: String? = null,
 )
 
 data class ParsedTagTranslations(val rows: List<TagTranslationRow>, val invalidLines: Int)
 
-data class ValidatedTagTranslation(val tagId: String, val row: TagTranslationRow)
+data class ValidatedTagTranslation(val tagId: String, val row: TagTranslationRow, val canDelete: Boolean = false)
+data class ValidatedTagExclusion(val tagId: String, val row: TagTranslationRow)
 data class TagTranslationImportPreview(
     val validRows: List<ValidatedTagTranslation>,
     val invalidLines: Int,
     val unknownTags: List<String>,
     val newCategories: List<String>,
     val reviewCount: Int,
+    val excludedCandidates: List<ValidatedTagExclusion> = emptyList(),
+    val unchangedCount: Int = 0,
 )
 data class TagTranslationExportFile(val fileName: String, val content: ByteArray)
 
 object TagTranslationExchange {
     const val VERSION = 1
 
+    private val sourceCategoryNames = mapOf("0" to "general", "1" to "artist", "3" to "copyright", "4" to "character", "5" to "meta")
+
+    private fun exportCategories(categories: List<String>) =
+        categories.map { sourceCategoryNames[it] ?: it }.distinct().sorted()
+
+    fun exportClipboard(candidates: List<TagTranslationCandidate>, categories: List<String>): String = buildString {
+        appendLine("Translate only the JSONL rows below and return JSONL only, one object per tag.")
+        appendLine("Preserve canonical `tag` exactly; never invent or rename a tag. Keep reasonable existing ko/aliases_ko values.")
+        appendLine("Return: tag, status (translated|unchanged|review|excluded_candidate), ko, aliases_ko, app_category.")
+        appendLine("For uncertain meanings use status=review instead of guessing. For typo/invalid/noise use status=excluded_candidate plus reason_code (typo|invalid|noise) and a clear reason_text.")
+        appendLine("For character tags, use the series suffix for identification and prefer verified official/common Korean names; do not confirm arbitrary transliterations. If uncertain, use review.")
+        appendLine("For copyright tags, prefer the officially distributed Korean title; do not invent literal translations. Put only verified useful alternatives in aliases_ko.")
+        appendLine("Do not include credentials, prompts, paths, commentary, Markdown fences, or rows not present below.")
+        appendLine(buildJsonObject {
+            put("type", "nai_block_prompt_translation_selection")
+            put("version", VERSION)
+            putJsonArray("existing_categories") { exportCategories(categories).forEach(::add) }
+        })
+        candidates.forEach { candidate -> appendLine(candidateJson(candidate)) }
+    }
+
     fun export(candidates: List<TagTranslationCandidate>, categories: List<String>): String = buildString {
         appendLine(buildJsonObject {
             put("type", "nai_block_prompt_translation_batch")
             put("version", VERSION)
             put("task", "Translate tags into Korean and classify them. Return JSONL only. Preserve tag exactly. Fill ko with one primary Korean translation and aliases_ko with useful Korean search aliases. Use an existing category whenever possible. If none fits, leave app_category empty and fill suggested_category. Set needs_review=true when ambiguous.")
-            putJsonArray("existing_categories") { categories.distinct().sorted().forEach(::add) }
+            putJsonArray("existing_categories") { exportCategories(categories).forEach(::add) }
         })
         candidates.forEach { candidate ->
-            appendLine(buildJsonObject {
-                put("tag", candidate.tag)
-                put("ko", candidate.korean.orEmpty())
-                putJsonArray("aliases_ko") {}
-                put("app_category", candidate.appCategory.orEmpty())
-                put("suggested_category", "")
-                put("needs_review", false)
-                candidate.sourceCategory?.let { put("source_category", it) }
-                candidate.postCount?.let { put("post_count", it) }
-            })
+            appendLine(candidateJson(candidate))
         }
     }
 
+    private fun candidateJson(candidate: TagTranslationCandidate) = buildJsonObject {
+        put("tag", candidate.tag)
+        put("status", TagTranslationStatus.TRANSLATED.wireValue)
+        put("ko", candidate.korean.orEmpty())
+        putJsonArray("aliases_ko") {
+            candidate.koreanAliases.orEmpty().split(',').map(String::trim).filter(String::isNotBlank).forEach(::add)
+        }
+        put("app_category", candidate.appCategory.orEmpty())
+        put("suggested_category", "")
+        put("needs_review", false)
+        put("is_typo", false)
+        put("typo_reason", "")
+        candidate.sourceCategory?.let { put("source_category", it) }
+        candidate.postCount?.let { put("post_count", it) }
+    }
+
     fun exportBundle(candidates: List<TagTranslationCandidate>, categories: List<String>, splitBatches: Boolean = false): ByteArray {
-        val definitions = categories.distinct().sorted().map { categoryDefinition(it) }
+        val definitions = exportCategories(categories).map { categoryDefinition(it) }
         val instructions = """# NAI Block Prompt translation batch
 
-Translate and classify every row in `tags_to_process.jsonl`.
+Translate and classify every row in the `tags_to_process*.jsonl` files.
 
 - Return JSONL only and preserve `tag` exactly.
+- Preserve `source_category` and `post_count` exactly when present; leave them absent when absent. Never invent source metadata.
+- Numeric `source_category` values mean: 0=general, 1=artist, 3=copyright, 4=character, 5=meta. They are source metadata, not app category IDs.
+- Choose `app_category` only from the named IDs in categories.json, never a numeric source category. Prefer a specific semantic category when appropriate.
+- `status`: translated, unchanged, review, or excluded_candidate.
 - `ko`: one primary Korean translation.
 - `aliases_ko`: useful Korean search aliases as a JSON array.
 - If an existing category fits, put its ID in `app_category` and leave `suggested_category` empty.
 - If none fits, leave `app_category` empty and propose one normalized lowercase ID in `suggested_category`.
 - If ambiguous, set `needs_review` to true.
+- A tag may be misspelled, obsolete, or have zero posts. Do not correct its canonical spelling or invent a confident meaning. Leave uncertain translation/classification empty and set `needs_review` to true.
+- If there is evidence of a spelling/concatenation error, set `is_typo` to true and explain briefly in Korean in `typo_reason`; also set `needs_review` to true. Otherwise use false and an empty reason. Zero posts or an unfamiliar proper name alone is NOT evidence of a typo. The user, not the AI, decides deletion.
 - Do not add explanations, omit rows, reorder fields meaningfully, or wrap the final file in prose.
+- For `excluded_candidate`, leave translation fields empty and include `reason_code` (typo, invalid, or noise) plus a clear `reason_text`. Never change `tag`.
+- Character tags: use `(series)` for identification; prefer verified official/common Korean names, not arbitrary transliteration. If uncertain, return review.
+- Copyright tags: prefer the officially distributed Korean title and never invent a literal title. Keep only verified useful alternate spellings in aliases_ko.
 """
         val manifest = buildJsonObject {
             put("version", VERSION)
@@ -128,31 +182,48 @@ Translate and classify every row in `tags_to_process.jsonl`.
     fun parse(text: String): ParsedTagTranslations {
         val rows = mutableListOf<TagTranslationRow>()
         var invalid = 0
-        text.lineSequence().filter(String::isNotBlank).filterNot { it.trim().startsWith("```") }.forEach { line ->
+        text.removePrefix("\uFEFF").lineSequence().filter(String::isNotBlank).filterNot { it.trim().startsWith("```") }.forEach { line ->
             val objectValue = runCatching { Json.parseToJsonElement(line).jsonObject }.getOrNull()
             if (objectValue == null) {
                 invalid++
                 return@forEach
             }
-            if (objectValue["type"]?.jsonPrimitive?.contentOrNull != null) return@forEach
-            val tag = objectValue["tag"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+            if ((objectValue["type"] as? JsonPrimitive)?.contentOrNull != null) return@forEach
+            val tag = (objectValue["tag"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
             if (tag.isEmpty()) {
                 invalid++
                 return@forEach
             }
             val aliasesElement = objectValue["aliases_ko"]
             val aliases = when (aliasesElement) {
-                is JsonArray -> aliasesElement.mapNotNull { it.jsonPrimitive.contentOrNull?.trim()?.takeIf(String::isNotBlank) }
+                is JsonArray -> aliasesElement.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf(String::isNotBlank) }
                 is JsonPrimitive -> aliasesElement.contentOrNull.orEmpty().split(',').map(String::trim).filter(String::isNotBlank)
                 else -> emptyList()
             }
+            val legacyNeedsReview = (objectValue["needs_review"] as? JsonPrimitive)?.booleanOrNull == true ||
+                (objectValue["is_typo"] as? JsonPrimitive)?.booleanOrNull == true
+            val statusValue = (objectValue["status"] as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf(String::isNotBlank)
+            val status = if (statusValue == null) {
+                if (legacyNeedsReview) TagTranslationStatus.REVIEW else TagTranslationStatus.TRANSLATED
+            } else TagTranslationStatus.fromWire(statusValue)
+            val reasonCode = (objectValue["reason_code"] as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf(String::isNotBlank)
+            val reasonText = (objectValue["reason_text"] as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf(String::isNotBlank)
+            if (status == null || (status == TagTranslationStatus.EXCLUDED_CANDIDATE && (reasonCode !in setOf("typo", "invalid", "noise") || reasonText == null))) {
+                invalid++
+                return@forEach
+            }
             rows += TagTranslationRow(
                 tag = tag,
-                korean = objectValue["ko"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf(String::isNotBlank),
+                korean = (objectValue["ko"] as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf(String::isNotBlank),
                 aliases = aliases,
-                appCategory = objectValue["app_category"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf(String::isNotBlank),
-                suggestedCategory = objectValue["suggested_category"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf(String::isNotBlank),
-                needsReview = objectValue["needs_review"]?.jsonPrimitive?.booleanOrNull ?: false,
+                appCategory = (objectValue["app_category"] as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf(String::isNotBlank),
+                suggestedCategory = (objectValue["suggested_category"] as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf(String::isNotBlank),
+                needsReview = status == TagTranslationStatus.REVIEW,
+                isTypo = (objectValue["is_typo"] as? JsonPrimitive)?.booleanOrNull ?: false,
+                typoReason = (objectValue["typo_reason"] as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf(String::isNotBlank),
+                status = status,
+                exclusionReasonCode = reasonCode,
+                exclusionReasonText = reasonText,
             )
         }
         return ParsedTagTranslations(rows, invalid)

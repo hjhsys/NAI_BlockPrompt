@@ -1,5 +1,9 @@
 # NAI Mobile App
 
+> 이 파일은 오프라인 참고용 로컬 스냅샷입니다. 최신 제품 요구사항의 단일 기준은
+> [Main Project Document](https://docs.google.com/document/d/1MaEP_W8AMXoTPj6aB5DGFnceK7fdPrv9UUyQhv4WPts/edit?usp=sharing)이며,
+> 내용이 충돌하면 Google Docs를 우선합니다.
+
 NovelAI Image Generation을 모바일에서 간단하고 빠르게 사용할 수 있도록 하는 앱입니다.
 
 ## 목표
@@ -233,7 +237,7 @@ ABC, DEF, GHI
 
 - Block 내용 마지막에 쉼표가 이미 있으면 그대로 유지
 - 마지막에 쉼표가 없으면 앱이 쉼표 하나 추가
-- 그 뒤 다음 활성 Block을 이어 붙임
+- 그 뒤 줄바꿈 두 개(`\n\n`)로 빈 줄 하나를 두고 다음 활성 Block을 이어 붙임. NAI 웹에 가져올 때 Block 구분을 읽기 쉽게 보존하기 위한 규칙이며 whitespace가 달라져 기존 생성과 결과가 달라질 수 있습니다.
 
 앱 전용 Block 경계는 NovelAI로 전송되는 최종 Prompt에서는 사라집니다.
 
@@ -515,6 +519,15 @@ NovelAI 웹과 유사한 그리드 기반 Character Positioning UI를 제공합�
 
 ## 모바일 UI 방향
 
+### Color Helper
+
+- Generate의 Tag DB 바로가기 아래에 optional Color Helper 바로가기를 둡니다.
+- 표시 모드는 `항상 / Prompt 편집 중 / 끔`이며 DataStore에 보존합니다.
+- DB와 Color Helper 바로가기는 기존 오른쪽 위치를 기본으로 각각 드래그 이동할 수 있습니다. 위치는 화면 상태로 보존하고 화면 크기/키보드 변화에 맞춰 가용 영역 안에 제한합니다. 장기 설정이나 백업에는 포함하지 않습니다.
+- Hue ring + SV 영역, HSV slider, 3/6자리 HEX 입력, 복사와 현재 Prompt 커서 삽입을 지원합니다.
+- 즐겨찾기와 최근 사용 색상을 저장하며 앱 백업에 포함합니다.
+- 특정 모델에 강제 제한하지 않으며 HEX 값은 정확한 RGB 재현 보장이 아닌 Prompt guidance로 안내합니다.
+
 앱 실행 시 별도 Home 화면을 거치지 않고 **Generate 화면으로 바로 진입**하는 방향을 우선합니다.
 
 하단 Navigation 현재안:
@@ -777,8 +790,10 @@ AI에게는 영문 `tag` 값을 변경하지 말고 `ko`, `aliases`만 채우도
 - `translation_instructions.md`
 - `categories.json` — category ID, 한국어 이름, 짧은 분류 설명
 - `tags_to_process.jsonl`
+- 번역 ZIP 저장에 성공하면 AI에게 전달할 짧은 설명문을 클립보드에 자동 복사하고 안내합니다. 저장 취소·실패 시에는 복사하지 않습니다.
 
-- Export 전에 `한국어 번역 없음` / `앱 카테고리 없음` 조건을 각각 선택하며, 선택한 조건 중 하나라도 일치하는 태그를 한 번에 최대 1,000개씩 Export
+- Export 전에 `한국어 번역 없음` / `분류 정보 없음`(앱·원본 카테고리 모두 없음) 조건을 각각 선택하며, 선택한 조건 중 하나라도 일치하는 태그를 한 번에 최대 1,000개씩 Export
+- 번역 ZIP의 카테고리 목록은 숫자 원본 ID를 의미 이름으로 정규화합니다. 원본 `source_category`/`post_count`는 입력 그대로 보존하고, 오타·의미 불명 항목은 임의 교정 없이 `needs_review`로 표시하도록 안내합니다.
 - 일반 사용자는 결과를 Import한 뒤 다음 최대 1,000개를 다시 Export하는 단순한 순차 흐름을 사용
 - 초기 DB 구축처럼 전체 대상이 필요한 개발자용 내보내기는 Tag Dictionary 맨 아래에 낮은 강조도로 분리하며, 하나의 ZIP 안에 `tags_to_process_0001.jsonl` 형식으로 1,000개씩 자동 분할
 - 첫 JSONL 행에는 처리 지침과 현재 존재하는 카테고리 목록을 포함
@@ -788,6 +803,9 @@ AI에게는 영문 `tag` 값을 변경하지 말고 `ko`, `aliases`만 채우도
 - `suggested_category`는 Import 시 자동 생성하지 않고 검토 대상으로만 표시
 - 특정 AI 서비스에 종속하지 않고 사용자가 GPT, Gemini, Claude 또는 로컬 모델에 파일을 전달할 수 있게 함
 - Import 전 유효 행, 잘못된 행, DB에 없는 tag, 검토 필요 항목, 신규 카테고리를 요약하고 사용자 확인 후 반영
+- 판단 불가(`needs_review`) 행은 기본 체크된 보류 옵션으로 user override의 `translationDeferred`에 기록합니다. 삭제되지 않은 행만 보류하고 미번역·미분류 대기 수와 기본 export에서 제외하며 보류 수를 별도 표시합니다. 내보내기에서 보류 포함을 선택하면 재검토할 수 있고, 정상 번역 import 또는 직접 수정 시 보류를 해제합니다. 보류 플래그는 사용자 백업에 포함하며 Room 10→11은 기본값 false 컬럼 추가만 수행합니다.
+- 결과 파일 선택은 MIME 제한 없이 허용하되 내용은 JSONL/TXT 또는 결과 JSONL을 담은 ZIP으로 검사합니다. 읽기와 ZIP 처리는 IO에서 수행하고 압축 전·해제 후 모두 20MB로 제한하며 파일 경로를 추출하지 않습니다.
+- AI의 `is_typo`/`typo_reason`은 삭제 제안일 뿐입니다. `needs_review` 행을 개별 미선택 체크박스로 표시하고 사용자가 선택 후 재확인한 항목만 삭제합니다. 기본 DB, 직접 추가, 사용자 override, 사용 기록이 있는 태그는 삭제에서 보호하고 적용 시 DB에서 다시 검사합니다. Prompt/History 텍스트는 변경하지 않으며 재조회 시 재수집은 가능합니다.
 - 기존 사용자 번역/분류는 기본적으로 덮어쓰지 않고 사용자가 명시적으로 선택한 경우만 덮어씀
 
 AI가 반환한 결과를 앱에 붙여넣거나 JSONL 파일로 가져오면:
@@ -1171,7 +1189,7 @@ Backup/Export에도 API Token을 기본 포함하지 않는 방향을 우선합�
 NAI-Mobile/
 ├─ app/                       # Android application
 ├─ docs/
-│  ├─ NAI_APP_NOTES.md        # 제품 요구사항 / 현재 기준 문서
+│  ├─ NAI_APP_NOTES.md        # 제품 요구사항 / 오프라인 참고용 스냅샷
 │  └─ references/             # UI 캡처, 참고 이미지 등
 ├─ data/
 │  ├─ tags/                   # 재배포 가능한 원본 Tag DB
@@ -1240,7 +1258,7 @@ Flutter/React Native 등 Cross-platform 전환은 iOS 지원 필요성이 실제
 2. Android SDK / Emulator
 3. Git
 4. 빈 Git Repository
-5. `docs/NAI_APP_NOTES.md`
+5. 최신 Main Project Document와 오프라인 참고용 `docs/NAI_APP_NOTES.md`
 6. UI 참고 이미지가 있다면 `docs/references/`에 보관
 7. NovelAI 테스트용 개인 계정 및 Token
 8. 가능하면 실제 Android 기기 + USB Debugging
@@ -1253,7 +1271,7 @@ NovelAI Token은 Repository, `AGENTS.md`, 문서에 직접 기록하지 않고 �
 예:
 
 ```text
-- NAI_APP_NOTES.md를 기능 요구사항의 기준으로 사용한다.
+- 최신 Main Project Document를 기능 요구사항의 기준으로 사용하고, NAI_APP_NOTES.md는 오프라인 스냅샷으로만 사용한다.
 - Android Native / Kotlin / Jetpack Compose를 기본으로 한다.
 - 임의로 요구사항을 삭제하거나 단순화하지 않는다.
 - 모바일 화면 밀도와 실제 손가락 조작성을 우선한다.
@@ -1609,7 +1627,7 @@ tag
 
 각 Phase 시작 시 Codex에게 다음 흐름으로 맡깁니다.
 
-1. `NAI_APP_NOTES.md` 전체 읽기
+1. 최신 Main Project Document 확인 및 `NAI_APP_NOTES.md` 로컬 스냅샷 참고
 2. 해당 Phase에 관련된 요구사항 추출
 3. 구현 계획 작성
 4. 필요한 API/라이브러리 조사 (`docs/api/`의 Spike 결과 우선 확인)
@@ -1625,7 +1643,7 @@ tag
 첫 지시 예시:
 
 ```text
-이 저장소의 docs/NAI_APP_NOTES.md를 전체 읽고 이 문서를 제품 요구사항의 기준으로 사용해.
+이 저장소의 Main Project Document를 최신 제품 요구사항의 기준으로 사용하고, docs/NAI_APP_NOTES.md는 오프라인 스냅샷으로 참고해.
 먼저 AGENTS.md와 구현 계획을 정리한 뒤 Phase 0을 구현하고 build/test로 닫아. 그 다음 Phase 0.5 NovelAI API Spike를 수행해 실제 요청 구조와 secret이 제거된 재현 샘플을 docs/api/에 남긴 뒤 Phase 1까지만 진행해.
 데이터 모델을 확정하기 전에 NovelAI API에 종속되는 필드를 식별하고, 확인되지 않은 API 구조는 추측해서 schema에 고정하지 마.
 앱의 Domain Model과 NovelAI API DTO를 분리하고, API 요청/응답 구조를 Room Entity 또는 UI State로 직접 사용하지 마.
@@ -1659,3 +1677,39 @@ Wildcard는 별도 순수 처리 계층으로 구현해야 합니다. 최종 API
 선택된 resolved 문자열을 저장하되 원본 wildcard 표현도 재실행을 위해 보존합니다. 중첩 참조,
 순환 참조, 누락 파일 경고, TXT import/export, autocomplete는 이 처리 계층과 snapshot schema를
 함께 설계한 뒤 추가하며 단순 formatter 치환으로 구현하지 않습니다.
+
+현재 구현은 Tags 안의 별도 Wildcards 탭, Room 저장, 폴더 문자열 분류, 한 줄당 한 후보인 TXT
+import, Tag DB 다중 선택, `__name__` autocomplete, generation seed 기반 deterministic resolve,
+중첩/cycle 보호 및 History 원문/resolve 선택 복원을 지원합니다. TXT export와 전용 폴더 Entity는
+후속 개선 대상으로 둡니다.
+
+V4/V4.5 token 표시는 약 512 T5 context를 기준으로 한 Experimental estimate입니다. 공식
+NovelAI tokenizer vocabulary와 전처리가 공개·검증되지 않은 상태에서는 Exact라고 표시하지 않고
+생성을 차단하지 않습니다. Custom Wildcard와 공식 `||...||` Randomizer는 후보별 최소/최대 범위를
+계산하며, automatic quality tags는 앱에서 사용하지 않으므로 임의로 더하지 않습니다. V5에는 이
+한도 규칙을 적용하지 않습니다.
+
+---
+
+## 2026-09-11 Inpaint 경계 artifact 후속 진단
+
+전체 raw MessagePack을 저장한 진단 ZIP에서 intermediate 27개와 유일한 final 1개를 확인했고,
+앱은 올바른 final(frame 27)을 선택했습니다. 깨끗한 요청 원본과 불투명 binary RGBA mask가
+전송되었지만 초록 윤곽은 intermediate와 raw final에 이미 존재했습니다. 앱 mask PNG의
+IHDR/채널/색상 조건도 NovelAI 웹에서 저장한 mask와 동일했습니다. 따라서 이 재현 건은 UI
+overlay/source 오염, mask PNG 형식, frame 선택, decode/save 문제가 아니라 서버 반환 layer의
+경계 오염으로 좁혔습니다.
+
+16px discard + 16px feather는 한 자료에서만 좋아 보였고, 다음 불규칙 mask에서는 32px로도
+굵은 윤곽이 남아 일반화에 실패했습니다. 이 방식은 기본 동작에서 제거했습니다.
+
+2026-09-11 NovelAI 웹 이미지 페이지 번들을 확인한 결과, 웹은 편집 mask를 nearest-neighbor로
+1/8 축소하고 alpha 155 기준으로 이진화한 뒤 8배 확대하여 서버에 보냅니다. 응답 합성에는 별도로
+1/8 mask를 사각 반경 4px 팽창하고 8배 확대한 후 full-resolution 반경 20px stack blur를 2회
+적용한 matte를 씁니다. 서버 final alpha에 이 matte를 곱하고, 같은 matte만큼 원본을 지운 다음
+생성 layer를 합성합니다. 웹 요청값은 `add_original_image=false`, `straight_alpha=true`입니다.
+
+앱은 요청 mask의 latent 8x8 정렬과 이 합성 파이프라인을 함께 복제하도록 변경했습니다.
+2026-09-11 V5 Full 실기기 테스트에서 새 mask로 생성한 결과 초록 격자와 굵은 경계가 사라졌으며,
+웹 호환 요청 mask와 합성 경로가 정상 동작함을 확인했습니다. V4.5 Full은 별도 실기기 회귀 검증이
+남아 있습니다.

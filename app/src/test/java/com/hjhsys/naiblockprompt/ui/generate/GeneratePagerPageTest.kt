@@ -6,14 +6,16 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class GeneratePagerPageTest {
-    @Test fun `generate and contextual secondary screen use two page navigation`() {
+    @Test fun `generation workspace uses four stable pages`() {
         assertEquals(0, GenerateNavigationPolicy.SETTINGS_PAGE)
         assertEquals(1, GenerateNavigationPolicy.GENERATE_PAGE)
-        assertEquals(2, GenerateNavigationPolicy.SECONDARY_PAGE)
-        assertEquals(SecondaryTarget.RESULT, GenerateNavigationPolicy.afterGenerationSuccess())
-        assertEquals(SecondaryTarget.HISTORY, GenerateNavigationPolicy.afterHistoryReturn())
+        assertEquals(2, GenerateNavigationPolicy.RESULT_PAGE)
+        assertEquals(3, GenerateNavigationPolicy.HISTORY_PAGE)
+        assertEquals(4, GenerateNavigationPolicy.PAGE_COUNT)
+        assertEquals(GenerateNavigationPolicy.RESULT_PAGE, GenerateNavigationPolicy.afterGenerationSuccess())
         assertFalse(GenerateNavigationPolicy.shouldAutoOpenResult("image-a", "image-a"))
         assertTrue(GenerateNavigationPolicy.shouldAutoOpenResult("image-b", "image-a"))
         assertFalse(GenerateNavigationPolicy.shouldAutoOpenResult("restored", null, autoOpenResult = false))
     }
+
 }

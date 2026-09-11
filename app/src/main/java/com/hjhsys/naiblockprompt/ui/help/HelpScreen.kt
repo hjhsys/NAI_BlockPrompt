@@ -30,6 +30,7 @@ fun HelpScreen(onBack: () -> Unit) {
         HelpTopic(R.string.help_previous_work, R.string.help_previous_work_body, true),
         HelpTopic(R.string.help_novelai_setup, R.string.help_novelai_setup_body, true),
         HelpTopic(R.string.help_prompt_formatter, R.string.help_prompt_formatter_body),
+        HelpTopic(R.string.help_color_helper, R.string.help_color_helper_body),
         HelpTopic(R.string.help_generation, R.string.help_generation_body),
         HelpTopic(R.string.help_library_history, R.string.help_library_history_body),
         HelpTopic(R.string.help_saving_images, R.string.help_saving_images_body, true),

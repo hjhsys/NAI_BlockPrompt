@@ -34,6 +34,11 @@ data class NaiRequestParameters(
     @SerialName("image_format") val imageFormat: String = "png",
     /** Base64 source image for Swagger's img2img action. */
     val image: String? = null,
+    val mask: String? = null,
+    @SerialName("add_original_image") val addOriginalImage: Boolean? = null,
+    @SerialName("inpaintImg2ImgStrength") val inpaintImg2ImgStrength: Float? = null,
+    @SerialName("straight_alpha") val straightAlpha: Boolean? = null,
+    val stream: String? = null,
     val strength: Float? = null,
     val noise: Float? = null,
     @SerialName("reference_image_multiple") val referenceImages: List<String>? = null,

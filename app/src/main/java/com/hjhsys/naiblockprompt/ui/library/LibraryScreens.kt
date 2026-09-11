@@ -16,6 +16,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -27,7 +28,6 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
 import coil3.compose.AsyncImage
 import com.hjhsys.naiblockprompt.R
 import com.hjhsys.naiblockprompt.data.library.*
@@ -37,17 +37,26 @@ import com.hjhsys.naiblockprompt.ui.MainViewModel
 import com.hjhsys.naiblockprompt.ui.RestoreOptions
 import com.hjhsys.naiblockprompt.ui.components.AppTitleBar
 import com.hjhsys.naiblockprompt.ui.components.AppTitleMenuItem
+import com.hjhsys.naiblockprompt.ui.components.quotaStatusText
+import com.hjhsys.naiblockprompt.ui.generate.compactModelName
+import com.hjhsys.naiblockprompt.ui.components.ImageCardActions
+import com.hjhsys.naiblockprompt.ui.components.ImageViewer
+import com.hjhsys.naiblockprompt.domain.editor.BaseSetImportSelection
 import com.hjhsys.naiblockprompt.domain.editor.PromptOwner
+import com.hjhsys.naiblockprompt.domain.generation.SeedSelection
 import com.hjhsys.naiblockprompt.domain.model.SavedSetKind
 import java.io.File
-import android.net.Uri
 import java.text.DateFormat
 import java.util.Date
 import kotlinx.coroutines.launch
 
 @Composable
-fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, isActive: Boolean = true, onOpenResult: () -> Unit, onRestored: () -> Unit) {
+fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, isActive: Boolean = true, onRestored: () -> Unit, headerTokenSummary: String? = null) {
     val history by viewModel.history.collectAsState()
+    val subscriptionStatus by viewModel.subscriptionStatus.collectAsState()
+    val session by viewModel.session.collectAsState()
+    val modelSummary = compactModelName(session?.generationSettings?.modelId)
+    val seedSummary = session?.let { stringResource(if (it.generationSettings.seedMode == com.hjhsys.naiblockprompt.domain.model.SeedMode.RANDOM) R.string.seed_status_random else R.string.seed_status_fixed) }
     var favoritesOnly by rememberSaveable { mutableStateOf(false) }
     val retainedUnfavorites = remember { mutableStateListOf<String>() }
     LaunchedEffect(isActive) {
@@ -57,18 +66,18 @@ fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, isActive
         }
     }
     var restore by remember { mutableStateOf<HistoryItem?>(null) }
-    var original by remember { mutableStateOf<HistoryItem?>(null) }
+    var viewerReference by remember { mutableStateOf<String?>(null) }
+    var actionImage by remember { mutableStateOf<HistoryItem?>(null) }
+    actionImage?.let { item -> com.hjhsys.naiblockprompt.ui.components.ImageActionsDialog(item.entity.imagePath, viewModel) { actionImage = null } }
     restore?.let { item -> RestoreDialog(item, { restore = null }) { options -> viewModel.restoreHistory(item, options); restore = null; onRestored() } }
-    original?.takeIf { it.originalExists }?.let { item ->
-        Dialog(onDismissRequest = { original = null }) {
-            Surface(shape = MaterialTheme.shapes.large) {
-                AsyncImage(historyImageModel(item.entity.imagePath), stringResource(R.string.generated_image), Modifier.fillMaxWidth().fillMaxHeight(.9f).clickable { original = null }, contentScale = ContentScale.Fit)
-            }
-        }
-    }
-    Scaffold(topBar = { AppTitleBar(
+    viewerReference?.let { reference -> ImageViewer(reference) { viewerReference = null } }
+    Scaffold(contentWindowInsets = WindowInsets(0, 0, 0, 0), topBar = { AppTitleBar(
         R.string.history_title,
-        directAction = AppTitleMenuItem(R.string.workspace_result, Icons.Default.Image, onClick = onOpenResult),
+        menuItems = listOf(AppTitleMenuItem(R.string.nav_settings, Icons.Default.Settings, onClick = onOpenSettings)),
+        subtitle = seedSummary?.let { stringResource(R.string.generate_status_summary, modelSummary, it) },
+        onSubtitleClick = if (session == null) null else viewModel::toggleSeedMode,
+        trailingOverline = headerTokenSummary,
+        trailingSubtitle = quotaStatusText(subscriptionStatus),
     ) }) { padding ->
     LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
@@ -85,53 +94,85 @@ fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, isActive
         val visibleHistory = if (favoritesOnly) history.filter { it.entity.favorite || it.entity.id in retainedUnfavorites } else history
         if (visibleHistory.isEmpty()) item { Text(stringResource(if (favoritesOnly) R.string.history_favorites_empty else R.string.history_empty)) }
         items(visibleHistory, key = { it.entity.id }) { item ->
+            val actualSeed = item.snapshot?.generation?.usedSeed?.takeIf(SeedSelection::isValid)
             ElevatedCard(Modifier.fillMaxWidth()) {
-                Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    AsyncImage(File(item.entity.thumbnailPath), stringResource(R.string.generated_image), Modifier.size(104.dp).clickable(enabled = item.originalExists) { original = item }, contentScale = ContentScale.Crop)
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(item.entity.model ?: "-", maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(item.entity.createdAt)), style = MaterialTheme.typography.bodySmall)
-                        item.snapshot?.generation?.let { Text(stringResource(R.string.used_seed, it.usedSeed), style = MaterialTheme.typography.bodySmall) }
-                        if (!item.originalExists) Text(stringResource(R.string.original_missing), color = MaterialTheme.colorScheme.error)
-                        Row {
-                            IconButton(onClick = {
-                                val favorite = !item.entity.favorite
-                                if (!favorite && favoritesOnly) retainedUnfavorites.add(item.entity.id) else retainedUnfavorites.remove(item.entity.id)
-                                viewModel.setHistoryFavorite(item.entity, favorite)
-                            }) {
-                                Icon(
-                                    if (item.entity.favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                                    stringResource(if (item.entity.favorite) R.string.remove_favorite else R.string.add_favorite),
-                                    tint = if (item.entity.favorite) MaterialTheme.colorScheme.primary else LocalContentColor.current,
-                                )
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        AsyncImage(File(item.entity.thumbnailPath), stringResource(R.string.generated_image), Modifier.size(104.dp).clickable(enabled = item.originalExists) {
+                            viewModel.selectImageSeed(actualSeed)
+                            viewerReference = item.entity.imagePath
+                        }, contentScale = ContentScale.Crop)
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(item.entity.model ?: "-", Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                IconButton(onClick = {
+                                    val favorite = !item.entity.favorite
+                                    if (!favorite && favoritesOnly) retainedUnfavorites.add(item.entity.id) else retainedUnfavorites.remove(item.entity.id)
+                                    viewModel.setHistoryFavorite(item.entity, favorite)
+                                }) {
+                                    Icon(
+                                        if (item.entity.favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                                        stringResource(if (item.entity.favorite) R.string.remove_favorite else R.string.add_favorite),
+                                        tint = if (item.entity.favorite) MaterialTheme.colorScheme.primary else LocalContentColor.current,
+                                    )
+                                }
                             }
-                            TextButton(onClick = { restore = item }) { Text(stringResource(R.string.load)) }
-                            IconButton(onClick = { viewModel.deleteHistory(item.entity) }) { Icon(Icons.Default.Delete, stringResource(R.string.delete)) }
+                            Text(DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(item.entity.createdAt)), style = MaterialTheme.typography.bodySmall)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                item.snapshot?.generation?.let {
+                                    Text(stringResource(R.string.used_seed, it.usedSeed), Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                                }
+                                IconButton(onClick = { viewModel.deleteHistory(item.entity) }) {
+                                    Icon(Icons.Default.Delete, stringResource(R.string.delete), tint = MaterialTheme.colorScheme.error)
+                                }
+                            }
+                            if (!item.originalExists) Text(stringResource(R.string.original_missing), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                         }
                     }
+                    ImageCardActions(
+                        imageActionsEnabled = item.originalExists,
+                        informationEnabled = true,
+                        onImageActions = {
+                            viewModel.selectImageSeed(actualSeed)
+                            actionImage = item
+                        },
+                        onImportInformation = { restore = item },
+                        seedEnabled = actualSeed != null,
+                        onApplySeed = { actualSeed?.let(viewModel::applyHistorySeed) },
+                    )
                 }
             }
         }
     } }
 }
 
-private fun historyImageModel(reference: String): Any =
-    if (reference.startsWith("content://")) Uri.parse(reference) else File(reference)
-
 @Composable
-private fun RestoreDialog(item: HistoryItem, dismiss: () -> Unit, confirm: (RestoreOptions) -> Unit) {
-    var settings by rememberSaveable { mutableStateOf(true) }; var base by rememberSaveable { mutableStateOf(true) }
+internal fun RestoreDialog(item: HistoryItem, dismiss: () -> Unit, confirm: (RestoreOptions) -> Unit) {
+    var settings by rememberSaveable { mutableStateOf(true) }
+    var basePositive by rememberSaveable { mutableStateOf(true) }
+    var baseNegative by rememberSaveable { mutableStateOf(true) }
     var characters by rememberSaveable { mutableStateOf(true) }; var seed by rememberSaveable { mutableStateOf(true) }
     var inputImage by rememberSaveable { mutableStateOf(false) }
+    var wildcardOriginal by rememberSaveable { mutableStateOf(true) }
+    val hasWildcard = item.snapshot?.session?.let { snapshot ->
+        (snapshot.base.prompts.positiveBlocks + snapshot.base.prompts.negativeBlocks + snapshot.characters.flatMap { it.prompts.positiveBlocks + it.prompts.negativeBlocks }).any { "__" in it.content }
+    } == true
     AlertDialog(onDismissRequest = dismiss, title = { Text(stringResource(R.string.load_from_history)) }, text = {
         Column {
             Text(stringResource(R.string.restore_stash_notice))
-            CheckRow(R.string.restore_settings, settings) { settings = it }; CheckRow(R.string.restore_base, base) { base = it }
+            CheckRow(R.string.restore_settings, settings) { settings = it }
+            Text(stringResource(R.string.restore_base), style = MaterialTheme.typography.titleSmall)
+            Column(Modifier.padding(start = 16.dp)) {
+                CheckRow(R.string.restore_base_positive, basePositive) { basePositive = it }
+                CheckRow(R.string.restore_base_negative, baseNegative) { baseNegative = it }
+            }
             CheckRow(R.string.restore_characters, characters) { characters = it }; CheckRow(R.string.restore_seed, seed) { seed = it }
+            if (hasWildcard) CheckRow(R.string.restore_wildcard_original, wildcardOriginal) { wildcardOriginal = it }
             if (item.snapshot?.session?.generationSettings?.imageInput != null) {
                 val input = item.snapshot.session.generationSettings.imageInput
                 val label = stringResource(when (input?.mode) {
                     com.hjhsys.naiblockprompt.domain.model.ImageInputMode.VIBE_TRANSFER -> R.string.restore_vibe_reference
+                    com.hjhsys.naiblockprompt.domain.model.ImageInputMode.INPAINT -> R.string.inpaint_restore
                     com.hjhsys.naiblockprompt.domain.model.ImageInputMode.PRECISE_REFERENCE -> R.string.restore_precise_reference
                     else -> R.string.restore_image_to_image_input
                 })
@@ -139,7 +180,15 @@ private fun RestoreDialog(item: HistoryItem, dismiss: () -> Unit, confirm: (Rest
                 else Text(stringResource(R.string.restore_input_image_missing_warning), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
         }
-    }, confirmButton = { Button(onClick = { confirm(RestoreOptions(settings, base, characters, seed, inputImage)) }, enabled = item.snapshot != null) { Text(stringResource(R.string.load)) } }, dismissButton = { TextButton(onClick = dismiss) { Text(stringResource(R.string.cancel)) } })
+    }, confirmButton = { Button(onClick = { confirm(RestoreOptions(
+        settings = settings,
+        basePositive = basePositive,
+        baseNegative = baseNegative,
+        characters = characters,
+        seed = seed,
+        inputImage = inputImage,
+        wildcardOriginal = wildcardOriginal,
+    )) }, enabled = item.snapshot != null) { Text(stringResource(R.string.load)) } }, dismissButton = { TextButton(onClick = dismiss) { Text(stringResource(R.string.cancel)) } })
 }
 
 @Composable private fun CheckRow(label: Int, checked: Boolean, change: (Boolean) -> Unit) = CheckRow(stringResource(label), checked, change)
@@ -170,17 +219,78 @@ fun SavedScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onWorkflow
     var movingPreset by remember { mutableStateOf<com.hjhsys.naiblockprompt.data.local.entity.PresetEntity?>(null) }
     var movingSet by remember { mutableStateOf<com.hjhsys.naiblockprompt.data.local.entity.SavedSetEntity?>(null) }
     var deletingFolder by remember { mutableStateOf<SavedFolderEntity?>(null) }
+    var baseSetToLoad by remember { mutableStateOf<SavedSetItem?>(null) }
+    var loadBasePositive by rememberSaveable { mutableStateOf(true) }
+    var loadBaseNegative by rememberSaveable { mutableStateOf(true) }
+    baseSetToLoad?.let { item ->
+        AlertDialog(
+            onDismissRequest = { baseSetToLoad = null },
+            title = { Text(stringResource(R.string.load_set)) },
+            text = {
+                Column {
+                    CheckRow(R.string.positive, loadBasePositive) { loadBasePositive = it }
+                    CheckRow(R.string.negative, loadBaseNegative) { loadBaseNegative = it }
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = loadBasePositive || loadBaseNegative,
+                    onClick = {
+                        viewModel.finishSetLoad(
+                            item,
+                            BaseSetImportSelection(loadBasePositive, loadBaseNegative),
+                        )
+                        baseSetToLoad = null
+                        onWorkflowFinished()
+                    },
+                ) { Text(stringResource(R.string.load)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { baseSetToLoad = null }) { Text(stringResource(R.string.cancel)) }
+            },
+        )
+    }
     if (folderDialog) NameDialog(R.string.new_folder, { folderDialog = false }) { viewModel.createFolder(it); folderDialog = false }
     if (folderSelector) AlertDialog(
         onDismissRequest = { folderSelector = false },
         title = { Text(stringResource(R.string.select_folder_filter)) },
         text = {
             LazyColumn(Modifier.heightIn(max = 420.dp)) {
-                item { TextButton(onClick = { folderFilter = "ALL"; folderSelector = false }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.all_folders)) } }
-                item { TextButton(onClick = { folderFilter = "NONE"; folderSelector = false }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.no_folder)) } }
+                item {
+                    ListItem(
+                        headlineContent = { Text(stringResource(R.string.all_folders)) },
+                        leadingContent = { Icon(Icons.Default.Home, null) },
+                        trailingContent = { if (folderFilter == "ALL") Icon(Icons.Default.Check, null) },
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                        modifier = Modifier.clickable { folderFilter = "ALL"; folderSelector = false },
+                    )
+                }
+                item {
+                    ListItem(
+                        headlineContent = { Text(stringResource(when (tab) { 0 -> R.string.library_root_blocks; 1 -> R.string.library_root_sets; else -> R.string.library_root_presets })) },
+                        leadingContent = { Icon(Icons.Default.Folder, null) },
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                        modifier = Modifier.clickable { folderFilter = "ALL"; folderSelector = false },
+                    )
+                }
+                item {
+                    ListItem(
+                        headlineContent = { Text(stringResource(R.string.no_folder)) },
+                        leadingContent = { Icon(Icons.Default.SubdirectoryArrowRight, null) },
+                        trailingContent = { if (folderFilter == "NONE") Icon(Icons.Default.Check, null) },
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                        modifier = Modifier.padding(start = 24.dp).clickable { folderFilter = "NONE"; folderSelector = false },
+                    )
+                }
                 items(folders, key = { it.id }) { folder ->
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        TextButton(onClick = { folderFilter = folder.id; folderSelector = false }, modifier = Modifier.weight(1f)) { Text(folder.name, modifier = Modifier.fillMaxWidth()) }
+                    Row(Modifier.fillMaxWidth().padding(start = 24.dp), verticalAlignment = Alignment.CenterVertically) {
+                        ListItem(
+                            headlineContent = { Text(folder.name) },
+                            leadingContent = { Icon(Icons.Default.SubdirectoryArrowRight, null) },
+                            trailingContent = { if (folderFilter == folder.id) Icon(Icons.Default.Check, null) },
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                            modifier = Modifier.weight(1f).clickable { folderFilter = folder.id; folderSelector = false },
+                        )
                         IconButton(onClick = { folderSelector = false; deletingFolder = folder }) { Icon(Icons.Default.DeleteOutline, stringResource(R.string.delete)) }
                     }
                 }
@@ -255,17 +365,27 @@ fun SavedScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onWorkflow
         }
         HorizontalPager(state = pagerState, modifier = Modifier.weight(1f), userScrollEnabled = workflow == null) { page ->
         if (page == 0) {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 val filtered = blocks.filter { (search.isBlank() || it.name.contains(search, true) || (searchScope == SavedSearchScope.INCLUDE_CONTENT && it.content.contains(search, true))) && (folderFilter == "ALL" || (folderFilter == "NONE" && it.folderId == null) || it.folderId == folderFilter) }
                 if (filtered.isEmpty()) item { Text(stringResource(R.string.saved_empty)) }
                 items(filtered, key = { it.id }) { block -> ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp)) { Text(block.name, style = MaterialTheme.typography.titleMedium); Text(block.content.ifBlank { stringResource(R.string.empty_prompt) }, maxLines = 3, overflow = TextOverflow.Ellipsis); Row { if (workflow is com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadBlock) Button(onClick = { viewModel.finishBlockLoad(block); onWorkflowFinished() }) { Text(stringResource(R.string.load)) } else TextButton(onClick = { viewModel.addSavedBlockToBase(block) }) { Text(stringResource(R.string.add_to_base)) }; TextButton(onClick = { movingBlock = block }) { Text(folders.firstOrNull { it.id == block.folderId }?.name ?: stringResource(R.string.no_folder)) }; IconButton(onClick = { viewModel.deleteSavedBlock(block) }) { Icon(Icons.Default.Delete, stringResource(R.string.delete)) } } } } }
             }
-        } else if (page == 1) LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            val kind = (workflow as? com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadSet)?.owner?.let { if (it is PromptOwner.Base) SavedSetKind.BASE else SavedSetKind.CHARACTER }
+        } else if (page == 1) LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            val activeLoad = workflow as? com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadSet
+            val kind = activeLoad?.owner?.let { if (it is PromptOwner.Base) SavedSetKind.BASE else SavedSetKind.CHARACTER }
             val filtered = sets.filter { item -> (kind == null || item.set?.kind == kind) && (search.isBlank() || item.entity.name.contains(search, true) || (searchScope == SavedSearchScope.INCLUDE_CONTENT && (item.set?.prompts?.allBlocks()?.any { it.name.contains(search, true) || it.content.contains(search, true) } == true || item.set?.textRendering?.content?.contains(search, true) == true))) && (folderFilter == "ALL" || (folderFilter == "NONE" && item.entity.folderId == null) || item.entity.folderId == folderFilter) }
             if (filtered.isEmpty()) item { Text(stringResource(R.string.saved_empty)) }
-            items(filtered, key = { it.entity.id }) { set -> ElevatedCard(Modifier.fillMaxWidth()) { Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(set.entity.name); Text(set.entity.kind, style = MaterialTheme.typography.bodySmall) }; if (workflow is com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadSet) Button(onClick = { viewModel.finishSetLoad(set); onWorkflowFinished() }) { Text(stringResource(R.string.load)) }; TextButton(onClick = { movingSet = set.entity }) { Text(folders.firstOrNull { it.id == set.entity.folderId }?.name ?: stringResource(R.string.no_folder)) }; IconButton(onClick = { viewModel.deleteSavedSet(set.entity) }) { Icon(Icons.Default.Delete, stringResource(R.string.delete)) } } } }
-        } else LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(filtered, key = { it.entity.id }) { set -> ElevatedCard(Modifier.fillMaxWidth()) { Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(set.entity.name); Text(set.entity.kind, style = MaterialTheme.typography.bodySmall) }; if (activeLoad != null) Button(onClick = {
+                if (activeLoad.owner is PromptOwner.Base) {
+                    loadBasePositive = true
+                    loadBaseNegative = true
+                    baseSetToLoad = set
+                } else {
+                    viewModel.finishSetLoad(set)
+                    onWorkflowFinished()
+                }
+            }) { Text(stringResource(R.string.load)) }; TextButton(onClick = { movingSet = set.entity }) { Text(folders.firstOrNull { it.id == set.entity.folderId }?.name ?: stringResource(R.string.no_folder)) }; IconButton(onClick = { viewModel.deleteSavedSet(set.entity) }) { Icon(Icons.Default.Delete, stringResource(R.string.delete)) } } } }
+        } else LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (presets.isEmpty()) item { Text(stringResource(R.string.saved_empty)) }
             items(presets.filter { item -> (search.isBlank() || item.entity.name.contains(search, true) || (searchScope == SavedSearchScope.INCLUDE_CONTENT && item.session?.containsPromptText(search) == true)) && (folderFilter == "ALL" || (folderFilter == "NONE" && item.entity.folderId == null) || item.entity.folderId == folderFilter) }, key = { it.entity.id }) { preset -> ElevatedCard(Modifier.fillMaxWidth()) { Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(preset.entity.name, style = MaterialTheme.typography.titleMedium); Text(preset.session?.generationSettings?.modelId ?: "-", style = MaterialTheme.typography.bodySmall) }; if (workflow == com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadPreset) Button(onClick = { viewModel.restorePreset(preset); viewModel.cancelSavedWorkflow(); onWorkflowFinished() }, enabled = preset.session != null) { Text(stringResource(R.string.load)) }; TextButton(onClick = { movingPreset = preset.entity }) { Text(folders.firstOrNull { it.id == preset.entity.folderId }?.name ?: stringResource(R.string.no_folder)) }; IconButton(onClick = { viewModel.deletePreset(preset.entity) }) { Icon(Icons.Default.Delete, stringResource(R.string.delete)) } } } }
         }

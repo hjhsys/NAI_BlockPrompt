@@ -3,7 +3,28 @@ package com.hjhsys.naiblockprompt.data.network.nai
 import com.hjhsys.naiblockprompt.data.network.nai.dto.*
 import kotlinx.serialization.Serializable
 
-data class GeneratedImagePayload(val bytes: ByteArray, val seed: Long?)
+data class GeneratedImagePayload(
+    val bytes: ByteArray,
+    val seed: Long?,
+    val streamDiagnostics: NaiImageStreamDiagnostics? = null,
+)
+
+/** Debug-only evidence attached in memory until the repository exports it. */
+data class NaiImageStreamDiagnostics(
+    val rawResponse: ByteArray,
+    val frames: List<NaiImageStreamFrame>,
+    val selectedFrameIndex: Int?,
+)
+
+data class NaiImageStreamFrame(
+    val index: Int,
+    val eventType: String?,
+    val stepIndex: Long?,
+    val sampleIndex: Long?,
+    val generationId: Long?,
+    val keys: List<String>,
+    val image: ByteArray?,
+)
 
 /** Values exposed by NovelAI's official /user/subscription response. */
 @Serializable

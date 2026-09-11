@@ -1,8 +1,9 @@
 # NAI_BlockPrompt Development Instructions
 
 ## Source of truth
-- Read `docs/NAI_APP_NOTES.md` completely before making architectural or functional decisions.
-- `docs/NAI_APP_NOTES.md` is the authoritative functional specification.
+- Read the latest [Main Project Document](https://docs.google.com/document/d/1MaEP_W8AMXoTPj6aB5DGFnceK7fdPrv9UUyQhv4WPts/edit?usp=sharing) before making architectural or functional decisions.
+- The Google Doc is the authoritative functional specification and single source of truth.
+- `docs/NAI_APP_NOTES.md` is a local snapshot for offline reference. If it conflicts with the Google Doc, follow the Google Doc.
 - Do not silently remove, simplify, or reinterpret documented requirements.
 - If implementation details are unspecified, choose a reasonable Android-native solution and document the choice.
 

@@ -16,6 +16,20 @@ object NaiGenerationCatalog {
 
     fun parameterVersion(modelId: String): Int = if (modelId.startsWith("nai-diffusion-5-")) 4 else 3
 
+    fun supportsSelectableNoiseSchedule(modelId: String?): Boolean =
+        modelId?.startsWith("nai-diffusion-4-5-") == true
+
+    fun requestNoiseSchedule(modelId: String, selected: String): String =
+        if (supportsSelectableNoiseSchedule(modelId) && noiseSchedules.any { it.apiId == selected }) selected else DEFAULT_NOISE_SCHEDULE
+
+    const val DEFAULT_NOISE_SCHEDULE = "karras"
+
+    val noiseSchedules = listOf(
+        NaiCatalogOption("karras", "Karras"),
+        NaiCatalogOption("exponential", "Exponential"),
+        NaiCatalogOption("polyexponential", "Polyexponential"),
+    )
+
     val samplers = listOf(
         NaiCatalogOption("k_dpmpp_2m", "DPM++ 2M"),
         NaiCatalogOption("k_euler_ancestral", "Euler Ancestral"),

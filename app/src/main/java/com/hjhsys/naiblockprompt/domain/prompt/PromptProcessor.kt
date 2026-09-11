@@ -135,14 +135,26 @@ object PromptProcessor {
         .map { stripComments(it.content).trim() }
         .filter { it.isNotEmpty() }
         .map { if (normalizeWeightClosings) normalizeWeightClosings(it) else it }
-        .joinToString(" ") { if (it.endsWith(',')) it else "$it," }
+        .joinToString("\n\n") { if (it.endsWith(',')) it else "$it," }
 
     /** Appends the dedicated literal Text Rendering clause after all regular blocks. */
     fun appendTextRendering(prompt: String, textRendering: TextRenderingState): String {
         if (!textRendering.enabled || textRendering.content.isBlank()) return prompt
-        val clause = "Text: ${textRendering.content.trim()}"
-        return prompt.trimEnd().let { if (it.isEmpty()) clause else "$it\n$clause" }
+        val clauses = listOfNotNull(
+            textRendering.description.trim().takeIf(String::isNotEmpty),
+            "Text: ${textRendering.content.trim()}",
+        ).joinToString("\n")
+        return prompt.trimEnd().let { if (it.isEmpty()) clauses else "$it\n$clauses" }
     }
+
+    /**
+     * Canonical cleanup shared by generation and informational token estimates.
+     * NovelAI documents removal of empty comma-separated prompt elements. Whitespace is
+     * intentionally left untouched because V4+ prompting is whitespace-sensitive.
+     */
+    fun cleanupExtraCommas(input: String): String = input
+        .replace(Regex(",(?:\\s*,)+"), ",")
+        .replace(Regex("^\\s*,+\\s*"), "")
 
     private fun delimiterPositionsOutsideComments(input: String): List<Int> {
         val positions = mutableListOf<Int>()

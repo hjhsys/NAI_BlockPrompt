@@ -64,6 +64,17 @@ class GeneratedImageStore(private val context: Context) {
         }.getOrDefault(false)
     } else File(reference).isFile
 
+    fun sizeBytes(reference: String): Long? = if (reference.startsWith("content://")) {
+        runCatching {
+            context.contentResolver.openAssetFileDescriptor(Uri.parse(reference), "r")?.use { descriptor ->
+                descriptor.length.takeIf { it >= 0L }
+                    ?: descriptor.parcelFileDescriptor.statSize.takeIf { it >= 0L }
+            }
+        }.getOrNull()
+    } else {
+        File(reference).takeIf(File::isFile)?.length()?.takeIf { it > 0L }
+    }
+
     fun delete(reference: String): Boolean = if (reference.startsWith("content://")) {
         runCatching { context.contentResolver.delete(Uri.parse(reference), null, null) > 0 }.getOrDefault(false)
     } else File(reference).delete()

@@ -1,11 +1,13 @@
 package com.hjhsys.naiblockprompt.ui.generate
 
+import android.util.Log
 import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
@@ -23,7 +25,15 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.window.DialogProperties
+import kotlin.math.atan2
+import kotlin.math.PI
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
@@ -43,23 +53,35 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.focus.onFocusChanged
 import com.hjhsys.naiblockprompt.R
+import com.hjhsys.naiblockprompt.BuildConfig
 import com.hjhsys.naiblockprompt.domain.editor.*
 import com.hjhsys.naiblockprompt.domain.model.*
 import com.hjhsys.naiblockprompt.domain.prompt.PromptProcessor
+import com.hjhsys.naiblockprompt.domain.prompt.PromptTokenEstimator
+import com.hjhsys.naiblockprompt.domain.prompt.TokenRange
 import com.hjhsys.naiblockprompt.ui.MainViewModel
 import com.hjhsys.naiblockprompt.ui.GenerationUiState
-import com.hjhsys.naiblockprompt.ui.SubscriptionUiState
 import com.hjhsys.naiblockprompt.ui.components.AppTitleBar
 import com.hjhsys.naiblockprompt.ui.components.AppTitleMenuItem
+import com.hjhsys.naiblockprompt.ui.components.NumericSlider
+import com.hjhsys.naiblockprompt.ui.components.NumericSliderSpec
+import com.hjhsys.naiblockprompt.ui.components.NumericValueEditor
+import com.hjhsys.naiblockprompt.ui.components.HelpAffordance
+import com.hjhsys.naiblockprompt.ui.components.quotaStatusText
+import com.hjhsys.naiblockprompt.ui.components.ImageCardActions
+import com.hjhsys.naiblockprompt.ui.components.ImageViewer
 import com.hjhsys.naiblockprompt.data.network.nai.NaiApiFailure
 import com.hjhsys.naiblockprompt.domain.generation.MissingGenerationField
 import com.hjhsys.naiblockprompt.domain.generation.NaiCatalogOption
 import com.hjhsys.naiblockprompt.domain.generation.NaiGenerationCatalog
 import com.hjhsys.naiblockprompt.domain.generation.CharacterPositioning
+import com.hjhsys.naiblockprompt.domain.generation.VibeTransferRequestMapper
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import androidx.compose.ui.layout.ContentScale
 import java.io.File
+import java.text.DateFormat
+import java.util.Date
 import android.net.Uri
 import androidx.compose.ui.window.Dialog
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -69,7 +91,9 @@ import com.hjhsys.naiblockprompt.domain.image.NaiPngMetadataParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.hjhsys.naiblockprompt.domain.autocomplete.PromptAutocomplete
+import com.hjhsys.naiblockprompt.domain.autocomplete.PromptFragment
 import com.hjhsys.naiblockprompt.domain.autocomplete.TagSuggestion
+import com.hjhsys.naiblockprompt.ui.library.RestoreDialog
 
 @Composable
 fun GenerateScreen(
@@ -79,6 +103,7 @@ fun GenerateScreen(
     onOpenSettings: () -> Unit,
     onOpenGenerationSettings: () -> Unit,
     onOpenTagDatabase: () -> Unit,
+    headerTokenSummary: String?,
 ) {
     if (session == null) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -96,11 +121,33 @@ fun GenerateScreen(
     val duplicateWarning by viewModel.duplicateWarning.collectAsStateWithLifecycle()
     var showCharacterTypeDialog by rememberSaveable { mutableStateOf(false) }
     val hasStash by viewModel.hasStash.collectAsStateWithLifecycle()
+    val loadUiRevision by viewModel.loadUiRevision.collectAsStateWithLifecycle()
     val subscriptionStatus by viewModel.subscriptionStatus.collectAsStateWithLifecycle()
+    val wildcardItems by viewModel.wildcards.collectAsStateWithLifecycle()
     val modelSummary = compactModelName(session.generationSettings.modelId)
     val seedSummary = stringResource(if (session.generationSettings.seedMode == SeedMode.RANDOM) R.string.seed_status_random else R.string.seed_status_fixed)
+    val wildcardValues = remember(wildcardItems) {
+        wildcardItems.associate { it.name to it.valuesText.lines().filter(String::isNotBlank) }
+    }
+    fun sectionTokenRange(pair: PromptPair, textRendering: TextRenderingState): TokenRange =
+        PromptTokenEstimator.estimate(
+            if (appSettings.useTextRendering) PromptProcessor.appendTextRendering(
+                PromptProcessor.joinEnabledBlocks(pair.positiveBlocks, appSettings.normalizeWeightClosings),
+                textRendering,
+            ) else PromptProcessor.joinEnabledBlocks(pair.positiveBlocks, appSettings.normalizeWeightClosings),
+            wildcardValues,
+        )
+    val supportsT5Estimate = session.generationSettings.modelId?.contains("diffusion-4") == true
     var activeTagTarget by remember { mutableStateOf<TagEditorTarget?>(null) }
+    var colorTarget by remember { mutableStateOf<TagEditorTarget?>(null) }
+    var showColorHelper by rememberSaveable { mutableStateOf(false) }
     val promptListState = rememberLazyListState()
+    LaunchedEffect(loadUiRevision) {
+        if (loadUiRevision > 0) promptListState.scrollToItem(0)
+    }
+    var shortcutArea by remember { mutableStateOf(IntSize.Zero) }
+    var databasePosition by rememberSaveable { mutableStateOf(floatArrayOf(-1f, -1f)) }
+    var colorPosition by rememberSaveable { mutableStateOf(floatArrayOf(-1f, -1f)) }
     if (duplicateWarning) AlertDialog(
         onDismissRequest = viewModel::cancelDuplicateGeneration,
         title = { Text(stringResource(R.string.duplicate_generation_title)) },
@@ -118,13 +165,14 @@ fun GenerateScreen(
         )
     }
     Scaffold(
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
             AppTitleBar(
                 R.string.generate_title,
                 subtitle = stringResource(R.string.generate_status_summary, modelSummary, seedSummary),
-                trailingSubtitle = (subscriptionStatus as? SubscriptionUiState.Available)?.let { balance ->
-                    stringResource(R.string.balance_summary, balance.anlas?.toString() ?: "—", balance.opusPercent?.toString() ?: "—")
-                },
+                onSubtitleClick = viewModel::toggleSeedMode,
+                trailingOverline = headerTokenSummary,
+                trailingSubtitle = quotaStatusText(subscriptionStatus),
                 menuItems = listOf(
                     AppTitleMenuItem(R.string.load_preset, Icons.Default.FolderOpen, onClick = viewModel::beginPresetLoad),
                     AppTitleMenuItem(R.string.save_preset, Icons.Default.Save, onClick = viewModel::beginPresetSave),
@@ -133,24 +181,7 @@ fun GenerateScreen(
                 ),
             )
         },
-        bottomBar = {
-            Surface(shadowElevation = 8.dp) {
-                Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)) {
-                    Button(
-                        onClick = viewModel::generate,
-                        enabled = generationState !is GenerationUiState.Loading,
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                    ) {
-                        if (generationState is GenerationUiState.Loading) {
-                            CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
-                            Spacer(Modifier.width(8.dp))
-                        }
-                        Text(generateButtonLabel(generationState, session.generationSettings.imageInput))
-                    }
-                }
-            }
-        },
-    ) { innerPadding -> Box(Modifier.fillMaxSize().padding(innerPadding)) {
+    ) { innerPadding -> Box(Modifier.fillMaxSize().padding(innerPadding).onSizeChanged { shortcutArea = it }) {
       LazyColumn(
         state = promptListState,
         modifier = Modifier.fillMaxSize(),
@@ -165,6 +196,8 @@ fun GenerateScreen(
                 selectedPolarity = session.base.selectedPolarity,
                 textRendering = session.base.textRendering,
                 showFormatter = appSettings.showFormatterActions,
+                showTextRendering = appSettings.useTextRendering,
+                tokenRange = if (supportsT5Estimate && appSettings.showTokenEstimates) sectionTokenRange(session.base.prompts, session.base.textRendering) else null,
                 viewModel = viewModel,
                 onTagEditorState = { owner, polarity, blockId, focused, cursor ->
                     activeTagTarget = if (focused) TagEditorTarget(owner, polarity, blockId, cursor)
@@ -173,16 +206,21 @@ fun GenerateScreen(
             )
         }
         itemsIndexed(session.characters.sortedBy { it.order }, key = { _, item -> item.id }) { index, character ->
-            CharacterSectionCard(index, character, session.characters.size, appSettings.showFormatterActions, viewModel) { owner, polarity, blockId, focused, cursor ->
+            CharacterSectionCard(
+                index = index,
+                character = character,
+                count = session.characters.size,
+                showFormatter = appSettings.showFormatterActions,
+                showTextRendering = appSettings.useTextRendering,
+                tokenRange = if (supportsT5Estimate && appSettings.showTokenEstimates) sectionTokenRange(character.prompts, character.textRendering) else null,
+                viewModel = viewModel,
+            ) { owner, polarity, blockId, focused, cursor ->
                 activeTagTarget = if (focused) TagEditorTarget(owner, polarity, blockId, cursor)
                 else activeTagTarget?.takeUnless { it.blockId == blockId }
             }
         }
-        if (session.characters.isNotEmpty()) item {
-            CharacterPositioningButton(session, viewModel)
-        }
         item {
-            OutlinedButton(
+            FilledTonalButton(
                 onClick = { showCharacterTypeDialog = true },
                 modifier = Modifier.fillMaxWidth(),
             ) {
@@ -191,23 +229,306 @@ fun GenerateScreen(
                 Text(stringResource(R.string.add_character))
             }
         }
-        item { PromptPreviewCard(session, appSettings.normalizeWeightClosings) }
+        if (session.characters.isNotEmpty()) item {
+            CharacterPositioningButton(session, viewModel)
+        }
         item {
             Text(stringResource(R.string.not_official_notice), style = MaterialTheme.typography.bodySmall)
         }
       }
       PromptScrollIndicator(promptListState, Modifier.align(Alignment.CenterEnd))
       activeTagTarget?.let { target ->
-          SmallFloatingActionButton(
+          DraggablePromptShortcut(
+              area = shortcutArea, position = databasePosition, defaultOffset = 72,
+              onPositionChange = { databasePosition = it },
               onClick = {
                   viewModel.beginTagInsert(target.owner, target.polarity, target.blockId, target.cursor)
                   onOpenTagDatabase()
               },
-              modifier = Modifier.align(Alignment.CenterEnd).offset(y = 72.dp).padding(end = 14.dp),
-              containerColor = MaterialTheme.colorScheme.secondaryContainer,
           ) { Icon(Icons.Default.Storage, stringResource(R.string.open_tag_dictionary)) }
       }
+      val colorShortcutVisible = when (appSettings.colorHelperMode) {
+          ColorHelperMode.ALWAYS -> true
+          ColorHelperMode.WHILE_EDITING -> activeTagTarget != null
+          ColorHelperMode.OFF -> false
+      }
+      if (colorShortcutVisible) {
+          DraggablePromptShortcut(
+              area = shortcutArea, position = colorPosition, defaultOffset = 132,
+              onPositionChange = { colorPosition = it },
+              onClick = { colorTarget = activeTagTarget; showColorHelper = true },
+          ) { Icon(Icons.Default.Palette, stringResource(R.string.color_helper)) }
+      }
+      if (showColorHelper) {
+          ColorHelperSheet(
+              settings = appSettings,
+              canInsert = colorTarget != null,
+              onDismiss = { showColorHelper = false },
+              onFavorite = viewModel::toggleFavoriteColor,
+              onUsed = viewModel::recordRecentColor,
+              onInsert = { hex ->
+                  colorTarget?.let { viewModel.insertColor(it.owner, it.polarity, it.blockId, it.cursor, hex) }
+                  showColorHelper = false
+              },
+          )
+      }
     } }
+}
+
+@Composable
+private fun DraggablePromptShortcut(
+    area: IntSize,
+    position: FloatArray,
+    defaultOffset: Int,
+    onPositionChange: (FloatArray) -> Unit,
+    onClick: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val buttonSize = with(density) { 48.dp.toPx() }
+    val maxX = (area.width - buttonSize).coerceAtLeast(0f)
+    val maxY = (area.height - buttonSize).coerceAtLeast(0f)
+    val defaultX = (maxX - with(density) { 14.dp.toPx() }).coerceIn(0f, maxX)
+    val defaultY = (maxY / 2f + with(density) { defaultOffset.dp.toPx() }).coerceIn(0f, maxY)
+    val x = if (position[0] < 0f) defaultX else position[0] * maxX
+    val y = if (position[1] < 0f) defaultY else position[1] * maxY
+    val latestOrigin by rememberUpdatedState(Offset(x, y))
+    SmallFloatingActionButton(
+        onClick = onClick,
+        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+        modifier = Modifier.offset { androidx.compose.ui.unit.IntOffset(x.toInt(), y.toInt()) }
+            .size(48.dp)
+            .pointerInput(maxX, maxY) {
+                var dragged = Offset.Zero
+                detectDragGestures(
+                    onDragStart = { dragged = latestOrigin },
+                    onDrag = { change, amount ->
+                        change.consume()
+                        dragged = Offset((dragged.x + amount.x).coerceIn(0f, maxX), (dragged.y + amount.y).coerceIn(0f, maxY))
+                        onPositionChange(floatArrayOf(if (maxX > 0) dragged.x / maxX else 0f, if (maxY > 0) dragged.y / maxY else 0f))
+                    },
+                )
+            },
+        content = content,
+    )
+}
+
+@Composable
+private fun ColorHelperSheet(
+    settings: AppSettings,
+    canInsert: Boolean,
+    onDismiss: () -> Unit,
+    onFavorite: (String) -> Unit,
+    onUsed: (String) -> Unit,
+    onInsert: (String) -> Unit,
+) {
+    var hue by rememberSaveable { mutableFloatStateOf(330f) }
+    var saturation by rememberSaveable { mutableFloatStateOf(0.35f) }
+    var value by rememberSaveable { mutableFloatStateOf(0.9f) }
+    var hexInput by rememberSaveable { mutableStateOf("#E8A9C3") }
+    var invalidHex by rememberSaveable { mutableStateOf(false) }
+    var showFavoriteList by rememberSaveable { mutableStateOf(false) }
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+    fun currentHex(): String = String.format("#%06X", android.graphics.Color.HSVToColor(floatArrayOf(hue, saturation, value)) and 0xFFFFFF)
+    fun syncHex() { hexInput = currentHex(); invalidHex = false }
+    fun applyHex(raw: String) {
+        hexInput = raw
+        val normalized = raw.removePrefix("#").let { if (it.length == 3) it.map { c -> "$c$c" }.joinToString("") else it }
+        val rgb = normalized.takeIf { it.length == 6 && it.all { character -> character.digitToIntOrNull(16) != null } }?.toIntOrNull(16)
+        if (rgb == null) invalidHex = true else {
+            val hsv = FloatArray(3)
+            android.graphics.Color.colorToHSV(0xFF000000.toInt() or rgb, hsv)
+            hue = hsv[0]; saturation = hsv[1]; value = hsv[2]; hexInput = "#${normalized.uppercase()}"; invalidHex = false
+        }
+    }
+    if (showFavoriteList) FavoriteColorDialog(
+        colors = settings.favoriteColors,
+        usage = settings.favoriteColorUsage,
+        addedAt = settings.favoriteColorAddedAt,
+        onSelect = { applyHex(it); showFavoriteList = false },
+        onDismiss = { showFavoriteList = false },
+    )
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = true)) {
+        Surface(
+            modifier = Modifier.fillMaxWidth().heightIn(max = 720.dp),
+            shape = MaterialTheme.shapes.extraLarge,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            tonalElevation = 6.dp,
+        ) {
+          Column(
+            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+          ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.color_picker), style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                IconButton(onClick = { showFavoriteList = true }) {
+                    Icon(Icons.Default.Star, stringResource(R.string.color_favorites), tint = MaterialTheme.colorScheme.primary)
+                }
+            }
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                ColorWheelSvPicker(hue, saturation, value) { h, s, v -> hue = h; saturation = s; value = v; syncHex() }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Surface(Modifier.size(52.dp), shape = MaterialTheme.shapes.medium, color = Color(android.graphics.Color.HSVToColor(floatArrayOf(hue, saturation, value))), border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline)) {}
+                OutlinedTextField(
+                    value = hexInput,
+                    onValueChange = ::applyHex,
+                    modifier = Modifier.weight(1f),
+                    label = { Text(stringResource(R.string.color_hex)) },
+                    isError = invalidHex,
+                    supportingText = if (invalidHex) {{ Text(stringResource(R.string.invalid_hex_color)) }} else null,
+                    trailingIcon = {
+                        IconButton(onClick = { onInsert(currentHex()) }, enabled = canInsert && !invalidHex) {
+                            Icon(Icons.Default.KeyboardReturn, stringResource(R.string.insert_color))
+                        }
+                    },
+                    singleLine = true,
+                )
+            }
+            ColorSlider(R.string.color_hue, hue, 0f..360f, "${hue.toInt()}°") { hue = it; syncHex() }
+            ColorSlider(R.string.color_saturation, saturation, 0f..1f, "${(saturation * 100).toInt()}%") { saturation = it; syncHex() }
+            ColorSlider(R.string.color_value, value, 0f..1f, "${(value * 100).toInt()}%") { value = it; syncHex() }
+            ColorChipRow(R.string.color_recent, settings.recentColors, ::applyHex)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
+                    FilledTonalIconButton(onClick = { onFavorite(currentHex()) }) {
+                        Icon(if (currentHex() in settings.favoriteColors) Icons.Default.Star else Icons.Default.StarBorder, stringResource(R.string.favorite_color))
+                    }
+                    Text(stringResource(if (currentHex() in settings.favoriteColors) R.string.remove_favorite_color else R.string.favorite_color), style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                }
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
+                  FilledTonalIconButton(onClick = {
+                    val hex = currentHex(); clipboard.setText(AnnotatedString(hex)); onUsed(hex)
+                    android.widget.Toast.makeText(context, context.getString(R.string.color_copied, hex), android.widget.Toast.LENGTH_SHORT).show()
+                  }) { Icon(Icons.Default.ContentCopy, stringResource(R.string.copy_color)) }
+                  Text(stringResource(R.string.copy_color), style = MaterialTheme.typography.labelSmall)
+                }
+            }
+          }
+        }
+    }
+}
+
+@Composable
+private fun ColorWheelSvPicker(hue: Float, saturation: Float, value: Float, onChange: (Float, Float, Float) -> Unit) {
+    var measured by remember { mutableStateOf(IntSize.Zero) }
+    val markerColor = MaterialTheme.colorScheme.onSurface
+    fun update(offset: Offset) {
+        if (measured.width == 0 || measured.height == 0) return
+        val side = minOf(measured.width, measured.height).toFloat()
+        val origin = Offset((measured.width - side) / 2f, (measured.height - side) / 2f)
+        val center = origin + Offset(side / 2f, side / 2f)
+        val dx = offset.x - center.x; val dy = offset.y - center.y
+        val radius = kotlin.math.sqrt(dx * dx + dy * dy)
+        if (radius > side * 0.36f) {
+            val angle = ((atan2(dy, dx) * 180f / PI.toFloat()) + 360f) % 360f
+            onChange(angle, saturation, value)
+        } else {
+            val square = side * 0.58f; val left = origin.x + (side - square) / 2f; val top = origin.y + (side - square) / 2f
+            onChange(hue, ((offset.x - left) / square).coerceIn(0f, 1f), (1f - (offset.y - top) / square).coerceIn(0f, 1f))
+        }
+    }
+    Canvas(
+        Modifier.sizeIn(maxWidth = 240.dp, maxHeight = 240.dp).aspectRatio(1f).onSizeChanged { measured = it }
+            .pointerInput(hue, saturation, value) { detectDragGestures(onDragStart = ::update) { change, _ -> update(change.position) } },
+    ) {
+        val side = minOf(size.width, size.height)
+        drawCircle(Brush.sweepGradient(listOf(Color.Red, Color.Yellow, Color.Green, Color.Cyan, Color.Blue, Color.Magenta, Color.Red)), radius = side * 0.455f, center = center, style = Stroke(width = side * 0.09f))
+        val square = side * 0.58f; val topLeft = Offset(center.x - square / 2f, center.y - square / 2f)
+        val hueColor = Color(android.graphics.Color.HSVToColor(floatArrayOf(hue, 1f, 1f)))
+        drawRect(Brush.horizontalGradient(listOf(Color.White, hueColor), topLeft.x, topLeft.x + square), topLeft, androidx.compose.ui.geometry.Size(square, square))
+        drawRect(Brush.verticalGradient(listOf(Color.Transparent, Color.Black), topLeft.y, topLeft.y + square), topLeft, androidx.compose.ui.geometry.Size(square, square))
+        drawCircle(markerColor, 7.dp.toPx(), Offset(topLeft.x + square * saturation, topLeft.y + square * (1f - value)), style = Stroke(2.dp.toPx()))
+    }
+}
+
+@Composable private fun ColorSlider(@StringRes label: Int, value: Float, range: ClosedFloatingPointRange<Float>, suffix: String, onChange: (Float) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+        Row { Text(stringResource(label), Modifier.weight(1f), style = MaterialTheme.typography.bodySmall); Text(suffix, style = MaterialTheme.typography.bodySmall) }
+        Slider(value, onChange, Modifier.height(28.dp), valueRange = range)
+    }
+}
+
+private enum class FavoriteColorSort { USAGE, NEWEST, OLDEST, ASCENDING, DESCENDING }
+
+@Composable
+private fun FavoriteColorDialog(colors: List<String>, usage: Map<String, Int>, addedAt: Map<String, Long>, onSelect: (String) -> Unit, onDismiss: () -> Unit) {
+    var sort by rememberSaveable { mutableStateOf(FavoriteColorSort.USAGE) }
+    var sortMenu by remember { mutableStateOf(false) }
+    val sorted = when (sort) {
+        FavoriteColorSort.ASCENDING -> colors.sorted()
+        FavoriteColorSort.DESCENDING -> colors.sortedDescending()
+        FavoriteColorSort.USAGE -> colors.sortedWith(compareByDescending<String> { usage[it] ?: 0 }.thenBy { it })
+        FavoriteColorSort.NEWEST -> colors.sortedWith(compareByDescending<String> { addedAt[it] ?: Long.MIN_VALUE }.thenBy { it })
+        FavoriteColorSort.OLDEST -> colors.sortedWith(compareBy<String> { addedAt[it] ?: Long.MAX_VALUE }.thenBy { it })
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.color_favorites)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box {
+                    OutlinedButton(onClick = { sortMenu = true }, modifier = Modifier.fillMaxWidth()) {
+                        Icon(Icons.Default.Sort, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(R.string.color_sort_label, stringResource(sort.labelResource())), modifier = Modifier.weight(1f))
+                        Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                    }
+                    DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
+                        FavoriteColorSort.entries.forEach { option ->
+                            DropdownMenuItem(
+                                text = { Text(stringResource(option.labelResource())) },
+                                trailingIcon = if (option == sort) {{ Icon(Icons.Default.Check, contentDescription = null) }} else null,
+                                onClick = { sort = option; sortMenu = false },
+                            )
+                        }
+                    }
+                }
+                if (sorted.isEmpty()) Text(stringResource(R.string.no_favorite_colors), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                LazyColumn(Modifier.heightIn(max = 380.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    items(sorted) { hex ->
+                        val parsed = runCatching { android.graphics.Color.parseColor(hex) }.getOrDefault(android.graphics.Color.TRANSPARENT)
+                        Surface(onClick = { onSelect(hex) }, shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainer) {
+                            Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Surface(Modifier.size(28.dp), shape = androidx.compose.foundation.shape.CircleShape, color = Color(parsed), border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline)) {}
+                                Spacer(Modifier.width(10.dp)); Text(hex, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                                Column(horizontalAlignment = Alignment.End) {
+                                    Text(stringResource(R.string.color_generation_uses, usage[hex] ?: 0), style = MaterialTheme.typography.labelSmall)
+                                    Text(
+                                        addedAt[hex]?.let { DateFormat.getDateInstance(DateFormat.SHORT).format(Date(it)) } ?: stringResource(R.string.date_unknown),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.close)) } },
+    )
+}
+
+@StringRes
+private fun FavoriteColorSort.labelResource(): Int = when (this) {
+    FavoriteColorSort.ASCENDING -> R.string.sort_hex_ascending
+    FavoriteColorSort.DESCENDING -> R.string.sort_hex_descending
+    FavoriteColorSort.USAGE -> R.string.sort_color_usage
+    FavoriteColorSort.NEWEST -> R.string.sort_added_newest
+    FavoriteColorSort.OLDEST -> R.string.sort_added_oldest
+}
+
+@Composable private fun ColorChipRow(@StringRes label: Int, colors: List<String>, onSelect: (String) -> Unit) {
+    if (colors.isEmpty()) return
+    Text(stringResource(label), style = MaterialTheme.typography.titleSmall)
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(colors) { hex ->
+            val parsed = runCatching { android.graphics.Color.parseColor(hex) }.getOrDefault(android.graphics.Color.TRANSPARENT)
+            Surface(onClick = { onSelect(hex) }, modifier = Modifier.size(34.dp), shape = androidx.compose.foundation.shape.CircleShape, color = Color(parsed), border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline)) {}
+        }
+    }
 }
 
 @Composable
@@ -238,15 +559,18 @@ private fun PromptScrollIndicator(state: androidx.compose.foundation.lazy.LazyLi
 @Composable
 private fun CharacterPositioningButton(session: Session, viewModel: MainViewModel) {
     var open by rememberSaveable { mutableStateOf(false) }
-    OutlinedButton(onClick = { open = true }, modifier = Modifier.fillMaxWidth()) {
-        Icon(Icons.Default.ControlCamera, contentDescription = null)
-        Spacer(Modifier.width(8.dp))
-        Text(
-            stringResource(
-                R.string.character_positioning_status,
-                stringResource(if (session.characters.all { it.position != null }) R.string.position_custom else R.string.position_ai_choice),
-            ),
-        )
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        OutlinedButton(onClick = { open = true }, modifier = Modifier.weight(1f)) {
+            Icon(Icons.Default.ControlCamera, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                stringResource(
+                    R.string.character_positioning_status,
+                    stringResource(if (session.characters.all { it.position != null }) R.string.position_custom else R.string.position_ai_choice),
+                ),
+            )
+        }
+        HelpAffordance(R.string.character_positioning, R.string.help_character_positioning_body)
     }
     if (open) CharacterPositioningDialog(session, viewModel) { open = false }
 }
@@ -332,13 +656,48 @@ private fun CharacterPositioningDialog(session: Session, viewModel: MainViewMode
 private data class TagEditorTarget(val owner: PromptOwner, val polarity: PromptPolarity, val blockId: String, val cursor: Int)
 
 @Composable
-fun GenerationSettingsScreen(session: Session?, viewModel: MainViewModel, onBack: () -> Unit, onOpenSettings: () -> Unit) {
+fun GenerationSettingsScreen(session: Session?, viewModel: MainViewModel, onBack: () -> Unit, onOpenSettings: () -> Unit, headerTokenSummary: String? = null) {
+    val subscriptionStatus by viewModel.subscriptionStatus.collectAsStateWithLifecycle()
+    val modelSummary = compactModelName(session?.generationSettings?.modelId)
+    val seedSummary = session?.let { stringResource(if (it.generationSettings.seedMode == SeedMode.RANDOM) R.string.seed_status_random else R.string.seed_status_fixed) }
     Scaffold(
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
             AppTitleBar(
                 R.string.generation_settings,
                 menuItems = listOf(AppTitleMenuItem(R.string.nav_settings, Icons.Default.Settings, onClick = onOpenSettings)),
                 onBack = onBack,
+                bottomContent = {
+                    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            seedSummary?.let {
+                                Text(
+                                    stringResource(R.string.generate_status_summary, modelSummary, it),
+                                    Modifier.weight(1f).clickable(onClick = viewModel::toggleSeedMode),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                )
+                            }
+                            Text(
+                                quotaStatusText(subscriptionStatus),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                            )
+                        }
+                        headerTokenSummary?.let {
+                            Text(
+                                it,
+                                Modifier.fillMaxWidth(),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                },
             )
         },
     ) { padding ->
@@ -358,31 +717,60 @@ fun GenerationSettingsScreen(session: Session?, viewModel: MainViewModel, onBack
 }
 
 @Composable
-private fun GenerationCard(state: GenerationUiState, viewModel: MainViewModel) {
+private fun GenerationCard(
+    state: GenerationUiState,
+    record: com.hjhsys.naiblockprompt.data.generation.GenerationRecord?,
+    viewModel: MainViewModel,
+    onImportInformation: (() -> Unit)? = null,
+    onExportInpaintDiagnostics: (() -> Unit)? = null,
+) {
+    var showActions by remember { mutableStateOf(false) }
     var showOriginal by rememberSaveable { mutableStateOf(false) }
-    val success = state as? GenerationUiState.Success
-    if (showOriginal && success != null) {
-        Dialog(onDismissRequest = { showOriginal = false }) {
-            Surface(shape = MaterialTheme.shapes.large) {
-                AsyncImage(
-                    model = imageModel(success.record.imagePath),
-                    contentDescription = stringResource(R.string.generated_image),
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxWidth().fillMaxHeight(0.9f).clickable { showOriginal = false },
-                )
-            }
-        }
+    val originalAvailable = record?.let { com.hjhsys.naiblockprompt.ui.components.rememberOriginalImageAvailable(it.imagePath) } == true
+    if (showActions && record != null) com.hjhsys.naiblockprompt.ui.components.ImageActionsDialog(record.imagePath, viewModel) { showActions = false }
+    if (showOriginal && record != null) {
+        ImageViewer(record.imagePath) { showOriginal = false }
     }
-    ElevatedCard {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            if (success != null) {
+    ElevatedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (record != null) {
                 AsyncImage(
-                    model = imageModel(success.record.imagePath),
+                    model = imageModel(record.imagePath),
                     contentDescription = stringResource(R.string.generated_image),
                     contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp).clickable { showOriginal = true },
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp).clickable {
+                        viewModel.selectImageSeed(record.seed)
+                        showOriginal = true
+                    },
                 )
-                Text(stringResource(R.string.used_seed, success.record.seed), style = MaterialTheme.typography.bodySmall)
+                Text(stringResource(R.string.used_seed, record.seed), style = MaterialTheme.typography.bodySmall)
+                ImageCardActions(
+                    imageActionsEnabled = originalAvailable,
+                    informationEnabled = onImportInformation != null,
+                    onImageActions = { viewModel.selectImageSeed(record.seed); showActions = true },
+                    onImportInformation = { onImportInformation?.invoke() },
+                    seedEnabled = true,
+                    onApplySeed = { viewModel.applyHistorySeed(record.seed) },
+                )
+                if (!originalAvailable) {
+                    Text(stringResource(R.string.original_missing), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+                if (BuildConfig.DEBUG && onExportInpaintDiagnostics != null) {
+                    OutlinedButton(
+                        onClick = onExportInpaintDiagnostics,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    ) {
+                        Icon(Icons.Default.BugReport, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(R.string.export_inpaint_diagnostics))
+                    }
+                }
+            }
+            if (state is GenerationUiState.Loading) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                    Text(stringResource(R.string.generating))
+                }
             }
             GenerationStatus(state)
             if (state is GenerationUiState.Failed) {
@@ -397,33 +785,65 @@ private fun GenerationCard(state: GenerationUiState, viewModel: MainViewModel) {
 }
 
 @Composable
-fun ResultScreen(viewModel: MainViewModel, onOpenHistory: () -> Unit) {
+fun ResultScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onRestored: () -> Unit, headerTokenSummary: String? = null) {
     val state by viewModel.generationState.collectAsStateWithLifecycle()
+    val currentResult by viewModel.currentResult.collectAsStateWithLifecycle()
+    val history by viewModel.history.collectAsStateWithLifecycle()
+    val subscriptionStatus by viewModel.subscriptionStatus.collectAsStateWithLifecycle()
+    val session by viewModel.session.collectAsStateWithLifecycle()
+    val modelSummary = compactModelName(session?.generationSettings?.modelId)
+    val seedSummary = session?.let { stringResource(if (it.generationSettings.seedMode == SeedMode.RANDOM) R.string.seed_status_random else R.string.seed_status_fixed) }
+    val resultHistory = currentResult?.let { result -> history.firstOrNull { it.entity.imagePath == result.imagePath } }
+    val context = LocalContext.current
+    var diagnosticExport by remember { mutableStateOf<MainViewModel.TransferFile?>(null) }
+    val diagnosticExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        val file = diagnosticExport ?: return@rememberLauncherForActivityResult
+        uri?.let { context.contentResolver.openOutputStream(it)?.use { output -> output.write(file.bytes) } }
+    }
+    if (BuildConfig.DEBUG) {
+        LaunchedEffect(viewModel.transferExport) {
+            viewModel.transferExport.collect { file ->
+                if (file.name == "nai_inpaint_diagnostics.zip") {
+                    diagnosticExport = file
+                    diagnosticExportLauncher.launch(file.name)
+                }
+            }
+        }
+    }
+    var restore by remember { mutableStateOf<com.hjhsys.naiblockprompt.data.library.HistoryItem?>(null) }
+    restore?.let { item ->
+        RestoreDialog(item, dismiss = { restore = null }) { options ->
+            viewModel.restoreHistory(item, options)
+            restore = null
+            onRestored()
+        }
+    }
     Scaffold(
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
             AppTitleBar(
                 R.string.workspace_result,
-                directAction = AppTitleMenuItem(R.string.history_title, Icons.Default.History, onClick = onOpenHistory),
+                menuItems = listOf(AppTitleMenuItem(R.string.nav_settings, Icons.Default.Settings, onClick = onOpenSettings)),
+                subtitle = seedSummary?.let { stringResource(R.string.generate_status_summary, modelSummary, it) },
+                onSubtitleClick = if (session == null) null else viewModel::toggleSeedMode,
+                trailingOverline = headerTokenSummary,
+                trailingSubtitle = quotaStatusText(subscriptionStatus),
             )
         },
-        bottomBar = {
-            Surface(shadowElevation = 8.dp) {
-                Button(
-                    onClick = viewModel::generate,
-                    enabled = state !is GenerationUiState.Loading,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp).heightIn(min = 48.dp),
-                ) {
-                    if (state is GenerationUiState.Loading) {
-                        CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(8.dp))
-                    }
-                    Text(stringResource(if (state is GenerationUiState.Loading) R.string.generating else R.string.generate_one_image))
-                }
-            }
-        },
     ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding).padding(12.dp), contentAlignment = Alignment.Center) {
-            GenerationCard(state, viewModel)
+        Box(
+            Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(12.dp),
+            contentAlignment = Alignment.TopCenter,
+        ) {
+            GenerationCard(
+                state,
+                currentResult,
+                viewModel,
+                onImportInformation = resultHistory?.let { item -> { restore = item } },
+                onExportInpaintDiagnostics = if (BuildConfig.DEBUG) {
+                    { viewModel.exportLatestInpaintDiagnostics() }
+                } else null,
+            )
         }
     }
 }
@@ -504,6 +924,8 @@ private fun CharacterSectionCard(
     character: CharacterPrompt,
     count: Int,
     showFormatter: Boolean,
+    showTextRendering: Boolean,
+    tokenRange: TokenRange?,
     viewModel: MainViewModel,
     onTagEditorState: (PromptOwner, PromptPolarity, String, Boolean, Int) -> Unit,
 ) {
@@ -529,7 +951,10 @@ private fun CharacterSectionCard(
                     Modifier.weight(1f).clickable { viewModel.setCharacterCollapsed(character.id, !character.collapsed) },
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(stringResource(R.string.character_prompt, index + 1), style = MaterialTheme.typography.titleLarge)
+                    Column {
+                        Text(stringResource(R.string.character_prompt, index + 1), style = MaterialTheme.typography.titleLarge)
+                        tokenRange?.let { SectionTokenEstimate(it) }
+                    }
                     Icon(
                         if (character.collapsed) Icons.Default.ChevronRight else Icons.Default.ExpandMore,
                         contentDescription = stringResource(if (character.collapsed) R.string.expand else R.string.collapse),
@@ -570,6 +995,7 @@ private fun CharacterSectionCard(
                     selectedPolarity = character.selectedPolarity,
                     textRendering = character.textRendering,
                     showFormatter = showFormatter,
+                    showTextRendering = showTextRendering,
                     viewModel = viewModel,
                     onTagEditorState = onTagEditorState,
                     blockContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -587,23 +1013,31 @@ private fun PromptSectionCard(
     selectedPolarity: PromptPolarity,
     textRendering: TextRenderingState,
     showFormatter: Boolean,
+    showTextRendering: Boolean,
+    tokenRange: TokenRange?,
     viewModel: MainViewModel,
     onTagEditorState: (PromptOwner, PromptPolarity, String, Boolean, Int) -> Unit,
 ) {
     val containerColor = if (owner == PromptOwner.Base) {
-        val tintFraction = if (MaterialTheme.colorScheme.background.luminance() < 0.5f) 0.15f else 0.58f
-        lerp(MaterialTheme.colorScheme.surfaceContainerHigh, MaterialTheme.colorScheme.secondaryContainer, tintFraction)
+        if (MaterialTheme.colorScheme.background.luminance() < 0.5f) Color(0xFF240C38)
+        else lerp(MaterialTheme.colorScheme.surfaceContainerHigh, MaterialTheme.colorScheme.secondaryContainer, 0.58f)
     } else {
         MaterialTheme.colorScheme.surfaceContainerHigh
     }
     ElevatedCard(colors = CardDefaults.elevatedCardColors(containerColor = containerColor)) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                Column(Modifier.weight(1f)) {
+                    Text(title, style = MaterialTheme.typography.titleLarge)
+                    tokenRange?.let { SectionTokenEstimate(it) }
+                }
                 SmallIconButton(R.string.load_set, Icons.Default.FolderOpen, true) { viewModel.beginSetLoad(owner) }
                 SmallIconButton(R.string.save_set, Icons.Default.Save, true) { viewModel.beginSetSave(owner) }
             }
-            PromptSectionContent(owner, pair, selectedPolarity, textRendering, showFormatter, viewModel, onTagEditorState, containerColor)
+            val promptBlockColor = if (owner == PromptOwner.Base) {
+                lerp(containerColor, Color.Black, if (MaterialTheme.colorScheme.background.luminance() < 0.5f) 0.16f else 0.055f)
+            } else containerColor
+            PromptSectionContent(owner, pair, selectedPolarity, textRendering, showFormatter, showTextRendering, viewModel, onTagEditorState, promptBlockColor)
         }
     }
 }
@@ -615,6 +1049,7 @@ private fun PromptSectionContent(
     selectedPolarity: PromptPolarity,
     textRendering: TextRenderingState,
     showFormatter: Boolean,
+    showTextRendering: Boolean,
     viewModel: MainViewModel,
     onTagEditorState: (PromptOwner, PromptPolarity, String, Boolean, Int) -> Unit,
     blockContainerColor: Color,
@@ -625,7 +1060,15 @@ private fun PromptSectionContent(
                 selected = selectedPolarity == polarity,
                 onClick = { viewModel.selectPolarity(owner, polarity) },
                 label = { Text(stringResource(polarity.labelResource)) },
+                leadingIcon = if (selectedPolarity == polarity) {
+                    { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                } else null,
                 modifier = Modifier.weight(1f),
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = MaterialTheme.colorScheme.primary,
+                    selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
+                    selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimary,
+                ),
             )
         }
     }
@@ -636,6 +1079,8 @@ private fun PromptSectionContent(
     val newBlockName = stringResource(R.string.default_block_name, blocks.size + 1)
     blocks.forEachIndexed { index, block ->
         PromptBlockCard(
+            owner = owner,
+            polarity = selectedPolarity,
             block = block,
             containerColor = blockContainerColor,
             canMoveUp = index > 0,
@@ -649,7 +1094,9 @@ private fun PromptSectionContent(
             onDelete = { viewModel.removeBlock(owner, selectedPolarity, block.id) },
             onLoad = { viewModel.beginBlockLoad(owner, selectedPolarity, block.id) },
             onSave = { viewModel.beginBlockSave(block) },
-            onFormat = { viewModel.formatBlock(owner, selectedPolarity, block.id, it) },
+            onFormat = { formatter, selectionStart, selectionEnd ->
+                viewModel.formatBlock(owner, selectedPolarity, block.id, formatter, selectionStart, selectionEnd)
+            },
             viewModel = viewModel,
             onEditorState = { focused, cursor -> onTagEditorState(owner, selectedPolarity, block.id, focused, cursor) },
         )
@@ -662,10 +1109,11 @@ private fun PromptSectionContent(
         Spacer(Modifier.width(6.dp))
         Text(stringResource(R.string.add_block))
     }
-    if (selectedPolarity == PromptPolarity.POSITIVE) {
+    if (showTextRendering && selectedPolarity == PromptPolarity.POSITIVE) {
         TextRenderingSlot(
             state = textRendering,
             onEnabledChange = { enabled -> viewModel.updateTextRendering(owner) { it.copy(enabled = enabled) } },
+            onDescriptionChange = { description -> viewModel.updateTextRendering(owner) { it.copy(description = description) } },
             onContentChange = { content -> viewModel.updateTextRendering(owner) { it.copy(content = content) } },
         )
     }
@@ -675,9 +1123,20 @@ private fun PromptSectionContent(
 }
 
 @Composable
+private fun SectionTokenEstimate(range: TokenRange) {
+    Text(
+        text = if (range.hasRange) stringResource(R.string.section_estimated_tokens_range, range.minimum, range.maximum)
+        else stringResource(R.string.section_estimated_tokens_single, range.minimum),
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+@Composable
 private fun TextRenderingSlot(
     state: TextRenderingState,
     onEnabledChange: (Boolean) -> Unit,
+    onDescriptionChange: (String) -> Unit,
     onContentChange: (String) -> Unit,
 ) {
     OutlinedCard {
@@ -688,6 +1147,7 @@ private fun TextRenderingSlot(
                     style = MaterialTheme.typography.labelLarge,
                     modifier = Modifier.weight(1f),
                 )
+                HelpAffordance(R.string.text_rendering, R.string.help_text_rendering_body, Modifier.size(40.dp))
                 Text(stringResource(if (state.enabled) R.string.on else R.string.off), style = MaterialTheme.typography.labelMedium)
                 Spacer(Modifier.width(4.dp))
                 Switch(
@@ -697,6 +1157,14 @@ private fun TextRenderingSlot(
                 )
             }
             if (state.enabled) {
+                OutlinedTextField(
+                    value = state.description,
+                    onValueChange = onDescriptionChange,
+                    minLines = 2,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text(stringResource(R.string.text_rendering_description)) },
+                    placeholder = { Text(stringResource(R.string.text_rendering_description_hint)) },
+                )
                 Text(stringResource(R.string.text_rendering_prefix), style = MaterialTheme.typography.labelLarge)
                 OutlinedTextField(
                     value = state.content,
@@ -717,6 +1185,8 @@ private fun TextRenderingSlot(
 
 @Composable
 private fun PromptBlockCard(
+    owner: PromptOwner,
+    polarity: PromptPolarity,
     block: PromptBlock,
     containerColor: Color,
     canMoveUp: Boolean,
@@ -730,7 +1200,7 @@ private fun PromptBlockCard(
     onDelete: () -> Unit,
     onLoad: () -> Unit,
     onSave: () -> Unit,
-    onFormat: (BlockFormatter) -> Unit,
+    onFormat: (BlockFormatter, Int, Int) -> Unit,
     viewModel: MainViewModel,
     onEditorState: (Boolean, Int) -> Unit,
 ) {
@@ -742,15 +1212,16 @@ private fun PromptBlockCard(
     var showMore by remember { mutableStateOf(false) }
     var editorFocused by remember { mutableStateOf(false) }
     val autocomplete by viewModel.autocomplete.collectAsStateWithLifecycle()
+    val undoableBlocks by viewModel.undoablePromptBlocks.collectAsStateWithLifecycle()
+    val undoKey = remember(owner, polarity, block.id) { PromptUndoKey(owner, polarity, block.id) }
     var editorValue by remember(block.id) {
         mutableStateOf(TextFieldValue(block.content, TextRange(block.content.length)))
     }
+    var observedBlockContent by remember(block.id) { mutableStateOf(block.content) }
     LaunchedEffect(block.content) {
-        if (editorValue.text != block.content) {
-            editorValue = editorValue.copy(
-                text = block.content,
-                selection = TextRange(editorValue.selection.end.coerceAtMost(block.content.length)),
-            )
+        if (block.content != observedBlockContent) {
+            observedBlockContent = block.content
+            editorValue = synchronizePromptEditorValue(editorValue, block.content)
         }
     }
     if (confirmDelete) {
@@ -803,11 +1274,6 @@ private fun PromptBlockCard(
                 }
                 SmallIconButton(R.string.move_up, Icons.Default.ArrowUpward, canMoveUp && !block.locked) { onMove(MoveDirection.UP) }
                 SmallIconButton(R.string.move_down, Icons.Default.ArrowDownward, canMoveDown && !block.locked) { onMove(MoveDirection.DOWN) }
-                SmallIconButton(
-                    if (block.locked) R.string.unlock_block else R.string.lock_block,
-                    if (block.locked) Icons.Default.Lock else Icons.Default.LockOpen,
-                    true,
-                ) { onLockedChange(!block.locked) }
                 Box {
                     SmallIconButton(R.string.more_actions, Icons.Default.MoreVert, true) { showMore = true }
                     DropdownMenu(expanded = showMore, onDismissRequest = { showMore = false }) {
@@ -863,10 +1329,19 @@ private fun PromptBlockCard(
                 OutlinedTextField(
                     value = editorValue,
                     onValueChange = { value ->
+                        val previous = editorValue
                         editorValue = value
                         if (editorFocused) onEditorState(true, value.selection.end)
-                        onUpdate { it.copy(content = value.text) }
-                        viewModel.requestAutocomplete(block.id, PromptAutocomplete.currentFragment(value.text, value.selection.end))
+                        viewModel.updateBlockContent(
+                            owner,
+                            polarity,
+                            block.id,
+                            value.text,
+                            previous.selection.start,
+                            previous.selection.end,
+                            PromptEditKind.TYPING,
+                        )
+                        viewModel.requestAutocomplete(block.id, autocompleteFragmentForEditor(value))
                     },
                     enabled = !block.locked,
                     label = { Text(stringResource(R.string.prompt_content)) },
@@ -884,14 +1359,29 @@ private fun PromptBlockCard(
                         local = autocomplete.local,
                         novelAi = autocomplete.novelAi,
                         danbooru = autocomplete.danbooru,
+                        wildcards = autocomplete.wildcards,
                         loading = autocomplete.loading,
                         novelAiFailed = autocomplete.novelAiFailed,
                         danbooruFailed = autocomplete.danbooruFailed,
+                        requestStartedAtNanos = autocomplete.requestStartedAtNanos,
                         onSelect = { suggestion ->
                             val fragment = autocomplete.fragment ?: return@AutocompleteSuggestions
+                            if (!isCurrentAutocompleteFragment(editorValue, fragment)) {
+                                viewModel.clearAutocomplete()
+                                return@AutocompleteSuggestions
+                            }
                             val replacement = PromptAutocomplete.replace(editorValue.text, fragment, suggestion.tag)
+                            val previous = editorValue
                             editorValue = TextFieldValue(replacement.text, TextRange(replacement.cursor))
-                            onUpdate { it.copy(content = replacement.text) }
+                            viewModel.updateBlockContent(
+                                owner,
+                                polarity,
+                                block.id,
+                                replacement.text,
+                                previous.selection.start,
+                                previous.selection.end,
+                                PromptEditKind.DISCRETE,
+                            )
                             viewModel.recordAutocompleteUse(suggestion)
                             viewModel.clearAutocomplete()
                         },
@@ -911,18 +1401,37 @@ private fun PromptBlockCard(
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
-                if (showFormatter) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(
-                            onClick = { onFormat(BlockFormatter.MULTILINE) },
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    SmallIconButton(
+                        if (block.locked) R.string.unlock_block else R.string.lock_block,
+                        if (block.locked) Icons.Default.Lock else Icons.Default.LockOpen,
+                        true,
+                    ) { onLockedChange(!block.locked) }
+                    SmallIconButton(
+                        R.string.undo_prompt_edit,
+                        Icons.Default.Undo,
+                        !block.locked && undoKey in undoableBlocks,
+                    ) {
+                        viewModel.undoBlockContent(owner, polarity, block.id)?.let { restored ->
+                            editorValue = TextFieldValue(restored.content, TextRange(restored.selectionStart, restored.selectionEnd))
+                        }
+                    }
+                    Spacer(Modifier.weight(1f))
+                    if (showFormatter) {
+                        TextButton(
+                            onClick = { onFormat(BlockFormatter.MULTILINE, editorValue.selection.start, editorValue.selection.end) },
                             enabled = !block.locked,
-                            modifier = Modifier.weight(1f),
-                        ) { Text(stringResource(R.string.format_multiline), maxLines = 1) }
-                        OutlinedButton(
-                            onClick = { onFormat(BlockFormatter.SINGLE_LINE) },
+                            contentPadding = PaddingValues(horizontal = 7.dp),
+                        ) { Text(stringResource(R.string.format_multiline), style = MaterialTheme.typography.labelSmall, maxLines = 1) }
+                        TextButton(
+                            onClick = { onFormat(BlockFormatter.SINGLE_LINE, editorValue.selection.start, editorValue.selection.end) },
                             enabled = !block.locked,
-                            modifier = Modifier.weight(1f),
-                        ) { Text(stringResource(R.string.format_single_line), maxLines = 1) }
+                            contentPadding = PaddingValues(horizontal = 7.dp),
+                        ) { Text(stringResource(R.string.format_single_line), style = MaterialTheme.typography.labelSmall, maxLines = 1) }
                     }
                 }
             }
@@ -935,11 +1444,22 @@ private fun AutocompleteSuggestions(
     local: List<TagSuggestion>,
     novelAi: List<TagSuggestion>,
     danbooru: List<TagSuggestion>,
+    wildcards: List<TagSuggestion>,
     loading: Boolean,
     novelAiFailed: Boolean,
     danbooruFailed: Boolean,
+    requestStartedAtNanos: Long,
     onSelect: (TagSuggestion) -> Unit,
 ) {
+    LaunchedEffect(requestStartedAtNanos, local) {
+        if (BuildConfig.DEBUG && requestStartedAtNanos > 0L && local.isNotEmpty()) {
+            Log.d(
+                "AutocompletePerf",
+                "inputToUiRenderMs=${(System.nanoTime() - requestStartedAtNanos) / 1_000_000.0} localCount=${local.size}",
+            )
+        }
+    }
+    if (wildcards.isNotEmpty()) SuggestionRow(R.string.autocomplete_wildcard_row, wildcards, onSelect)
     if (local.isNotEmpty()) SuggestionRow(R.string.autocomplete_local_row, local, onSelect)
     if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
     if (novelAi.isNotEmpty()) SuggestionRow(R.string.autocomplete_nai_row, novelAi, onSelect)
@@ -996,22 +1516,7 @@ private fun GenerationSettingsCard(settings: GenerationSettings, viewModel: Main
             text = {
                 Column(Modifier.heightIn(max = 620.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     AsyncImage(model = Uri.parse(uri), contentDescription = stringResource(R.string.import_image), modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp), contentScale = ContentScale.Fit)
-                    Button(onClick = {
-                        viewModel.updateGenerationSettings { it.copy(imageInput = ImageInputState(uri)) }
-                        pendingImageUri = null
-                    }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.image_to_image)) }
-                    OutlinedButton(onClick = {
-                        viewModel.updateGenerationSettings { it.copy(imageInput = ImageInputState(uri, mode = ImageInputMode.VIBE_TRANSFER)) }
-                        pendingImageUri = null
-                    }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.vibe_transfer)) }
-                    OutlinedButton(
-                        onClick = {
-                            viewModel.updateGenerationSettings { it.copy(imageInput = ImageInputState(uri, mode = ImageInputMode.PRECISE_REFERENCE, strength = 1f)) }
-                            pendingImageUri = null
-                        },
-                        enabled = settings.modelId?.startsWith("nai-diffusion-4-5-") == true,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text(stringResource(R.string.precise_reference)) }
+                    com.hjhsys.naiblockprompt.ui.components.ImageActionChoices(uri, viewModel) { pendingImageUri = null }
                     if (settings.modelId?.startsWith("nai-diffusion-4-5-") != true) {
                         Text(stringResource(R.string.precise_reference_v45_only), style = MaterialTheme.typography.bodySmall)
                     }
@@ -1079,19 +1584,33 @@ private fun GenerationSettingsCard(settings: GenerationSettings, viewModel: Main
                             Icon(Icons.Default.Close, stringResource(R.string.remove_imported_image))
                         }
                     }
-                    if (input.mode == ImageInputMode.VIBE_TRANSFER) {
-                        Text(stringResource(R.string.vibe_encoding_cost_notice), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (input.mode == ImageInputMode.INPAINT) {
+                        var editMask by remember { mutableStateOf(false) }
+                        OutlinedButton(onClick = { editMask = true }) { Text(stringResource(R.string.inpaint_edit)) }
+                        if (editMask) com.hjhsys.naiblockprompt.ui.components.InpaintEditor(input.uri, input, { editMask = false }) { updated, generate ->
+                            viewModel.useImageInput(updated)
+                            editMask = false
+                            if (generate) viewModel.generate()
+                        }
                     }
-                    SliderSettingRow(R.string.image_strength, input.strength, 0f..1f, 19, decimal = true, activeKey = activeSlider, onActiveKeyChange = { activeSlider = it }) { value ->
-                        viewModel.updateGenerationSettings { current -> current.copy(imageInput = input.copy(strength = (value * 20).toInt() / 20f)) }
+                    if (input.mode == ImageInputMode.VIBE_TRANSFER) {
+                        val unsupported = settings.modelId?.let { !VibeTransferRequestMapper.isSupported(it) } == true
+                        Text(
+                            stringResource(if (unsupported) R.string.vibe_v5_unused_status else R.string.vibe_encoding_cost_notice),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (unsupported) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    SliderSettingRow(R.string.image_strength, input.strength, IMAGE_INPUT_SLIDER, activeKey = activeSlider, onActiveKeyChange = { activeSlider = it }) { value ->
+                        viewModel.updateGenerationSettings { current -> current.copy(imageInput = input.copy(strength = value)) }
                     }
                     if (input.mode == ImageInputMode.IMAGE_TO_IMAGE) {
-                        SliderSettingRow(R.string.image_noise, input.noise, 0f..1f, 19, decimal = true, activeKey = activeSlider, onActiveKeyChange = { activeSlider = it }) { value ->
-                            viewModel.updateGenerationSettings { current -> current.copy(imageInput = input.copy(noise = (value * 20).toInt() / 20f)) }
+                        SliderSettingRow(R.string.image_noise, input.noise, IMAGE_INPUT_SLIDER, activeKey = activeSlider, onActiveKeyChange = { activeSlider = it }) { value ->
+                            viewModel.updateGenerationSettings { current -> current.copy(imageInput = input.copy(noise = value)) }
                         }
                     } else {
-                        SliderSettingRow(R.string.information_extracted, input.informationExtracted, 0f..1f, 19, decimal = true, activeKey = activeSlider, onActiveKeyChange = { activeSlider = it }) { value ->
-                            viewModel.updateGenerationSettings { current -> current.copy(imageInput = input.copy(informationExtracted = (value * 20).toInt() / 20f)) }
+                        SliderSettingRow(R.string.information_extracted, input.informationExtracted, IMAGE_INPUT_SLIDER, activeKey = activeSlider, onActiveKeyChange = { activeSlider = it }) { value ->
+                            viewModel.updateGenerationSettings { current -> current.copy(imageInput = input.copy(informationExtracted = value)) }
                         }
                     }
                     if (input.mode == ImageInputMode.PRECISE_REFERENCE) {
@@ -1105,8 +1624,8 @@ private fun GenerationSettingsCard(settings: GenerationSettings, viewModel: Main
                                 )
                             }
                         }
-                        SliderSettingRow(R.string.reference_fidelity, input.fidelity, 0f..1f, 19, decimal = true, activeKey = activeSlider, onActiveKeyChange = { activeSlider = it }) { value ->
-                            viewModel.updateGenerationSettings { current -> current.copy(imageInput = input.copy(fidelity = (value * 20).toInt() / 20f)) }
+                        SliderSettingRow(R.string.reference_fidelity, input.fidelity, IMAGE_INPUT_SLIDER, activeKey = activeSlider, onActiveKeyChange = { activeSlider = it }) { value ->
+                            viewModel.updateGenerationSettings { current -> current.copy(imageInput = input.copy(fidelity = value)) }
                         }
                     }
                 } ?: OutlinedButton(onClick = { imagePicker.launch(arrayOf("image/png", "image/jpeg", "image/webp")) }, modifier = Modifier.fillMaxWidth()) {
@@ -1146,22 +1665,23 @@ private fun GenerationSettingsCard(settings: GenerationSettings, viewModel: Main
         ElevatedCard {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(stringResource(R.string.ai_settings), style = MaterialTheme.typography.titleMedium)
-                SliderSettingRow(R.string.steps, (settings.steps ?: 28).toFloat(), 1f..50f, 48, activeKey = activeSlider, onActiveKeyChange = { activeSlider = it }) { value ->
+                SliderSettingRow(R.string.steps, (settings.steps ?: 28).toFloat(), STEPS_SLIDER, activeKey = activeSlider, onActiveKeyChange = { activeSlider = it }) { value ->
                     viewModel.updateGenerationSettings { it.copy(steps = value.toInt()) }
                 }
-                SliderSettingRow(R.string.prompt_guidance, settings.scale ?: 5f, 0f..10f, 99, decimal = true, activeKey = activeSlider, onActiveKeyChange = { activeSlider = it }) { value ->
-                    viewModel.updateGenerationSettings { it.copy(scale = (value * 10).toInt() / 10f) }
+                SliderSettingRow(R.string.prompt_guidance, settings.scale ?: 5f, GUIDANCE_SLIDER, activeKey = activeSlider, onActiveKeyChange = { activeSlider = it }) { value ->
+                    viewModel.updateGenerationSettings { it.copy(scale = value) }
                 }
                 Text(stringResource(R.string.seed), style = MaterialTheme.typography.labelLarge)
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    SeedMode.entries.forEach { mode ->
-                        FilterChip(
-                            selected = settings.seedMode == mode,
-                            onClick = { viewModel.updateGenerationSettings { it.copy(seedMode = mode, seed = if (mode == SeedMode.RANDOM) null else it.seed) } },
-                            label = { Text(stringResource(if (mode == SeedMode.RANDOM) R.string.seed_random else R.string.seed_fixed)) },
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
+                FilledTonalButton(
+                    onClick = viewModel::toggleSeedMode,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(
+                        if (settings.seedMode == SeedMode.RANDOM) Icons.Default.Casino else Icons.Default.Lock,
+                        contentDescription = null,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(if (settings.seedMode == SeedMode.RANDOM) R.string.seed_toggle_random_to_fixed else R.string.seed_toggle_fixed_to_random))
                 }
                 if (settings.seedMode == SeedMode.FIXED) {
                     NumberSettingField(R.string.seed, settings.seed?.toString().orEmpty(), Modifier.fillMaxWidth()) { value ->
@@ -1182,18 +1702,25 @@ private fun GenerationSettingsCard(settings: GenerationSettings, viewModel: Main
                     Icon(if (advancedExpanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight, contentDescription = null)
                 }
                 if (advancedExpanded) {
+                    if (NaiGenerationCatalog.supportsSelectableNoiseSchedule(settings.modelId)) {
+                        CatalogDropdown(
+                            label = R.string.noise_schedule,
+                            selectedId = settings.noiseSchedule,
+                            options = NaiGenerationCatalog.noiseSchedules,
+                        ) { value ->
+                            viewModel.updateGenerationSettings { it.copy(noiseSchedule = value) }
+                        }
+                    }
                     SliderSettingRow(
                         R.string.guidance_rescale,
                         settings.guidanceRescale ?: 0.4f,
-                        0f..1f,
-                        19,
-                        decimal = true,
+                        GUIDANCE_RESCALE_SLIDER,
+                        helpBody = R.string.help_guidance_rescale_body,
                         activeKey = activeSlider,
                         onActiveKeyChange = { activeSlider = it },
                     ) { value ->
-                        viewModel.updateGenerationSettings { it.copy(guidanceRescale = (value * 20).toInt() / 20f) }
+                        viewModel.updateGenerationSettings { it.copy(guidanceRescale = value) }
                     }
-                    Text(stringResource(R.string.guidance_rescale_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
@@ -1211,8 +1738,8 @@ private fun MetadataChoice(@StringRes label: Int, checked: Boolean, onChecked: (
 }
 
 @Composable
-private fun generateButtonLabel(state: GenerationUiState, input: ImageInputState?): String {
-    if (state is GenerationUiState.Loading) return stringResource(R.string.generating)
+internal fun generateButtonLabel(state: GenerationUiState, input: ImageInputState?, inProgress: Boolean = state is GenerationUiState.Loading): String {
+    if (inProgress) return stringResource(R.string.generating)
     val extra = if (input?.mode == ImageInputMode.PRECISE_REFERENCE) 5 else 0
     return if (extra > 0) stringResource(R.string.generate_one_image_with_extra_anlas, extra)
     else if (input?.mode == ImageInputMode.VIBE_TRANSFER) stringResource(R.string.generate_one_image_vibe_encoding)
@@ -1229,29 +1756,29 @@ private enum class ResolutionPreset(@param:StringRes val label: Int, val width: 
 private fun SliderSettingRow(
     @StringRes label: Int,
     value: Float,
-    range: ClosedFloatingPointRange<Float>,
-    steps: Int,
-    decimal: Boolean = false,
+    spec: NumericSliderSpec,
+    @StringRes helpBody: Int? = null,
     activeKey: Int?,
     onActiveKeyChange: (Int?) -> Unit,
     onValueChange: (Float) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(stringResource(label), style = MaterialTheme.typography.labelLarge)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(stringResource(label), style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+            helpBody?.let { HelpAffordance(title = label, body = it, modifier = Modifier.size(40.dp)) }
+        }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.surfaceContainerHighest) {
-                Text(
-                    if (decimal) String.format(java.util.Locale.US, "%.1f", value) else value.toInt().toString(),
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                    style = MaterialTheme.typography.labelLarge,
-                )
-            }
+            NumericValueEditor(
+                value = value.toDouble(),
+                spec = spec,
+                label = stringResource(label),
+                onValueChange = { onValueChange(it.toFloat()) },
+            )
             val active = activeKey == label
-            Slider(
-                value = value.coerceIn(range.start, range.endInclusive),
-                onValueChange = onValueChange,
-                valueRange = range,
-                steps = steps,
+            NumericSlider(
+                value = value.toDouble(),
+                spec = spec,
+                onValueChange = { onValueChange(it.toFloat()) },
                 enabled = active,
                 modifier = Modifier.weight(1f).then(
                     if (active) Modifier else Modifier.clickable { onActiveKeyChange(label) },
@@ -1261,34 +1788,10 @@ private fun SliderSettingRow(
     }
 }
 
-@Composable
-private fun PromptPreviewCard(session: Session, normalize: Boolean) {
-    var expanded by rememberSaveable { mutableStateOf(false) }
-    OutlinedCard {
-        Column(Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(stringResource(R.string.prompt_preview_debug), style = MaterialTheme.typography.labelSmall, modifier = Modifier.weight(1f))
-                IconButton(onClick = { expanded = !expanded }, modifier = Modifier.size(32.dp)) {
-                    Icon(if (expanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight, contentDescription = stringResource(if (expanded) R.string.collapse else R.string.expand))
-                }
-            }
-            if (expanded) {
-                PreviewLine(R.string.base_positive_preview, PromptProcessor.appendTextRendering(PromptProcessor.joinEnabledBlocks(session.base.prompts.positiveBlocks, normalize), session.base.textRendering))
-                PreviewLine(R.string.base_negative_preview, PromptProcessor.joinEnabledBlocks(session.base.prompts.negativeBlocks, normalize))
-                session.characters.sortedBy { it.order }.forEachIndexed { index, character ->
-                    PreviewLine(R.string.character_positive_preview, PromptProcessor.appendTextRendering(PromptProcessor.joinEnabledBlocks(character.prompts.positiveBlocks, normalize), character.textRendering), index + 1)
-                    PreviewLine(R.string.character_negative_preview, PromptProcessor.joinEnabledBlocks(character.prompts.negativeBlocks, normalize), index + 1)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun PreviewLine(@StringRes label: Int, prompt: String, formatArg: Int? = null) {
-    Text(if (formatArg == null) stringResource(label) else stringResource(label, formatArg), style = MaterialTheme.typography.labelLarge)
-    SelectionContainer { Text(prompt.ifBlank { stringResource(R.string.empty_prompt) }, style = MaterialTheme.typography.labelSmall, maxLines = 3, overflow = TextOverflow.Ellipsis) }
-}
+private val STEPS_SLIDER = NumericSliderSpec(min = 1.0, max = 50.0, step = 1.0, displayDecimals = 0)
+private val GUIDANCE_SLIDER = NumericSliderSpec(min = 0.0, max = 10.0, step = 0.1, displayDecimals = 1)
+private val GUIDANCE_RESCALE_SLIDER = NumericSliderSpec(min = 0.0, max = 1.0, step = 0.05, displayDecimals = 2)
+private val IMAGE_INPUT_SLIDER = NumericSliderSpec(min = 0.0, max = 1.0, step = 0.05, displayDecimals = 2)
 
 @Composable
 private fun TextSettingField(@StringRes label: Int, value: String, onValueChange: (String) -> Unit) {
@@ -1357,7 +1860,31 @@ private fun SmallIconButton(@StringRes label: Int, icon: androidx.compose.ui.gra
     }
 }
 
-private class PromptVisualTransformation(
+internal fun synchronizePromptEditorValue(current: TextFieldValue, text: String): TextFieldValue {
+    val maximum = text.length
+    val selection = TextRange(
+        current.selection.start.coerceIn(0, maximum),
+        current.selection.end.coerceIn(0, maximum),
+    )
+    val composition = current.composition?.takeIf { range ->
+        range.start in 0..maximum && range.end in 0..maximum
+    }
+    if (current.text == text && current.selection == selection && current.composition == composition) return current
+    return TextFieldValue(
+        text = text,
+        selection = selection,
+        // An IME composition belongs to the old text and cannot safely survive an external replacement.
+        composition = if (current.text == text) composition else null,
+    )
+}
+
+internal fun autocompleteFragmentForEditor(value: TextFieldValue): PromptFragment? =
+    if (value.selection.collapsed) PromptAutocomplete.currentFragment(value.text, value.selection.end) else null
+
+internal fun isCurrentAutocompleteFragment(value: TextFieldValue, fragment: PromptFragment): Boolean =
+    autocompleteFragmentForEditor(value) == fragment
+
+internal class PromptVisualTransformation(
     private val highColor: Color,
     private val lowColor: Color,
     private val commentColor: Color,
@@ -1371,14 +1898,20 @@ private class PromptVisualTransformation(
                 span.weight < 1f -> lowColor.copy(alpha = ((1f - span.weight) / 0.7f).coerceIn(0.55f, 1f))
                 else -> Color.Unspecified
             }
-            if (color != Color.Unspecified) builder.addStyle(SpanStyle(color = color), span.start, span.endExclusive)
+            if (color != Color.Unspecified && span.start >= 0 && span.endExclusive in span.start..text.length) {
+                builder.addStyle(SpanStyle(color = color), span.start, span.endExclusive)
+            }
         }
         PromptProcessor.randomizerSpans(text.text).forEach { span ->
-            builder.addStyle(SpanStyle(color = randomizerColor), span.start, span.endExclusive)
+            if (span.start >= 0 && span.endExclusive in span.start..text.length) {
+                builder.addStyle(SpanStyle(color = randomizerColor), span.start, span.endExclusive)
+            }
         }
         // Apply comments last so they take precedence over an enclosing weight span.
         PromptProcessor.commentSpans(text.text).forEach { span ->
-            builder.addStyle(SpanStyle(color = commentColor), span.start, span.endExclusive)
+            if (span.start >= 0 && span.endExclusive in span.start..text.length) {
+                builder.addStyle(SpanStyle(color = commentColor), span.start, span.endExclusive)
+            }
         }
         return TransformedText(builder.toAnnotatedString(), OffsetMapping.Identity)
     }
@@ -1392,6 +1925,7 @@ private val CharacterType.labelResource: Int get() = when (this) {
 }
 
 private val ImageInputMode.labelResource: Int get() = when (this) {
+    ImageInputMode.INPAINT -> R.string.inpaint_title
     ImageInputMode.IMAGE_TO_IMAGE -> R.string.image_to_image
     ImageInputMode.VIBE_TRANSFER -> R.string.vibe_transfer
     ImageInputMode.PRECISE_REFERENCE -> R.string.precise_reference
@@ -1413,4 +1947,20 @@ internal fun compactModelName(modelId: String?): String = when (modelId) {
     "nai-diffusion-3" -> "V3"
     "nai-diffusion-furry-3" -> "Furry V3"
     else -> "—"
+}
+
+internal fun estimateSessionTokenRange(
+    session: Session,
+    appSettings: AppSettings,
+    wildcardValues: Map<String, List<String>>,
+): TokenRange {
+    val prompt = buildList {
+        fun positive(pair: PromptPair, textRendering: TextRenderingState): String {
+            val blocks = PromptProcessor.joinEnabledBlocks(pair.positiveBlocks, appSettings.normalizeWeightClosings)
+            return if (appSettings.useTextRendering) PromptProcessor.appendTextRendering(blocks, textRendering) else blocks
+        }
+        add(positive(session.base.prompts, session.base.textRendering))
+        session.characters.sortedBy { it.order }.forEach { add(positive(it.prompts, it.textRendering)) }
+    }.joinToString(", ")
+    return PromptTokenEstimator.estimate(prompt, wildcardValues)
 }

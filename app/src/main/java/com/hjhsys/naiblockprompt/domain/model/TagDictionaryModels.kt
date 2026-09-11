@@ -26,6 +26,21 @@ enum class TagDictionaryFilter { ALL, FAVORITES }
 
 enum class TagDictionarySort { POPULAR, APP_USAGE, RECENT, NAME }
 
+enum class TagExclusionOrigin { AI, USER }
+
+enum class TagExclusionReason(val storageValue: String) {
+    TYPO("typo"), INVALID("invalid"), NOISE("noise"), USER_HIDDEN("user-hidden"),
+}
+
+data class ExcludedTagItem(
+    val canonicalTag: String,
+    val origin: TagExclusionOrigin,
+    val reasonCode: String,
+    val reasonText: String?,
+    val userConfirmed: Boolean,
+    val updatedAt: Long,
+)
+
 enum class AppTagCategory(val value: String) {
     CLOTHES("clothes"), POSE("pose"), HAIR("hair"), BODY("body"), EXPRESSION("expression"),
     ACCESSORY("accessory"), BACKGROUND("background"), COMPOSITION("composition"), LIGHTING("lighting"), EFFECT("effect"), OTHER("other"),

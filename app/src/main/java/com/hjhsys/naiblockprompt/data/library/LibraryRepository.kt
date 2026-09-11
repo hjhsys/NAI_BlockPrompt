@@ -8,6 +8,8 @@ import com.hjhsys.naiblockprompt.data.local.entity.*
 import com.hjhsys.naiblockprompt.domain.model.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
@@ -15,6 +17,7 @@ import java.io.File
 import java.util.UUID
 
 data class HistoryItem(val entity: HistoryEntryEntity, val snapshot: SessionSnapshot?, val originalExists: Boolean, val inputImageExists: Boolean)
+data class HistoryStorageSample(val averageOriginalBytes: Long? = null, val sampleCount: Int = 0)
 data class PresetItem(val entity: PresetEntity, val session: Session?)
 data class SavedSetItem(val entity: SavedSetEntity, val set: SavedPromptSet?)
 
@@ -23,6 +26,15 @@ object HistoryRetentionPolicy {
         .filterNot { it.favorite }
         .sortedByDescending { it.createdAt }
         .drop(keepNormal.coerceIn(1, 100))
+}
+
+object HistoryStorageEstimator {
+    const val MIN_SAMPLE_COUNT = 3
+
+    fun estimatedBytes(sample: HistoryStorageSample, historyLimit: Int): Long? =
+        sample.averageOriginalBytes
+            ?.takeIf { sample.sampleCount >= MIN_SAMPLE_COUNT }
+            ?.times(historyLimit.coerceIn(1, 100).toLong())
 }
 
 class LibraryRepository(
@@ -98,6 +110,20 @@ class LibraryRepository(
     suspend fun latestHistoryWithOriginal(): HistoryItem? = historyDao.latest()
         ?.let(::historyItem)
         ?.takeIf { it.originalExists }
+
+    suspend fun sampleHistoryStorage(items: List<HistoryItem>, maxSamples: Int = 12): HistoryStorageSample =
+        withContext(Dispatchers.IO) {
+            val sizes = items.asSequence()
+                .filter { it.originalExists }
+                .take(maxSamples.coerceAtLeast(1))
+                .mapNotNull { imageStore.sizeBytes(it.entity.imagePath) }
+                .filter { it > 0L }
+                .toList()
+            HistoryStorageSample(
+                averageOriginalBytes = sizes.takeIf { it.isNotEmpty() }?.average()?.toLong(),
+                sampleCount = sizes.size,
+            )
+        }
     suspend fun trimHistory(limit: Int) {
         val keep = limit.coerceIn(1, 100)
         HistoryRetentionPolicy.entriesToTrim(historyDao.listAll(), keep).forEach {

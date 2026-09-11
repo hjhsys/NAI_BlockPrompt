@@ -2,6 +2,7 @@ package com.hjhsys.naiblockprompt.data.backup
 
 import com.hjhsys.naiblockprompt.data.local.entity.TagEntity
 import com.hjhsys.naiblockprompt.data.local.entity.UserTagOverrideEntity
+import com.hjhsys.naiblockprompt.data.local.entity.TagExclusionEntity
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertArrayEquals
@@ -19,9 +20,15 @@ class BackupPayloadTest {
             bundled = false,
         )
         val override = UserTagOverrideEntity("override", "tag", "샘플", "예시", "other", true, null, 2)
-        val payload = PortableTagData(tags = listOf(tag), aliases = emptyList(), overrides = listOf(override), categories = emptyList())
+        val exclusion = TagExclusionEntity("hidden_tag", "AI", "typo", "Likely misspelling", true, 3, 4)
+        val payload = PortableTagData(tags = listOf(tag), aliases = emptyList(), overrides = listOf(override), categories = emptyList(), exclusions = listOf(exclusion))
         val restored = json.decodeFromString<PortableTagData>(json.encodeToString(payload))
         assertEquals(payload, restored)
+    }
+
+    @Test fun `legacy portable tag payload defaults to no exclusions`() {
+        val restored = json.decodeFromString<PortableTagData>("""{"version":1,"tags":[],"aliases":[],"overrides":[],"categories":[]}""")
+        assertEquals(emptyList<TagExclusionEntity>(), restored.exclusions)
     }
 
     @Test fun `app backup payload preserves thumbnail bytes`() {

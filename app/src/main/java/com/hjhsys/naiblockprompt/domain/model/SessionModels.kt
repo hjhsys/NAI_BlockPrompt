@@ -27,6 +27,7 @@ data class PromptPair(
 data class TextRenderingState(
     val enabled: Boolean = false,
     val content: String = "",
+    val description: String = "",
 )
 
 @Serializable
@@ -65,7 +66,7 @@ data class CharacterPrompt(
 enum class SeedMode { RANDOM, FIXED }
 
 @Serializable
-enum class ImageInputMode { IMAGE_TO_IMAGE, VIBE_TRANSFER, PRECISE_REFERENCE }
+enum class ImageInputMode { IMAGE_TO_IMAGE, VIBE_TRANSFER, PRECISE_REFERENCE, INPAINT }
 
 @Serializable
 enum class PreciseReferenceType(val apiValue: String) {
@@ -81,6 +82,7 @@ data class ImageInputState(
     val informationExtracted: Float = 1f,
     val fidelity: Float = 0f,
     val preciseType: PreciseReferenceType = PreciseReferenceType.CHARACTER_AND_STYLE,
+    val maskPngBase64: String? = null,
 )
 
 /**
@@ -99,6 +101,8 @@ data class GenerationSettings(
     val seed: Long? = null,
     val guidanceRescale: Float? = null,
     val imageInput: ImageInputState? = null,
+    /** Retained across model switches; only sent when the selected model exposes this choice. */
+    val noiseSchedule: String = "karras",
 )
 
 @Serializable

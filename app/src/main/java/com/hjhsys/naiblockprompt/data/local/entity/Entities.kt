@@ -161,6 +161,19 @@ data class UserTagOverrideEntity(
     val favorite: Boolean,
     val thumbnailPath: String?,
     val updatedAt: Long,
+    @ColumnInfo(defaultValue = "0") val translationDeferred: Boolean = false,
+)
+
+@Serializable
+@Entity(tableName = "tag_exclusions", indices = [Index("origin")])
+data class TagExclusionEntity(
+    @PrimaryKey val canonicalTag: String,
+    val origin: String,
+    val reasonCode: String,
+    val reasonText: String?,
+    @ColumnInfo(defaultValue = "0") val userConfirmed: Boolean = false,
+    val createdAt: Long,
+    val updatedAt: Long,
 )
 
 @Serializable
@@ -168,4 +181,15 @@ data class UserTagOverrideEntity(
 data class UserTagCategoryEntity(
     @PrimaryKey val name: String,
     val createdAt: Long,
+)
+
+@Serializable
+@Entity(tableName = "wildcards", indices = [Index(value = ["name"], unique = true)])
+data class WildcardEntity(
+    @PrimaryKey val id: String,
+    val name: String,
+    val valuesText: String,
+    val folder: String? = null,
+    val createdAt: Long,
+    val updatedAt: Long,
 )

@@ -68,14 +68,22 @@ interface HistoryDao {
 
 @Dao
 interface TagDao {
-    @Query("SELECT * FROM tags WHERE bundled = 0") suspend fun listPortableTags(): List<TagEntity>
+    @Query("SELECT * FROM wildcards ORDER BY name COLLATE NOCASE") fun observeWildcards(): Flow<List<WildcardEntity>>
+    @Query("SELECT * FROM wildcards ORDER BY name COLLATE NOCASE") suspend fun listWildcards(): List<WildcardEntity>
+    @Query("SELECT * FROM wildcards WHERE name = :name COLLATE NOCASE LIMIT 1") suspend fun findWildcardByName(name: String): WildcardEntity?
+    @Upsert suspend fun upsertWildcards(entities: List<WildcardEntity>)
+    @Upsert suspend fun upsertWildcard(entity: WildcardEntity)
+    @Delete suspend fun deleteWildcard(entity: WildcardEntity)
+    @Query("SELECT * FROM tags WHERE bundled = 0 OR useCount > 0 OR lastUsedAt IS NOT NULL OR novelAiSource = 1 OR danbooruSource = 1 OR userCreated = 1") suspend fun listPortableTags(): List<TagEntity>
     @Query("SELECT * FROM tag_aliases WHERE tagId IN (SELECT id FROM tags WHERE bundled = 0)") suspend fun listPortableAliases(): List<TagAliasEntity>
     @Query("SELECT * FROM user_tag_overrides") suspend fun listUserOverrides(): List<UserTagOverrideEntity>
+    @Query("SELECT * FROM tag_exclusions") suspend fun listTagExclusions(): List<TagExclusionEntity>
     @Query("SELECT * FROM user_tag_categories") suspend fun listUserCategoryEntities(): List<UserTagCategoryEntity>
     @Upsert suspend fun upsertTags(entities: List<TagEntity>)
     @Upsert suspend fun upsertAliases(entities: List<TagAliasEntity>)
     @Upsert suspend fun upsertAliasForBackup(entity: TagAliasEntity)
     @Upsert suspend fun upsertUserOverrides(entities: List<UserTagOverrideEntity>)
+    @Upsert suspend fun upsertTagExclusions(entities: List<TagExclusionEntity>)
     @Upsert suspend fun upsertUserCategories(entities: List<UserTagCategoryEntity>)
     @Query("SELECT DISTINCT COALESCE(u.appCategory, t.appCategory, t.danbooruCategory) FROM tags t LEFT JOIN user_tag_overrides u ON u.tagId = t.id WHERE COALESCE(u.appCategory, t.appCategory, t.danbooruCategory, '') != '' ORDER BY 1")
     fun observeUsedCategories(): Flow<List<String>>
@@ -90,7 +98,7 @@ interface TagDao {
     suspend fun findByCanonical(canonical: String): TagEntity?
     @Query("SELECT * FROM tags WHERE canonicalTag LIKE '%' || :query || '%' ORDER BY useCount DESC, lastUsedAt DESC, danbooruPostCount DESC, naiConfidence DESC LIMIT :limit")
     suspend fun search(query: String, limit: Int = 50): List<TagEntity>
-    @Query("SELECT * FROM tags WHERE canonicalTag LIKE :prefix || '%' ORDER BY EXISTS(SELECT 1 FROM user_tag_overrides u WHERE u.tagId = tags.id AND u.favorite = 1) DESC, useCount DESC, lastUsedAt DESC, danbooruPostCount DESC, naiConfidence DESC LIMIT :limit")
+    @Query("SELECT * FROM tags WHERE canonicalTag LIKE :prefix || '%' AND NOT EXISTS(SELECT 1 FROM tag_exclusions x WHERE x.canonicalTag = tags.canonicalTag) ORDER BY EXISTS(SELECT 1 FROM user_tag_overrides u WHERE u.tagId = tags.id AND u.favorite = 1) DESC, useCount DESC, lastUsedAt DESC, danbooruPostCount DESC, naiConfidence DESC LIMIT :limit")
     suspend fun searchPrefix(prefix: String, limit: Int = 12): List<TagEntity>
     @Query("""
         SELECT t.id, t.canonicalTag, t.danbooruCategory,
@@ -104,15 +112,25 @@ interface TagDao {
         FROM tags t
         LEFT JOIN base_translations b ON b.tagId = t.id
         LEFT JOIN user_tag_overrides u ON u.tagId = t.id
-        WHERE t.canonicalTag LIKE :canonicalPrefix || '%' COLLATE NOCASE
+        WHERE NOT EXISTS(SELECT 1 FROM tag_exclusions x WHERE x.canonicalTag = t.canonicalTag)
+          AND (t.canonicalTag LIKE :canonicalPrefix || '%' COLLATE NOCASE
            OR COALESCE(u.korean, b.korean, '') LIKE '%' || :query || '%' COLLATE NOCASE
            OR COALESCE(u.koreanAliases, b.koreanAliases, '') LIKE '%' || :query || '%' COLLATE NOCASE
-           OR EXISTS(SELECT 1 FROM tag_aliases a WHERE a.tagId = t.id AND a.alias LIKE :canonicalPrefix || '%' COLLATE NOCASE)
+           OR EXISTS(SELECT 1 FROM tag_aliases a WHERE a.tagId = t.id AND a.alias LIKE :canonicalPrefix || '%' COLLATE NOCASE))
         ORDER BY COALESCE(u.favorite, 0) DESC, t.useCount DESC, t.lastUsedAt DESC,
             t.danbooruPostCount DESC, t.naiConfidence DESC
         LIMIT :limit
     """)
     suspend fun searchAutocomplete(query: String, canonicalPrefix: String, limit: Int = 12): List<TagDictionaryItem>
+    @Query("SELECT canonicalTag FROM tag_exclusions WHERE canonicalTag IN (:canonicalTags)")
+    suspend fun findExcludedCanonicals(canonicalTags: List<String>): List<String>
+    @Query("SELECT * FROM tag_exclusions WHERE canonicalTag = :canonicalTag LIMIT 1")
+    suspend fun findTagExclusion(canonicalTag: String): TagExclusionEntity?
+    @Upsert suspend fun upsertTagExclusion(entity: TagExclusionEntity)
+    @Query("DELETE FROM tag_exclusions WHERE canonicalTag = :canonicalTag")
+    suspend fun deleteTagExclusion(canonicalTag: String)
+    @Query("SELECT * FROM tag_exclusions WHERE (:origin = '' OR origin = :origin) ORDER BY updatedAt DESC, canonicalTag COLLATE NOCASE")
+    fun observeTagExclusions(origin: String): Flow<List<TagExclusionEntity>>
     @Query("UPDATE tags SET useCount = useCount + 1, lastUsedAt = :usedAt WHERE canonicalTag = :canonical")
     suspend fun recordUse(canonical: String, usedAt: Long)
     @Upsert suspend fun upsertTag(entity: TagEntity)
@@ -120,10 +138,25 @@ interface TagDao {
     @Upsert suspend fun upsertUserOverride(entity: UserTagOverrideEntity)
     @Query("DELETE FROM user_tag_overrides WHERE tagId = :tagId") suspend fun clearUserOverride(tagId: String)
     @Query("SELECT COUNT(*) FROM tags") fun observeCount(): Flow<Int>
-    @Query("SELECT COUNT(*) FROM tags t LEFT JOIN base_translations b ON b.tagId = t.id LEFT JOIN user_tag_overrides u ON u.tagId = t.id WHERE COALESCE(u.korean, b.korean, '') = ''")
+    @Query("SELECT COUNT(*) FROM tags t LEFT JOIN base_translations b ON b.tagId = t.id LEFT JOIN user_tag_overrides u ON u.tagId = t.id WHERE COALESCE(u.korean, b.korean, '') = '' AND COALESCE(u.translationDeferred, 0) = 0")
     fun observeMissingTranslationCount(): Flow<Int>
-    @Query("SELECT COUNT(*) FROM tags t LEFT JOIN user_tag_overrides u ON u.tagId = t.id WHERE COALESCE(u.appCategory, t.appCategory, '') = ''")
+    @Query("SELECT COUNT(*) FROM tags t LEFT JOIN user_tag_overrides u ON u.tagId = t.id WHERE COALESCE(u.appCategory, t.appCategory, t.danbooruCategory, '') = '' AND COALESCE(u.translationDeferred, 0) = 0")
     fun observeMissingCategoryCount(): Flow<Int>
+    @Query("SELECT COUNT(*) FROM user_tag_overrides WHERE translationDeferred = 1")
+    fun observeDeferredTranslationCount(): Flow<Int>
+    @Query("""
+        SELECT COUNT(*) FROM tags t
+        LEFT JOIN base_translations b ON b.tagId = t.id
+        LEFT JOIN user_tag_overrides u ON u.tagId = t.id
+        WHERE NOT EXISTS(SELECT 1 FROM tag_exclusions x WHERE x.canonicalTag = t.canonicalTag)
+          AND (:query = '' OR t.canonicalTag LIKE '%' || :canonicalQuery || '%' COLLATE NOCASE
+            OR COALESCE(u.korean, b.korean, '') LIKE '%' || :query || '%' COLLATE NOCASE
+            OR COALESCE(u.koreanAliases, b.koreanAliases, '') LIKE '%' || :query || '%' COLLATE NOCASE
+            OR EXISTS(SELECT 1 FROM tag_aliases a WHERE a.tagId = t.id AND a.alias LIKE '%' || :query || '%' COLLATE NOCASE))
+          AND (:filter != 'FAVORITES' OR COALESCE(u.favorite, 0) = 1)
+          AND (:category = '' OR COALESCE(u.appCategory, t.appCategory, t.danbooruCategory, '') = :category)
+    """)
+    fun observeDictionaryCount(query: String, canonicalQuery: String, filter: String, category: String): Flow<Int>
     @Query("""
         SELECT t.id, t.canonicalTag, t.danbooruCategory,
             COALESCE(u.appCategory, t.appCategory) AS appCategory,
@@ -136,7 +169,8 @@ interface TagDao {
         FROM tags t
         LEFT JOIN base_translations b ON b.tagId = t.id
         LEFT JOIN user_tag_overrides u ON u.tagId = t.id
-        WHERE (:query = '' OR t.canonicalTag LIKE '%' || :canonicalQuery || '%' COLLATE NOCASE
+        WHERE NOT EXISTS(SELECT 1 FROM tag_exclusions x WHERE x.canonicalTag = t.canonicalTag)
+          AND (:query = '' OR t.canonicalTag LIKE '%' || :canonicalQuery || '%' COLLATE NOCASE
             OR COALESCE(u.korean, b.korean, '') LIKE '%' || :query || '%' COLLATE NOCASE
             OR COALESCE(u.koreanAliases, b.koreanAliases, '') LIKE '%' || :query || '%' COLLATE NOCASE
             OR EXISTS(SELECT 1 FROM tag_aliases a WHERE a.tagId = t.id AND a.alias LIKE '%' || :query || '%' COLLATE NOCASE))
@@ -171,17 +205,25 @@ interface TagDao {
         FROM tags t
         LEFT JOIN base_translations b ON b.tagId = t.id
         LEFT JOIN user_tag_overrides u ON u.tagId = t.id
-        WHERE (:missingTranslation = 1 AND COALESCE(u.korean, b.korean, '') = '')
-           OR (:missingCategory = 1 AND COALESCE(u.appCategory, t.appCategory, '') = '')
+        WHERE (COALESCE(u.translationDeferred, 0) = 0 AND (
+            (:missingTranslation = 1 AND COALESCE(u.korean, b.korean, '') = '')
+            OR (:missingCategory = 1 AND COALESCE(u.appCategory, t.appCategory, t.danbooruCategory, '') = '')
+        )) OR (:includeDeferred = 1 AND u.translationDeferred = 1)
         ORDER BY t.useCount DESC, t.danbooruPostCount DESC, t.canonicalTag ASC
         LIMIT :limit
     """)
-    suspend fun translationCandidates(limit: Int, missingTranslation: Boolean, missingCategory: Boolean): List<TagDictionaryItem>
+    suspend fun translationCandidates(limit: Int, missingTranslation: Boolean, missingCategory: Boolean, includeDeferred: Boolean = false): List<TagDictionaryItem>
 
     @Query("DELETE FROM tags WHERE id = :tagId AND userCreated = 1 AND novelAiSource = 0 AND danbooruSource = 0 AND bundled = 0")
     suspend fun deleteUserOnlyTag(tagId: String): Int
+    @Query("SELECT EXISTS(SELECT 1 FROM tags WHERE id = :tagId AND bundled = 0 AND userCreated = 0 AND useCount = 0 AND lastUsedAt IS NULL AND NOT EXISTS(SELECT 1 FROM user_tag_overrides WHERE tagId = :tagId AND (korean IS NOT NULL OR koreanAliases IS NOT NULL OR appCategory IS NOT NULL OR favorite = 1 OR thumbnailPath IS NOT NULL)) AND NOT EXISTS(SELECT 1 FROM base_translations WHERE tagId = :tagId))")
+    suspend fun canDeleteTranslationTypo(tagId: String): Boolean
+
+    @Query("DELETE FROM tags WHERE id = :tagId AND bundled = 0 AND userCreated = 0 AND useCount = 0 AND lastUsedAt IS NULL AND NOT EXISTS(SELECT 1 FROM user_tag_overrides WHERE tagId = :tagId AND (korean IS NOT NULL OR koreanAliases IS NOT NULL OR appCategory IS NOT NULL OR favorite = 1 OR thumbnailPath IS NOT NULL)) AND NOT EXISTS(SELECT 1 FROM base_translations WHERE tagId = :tagId)")
+    suspend fun deleteTranslationTypo(tagId: String): Int
     @Query("DELETE FROM user_tag_overrides") suspend fun clearAllUserTagOverrides()
     @Query("DELETE FROM user_tag_categories") suspend fun clearAllUserTagCategories()
+    @Query("DELETE FROM tag_exclusions") suspend fun clearAllTagExclusions()
     @Query("DELETE FROM tags WHERE bundled = 0") suspend fun deleteNonBundledTags()
     @Query("UPDATE tags SET novelAiSource = 0, danbooruSource = 0, userCreated = 0, naiCount = NULL, naiConfidence = NULL, useCount = 0, lastUsedAt = NULL WHERE bundled = 1")
     suspend fun resetBundledTagMetadata()
@@ -190,12 +232,14 @@ interface TagDao {
     suspend fun resetToBundledTags() {
         clearAllUserTagOverrides()
         clearAllUserTagCategories()
+        clearAllTagExclusions()
         deleteNonBundledTags()
         resetBundledTagMetadata()
     }
 
     @Transaction
-    suspend fun applyTranslationImport(overrides: List<UserTagOverrideEntity>, categories: List<UserTagCategoryEntity>) {
+    suspend fun applyTranslationImport(overrides: List<UserTagOverrideEntity>, categories: List<UserTagCategoryEntity>, deleteIds: Set<String> = emptySet()) {
+        deleteIds.forEach { deleteTranslationTypo(it) }
         categories.forEach { upsertUserCategory(it) }
         overrides.forEach { upsertUserOverride(it) }
     }

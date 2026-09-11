@@ -17,6 +17,12 @@
 - 성공 JSON의 `images[]`: base64 `image`, `index`, `seed`
 - 앱은 `n_samples=1`, `image_format=png`로 원본 이미지 1장만 요청한다.
 
+공식 OpenAPI에는 `POST /ai/generate-image-stream`과 `parameters.stream`의 `sse` / `msgpack`
+값도 노출되어 있다. 스트림은 `intermediate`, `final`, `error` 이벤트를 포함하며 최종 저장물은
+반드시 `final` 이벤트에서 선택한다. 2026-09-11 Inpaint 실측에서 정상 웹 PNG는
+`stream=msgpack`이었으므로 Inpaint는 웹과 동일한 length-prefixed MessagePack 스트림을 해석한다.
+일반 생성의 비스트리밍 JSON 경로는 변경하지 않았다.
+
 Token은 Android Keystore AES/GCM key로 암호화하며 encrypted payload는 `noBackupFilesDir`에 저장한다. Room, DataStore, Session JSON, 로그에는 저장하지 않는다.
 
 ## Domain → API mapping
@@ -65,6 +71,13 @@ NovelAI 공식 웹에서 같은 캐릭터 배치를 V4.5와 V5로 생성한 PNG 
 - 모델 전환은 Session/Block을 변경하지 않고 Mapper에서 처리한다. V4/V4.5는 `params_version=3`, V5는 `params_version=4`를 선택하며 양쪽 모두 구조화된 `v4_prompt`/`v4_negative_prompt` conditioning을 사용한다. V5에서 아직 지원이 확인되지 않은 부가기능은 Session에는 보존하되 request에서 제외하는 capability 정책을 따른다.
 - model/sampler ID enum: Swagger에 없다. 사용자가 입력한 정확한 API ID를 그대로 보내며 임의 default나 변환을 두지 않는다.
 - UI에서 지원하지 않는 나머지 parameter는 보내지 않는다.
+
+### V4.5 Advanced 설정 확인 (2026-09-10)
+
+- 공식 OpenAPI의 `RequestParameters`에는 `noise_schedule`, `skip_cfg_above_sigma`(Variety Boost), `dynamic_thresholding`가 존재한다.
+- NovelAI 공식 Summer Sampler 공지는 Karras, Exponential, Polyexponential 세 noise schedule과 각각의 용도를 확인해 준다. 앱은 V4.5에서만 이 세 값을 선택하게 하고, 선택값을 `noise_schedule`에 소문자 API 값으로 보낸다.
+- V5에서 동일 선택 UI가 지원된다는 공개 근거는 확인하지 못했다. 선택값은 Session에 보존하지만 V5 request에는 안정된 기존 기본값 `karras`만 사용한다.
+- Variety Boost의 `skip_cfg_above_sigma` 활성값/default 및 Decrisper와 `dynamic_thresholding`의 정확한 wire mapping은 공개 Swagger가 규정하지 않는다. 인증된 웹 request를 확보하기 전에는 UI나 mapper에 추측값을 추가하지 않는다.
 
 ## 연결, 오류, Retry
 

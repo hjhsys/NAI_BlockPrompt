@@ -33,6 +33,10 @@ import com.hjhsys.naiblockprompt.ui.generate.GeneratePagerScreen
 import com.hjhsys.naiblockprompt.ui.generate.GenerationSettingsScreen
 import com.hjhsys.naiblockprompt.ui.library.SavedScreen
 import com.hjhsys.naiblockprompt.ui.components.AppTitleBar
+import com.hjhsys.naiblockprompt.ui.components.NumericSlider
+import com.hjhsys.naiblockprompt.ui.components.NumericSliderSpec
+import com.hjhsys.naiblockprompt.ui.components.NumericValueEditor
+import com.hjhsys.naiblockprompt.ui.components.HelpAffordance
 import com.hjhsys.naiblockprompt.domain.model.AutocompleteSource
 import com.hjhsys.naiblockprompt.ui.database.TagDatabaseScreen
 import com.hjhsys.naiblockprompt.ui.help.HelpScreen
@@ -41,6 +45,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
 import android.content.Intent
+import com.hjhsys.naiblockprompt.data.diagnostics.CrashLogStore
+import com.hjhsys.naiblockprompt.data.library.HistoryStorageEstimator
+import com.hjhsys.naiblockprompt.data.library.HistoryStorageSample
 
 private enum class MainDestination(
     val route: String,
@@ -61,6 +68,19 @@ fun NaiBlockPromptApp(container: AppContainer) {
     val navController = rememberNavController()
     val viewModel: MainViewModel = viewModel(factory = MainViewModel.factory(container))
     val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val transferFailed by viewModel.transferFailed.collectAsStateWithLifecycle()
+    val wildcardSaveFailed by viewModel.wildcardSaveFailed.collectAsStateWithLifecycle()
+    if (wildcardSaveFailed) AlertDialog(
+        onDismissRequest = viewModel::dismissWildcardSaveFailure,
+        text = { Text(stringResource(R.string.wildcard_save_failed)) },
+        confirmButton = { TextButton(onClick = viewModel::dismissWildcardSaveFailure) { Text(stringResource(R.string.close)) } },
+    )
+    if (transferFailed) AlertDialog(
+        onDismissRequest = viewModel::dismissTransferFailure,
+        title = { Text(stringResource(R.string.transfer_failed_title)) },
+        text = { Text(stringResource(R.string.transfer_failed_message)) },
+        confirmButton = { TextButton(onClick = viewModel::dismissTransferFailure) { Text(stringResource(R.string.close)) } },
+    )
     val session by viewModel.session.collectAsStateWithLifecycle()
     val tokenConfigured by viewModel.tokenConfigured.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
@@ -84,10 +104,12 @@ fun NaiBlockPromptApp(container: AppContainer) {
 
     Scaffold(
         bottomBar = {
-            if (!(currentRoute == MainDestination.Saved.route && savedWorkflow != null) &&
-                currentRoute != MainDestination.TagPicker.route &&
+            if (currentRoute != MainDestination.TagPicker.route &&
                 currentRoute != MainDestination.Help.route
-            ) NavigationBar {
+            ) NavigationBar(
+                modifier = Modifier.height(88.dp).navigationBarsPadding(),
+                windowInsets = WindowInsets(0, 0, 0, 0),
+            ) {
                 listOf(MainDestination.Database, MainDestination.Generate, MainDestination.Saved).forEach { destination ->
                     NavigationBarItem(
                         selected = currentRoute == destination.route,
@@ -98,7 +120,7 @@ fun NaiBlockPromptApp(container: AppContainer) {
                                 launchSingleTop = true
                             }
                         },
-                        icon = { Icon(destination.icon, contentDescription = null, modifier = Modifier.size(20.dp)) },
+                        icon = { Icon(destination.icon, contentDescription = null, modifier = Modifier.size(24.dp)) },
                         label = { Text(stringResource(destination.label), style = MaterialTheme.typography.labelSmall) },
                     )
                 }
@@ -108,7 +130,7 @@ fun NaiBlockPromptApp(container: AppContainer) {
         NavHost(
             navController = navController,
             startDestination = MainDestination.Generate.route,
-            modifier = Modifier.padding(padding),
+            modifier = Modifier.padding(padding).consumeWindowInsets(padding),
         ) {
             composable(MainDestination.Generate.route) {
                 GeneratePagerScreen(
@@ -116,7 +138,6 @@ fun NaiBlockPromptApp(container: AppContainer) {
                     appSettings = settings,
                     viewModel = viewModel,
                     onOpenSettings = { navController.navigate(MainDestination.Settings.route) { launchSingleTop = true } },
-                    onOpenGenerationSettings = { navController.navigate(MainDestination.GenerationSettings.route) { launchSingleTop = true } },
                     returnToPromptSignal = generateReturnSignal,
                     onOpenTagDatabase = { navController.navigate(MainDestination.TagPicker.route) },
                 )
@@ -148,7 +169,11 @@ fun NaiBlockPromptApp(container: AppContainer) {
                 SettingsScreen(
                     showFormatter = settings.showFormatterActions,
                     normalizeWeights = settings.normalizeWeightClosings,
+                    showTokenEstimates = settings.showTokenEstimates,
+                    useTextRendering = settings.useTextRendering,
+                    colorHelperMode = settings.colorHelperMode,
                     historyLimit = settings.historyLimit,
+                    historyStorageSample = viewModel.historyStorageSample,
                     autocompleteSource = settings.autocompleteSource,
                     appearanceMode = settings.appearanceMode,
                     imageSaveTreeUri = settings.imageSaveTreeUri,
@@ -156,6 +181,9 @@ fun NaiBlockPromptApp(container: AppContainer) {
                     connectionState = connectionState,
                     onShowFormatterChange = viewModel::setShowFormatter,
                     onNormalizeWeightsChange = viewModel::setNormalizeWeights,
+                    onShowTokenEstimatesChange = viewModel::setShowTokenEstimates,
+                    onUseTextRenderingChange = viewModel::setUseTextRendering,
+                    onColorHelperModeChange = viewModel::setColorHelperMode,
                     onHistoryLimitChange = viewModel::setHistoryLimit,
                     onAutocompleteSourceChange = viewModel::setAutocompleteSource,
                     onAppearanceModeChange = viewModel::setAppearanceMode,
@@ -205,7 +233,11 @@ private fun PlaceholderScreen(@StringRes title: Int, @StringRes message: Int, on
 private fun SettingsScreen(
     showFormatter: Boolean,
     normalizeWeights: Boolean,
+    showTokenEstimates: Boolean,
+    useTextRendering: Boolean,
+    colorHelperMode: com.hjhsys.naiblockprompt.domain.model.ColorHelperMode,
     historyLimit: Int,
+    historyStorageSample: kotlinx.coroutines.flow.StateFlow<HistoryStorageSample>,
     autocompleteSource: AutocompleteSource,
     appearanceMode: com.hjhsys.naiblockprompt.domain.model.AppearanceMode,
     imageSaveTreeUri: String?,
@@ -213,6 +245,9 @@ private fun SettingsScreen(
     connectionState: ConnectionUiState,
     onShowFormatterChange: (Boolean) -> Unit,
     onNormalizeWeightsChange: (Boolean) -> Unit,
+    onShowTokenEstimatesChange: (Boolean) -> Unit,
+    onUseTextRenderingChange: (Boolean) -> Unit,
+    onColorHelperModeChange: (com.hjhsys.naiblockprompt.domain.model.ColorHelperMode) -> Unit,
     onHistoryLimitChange: (Int) -> Unit,
     onAutocompleteSourceChange: (AutocompleteSource) -> Unit,
     onAppearanceModeChange: (com.hjhsys.naiblockprompt.domain.model.AppearanceMode) -> Unit,
@@ -227,10 +262,13 @@ private fun SettingsScreen(
     onOpenHelp: () -> Unit,
     onBack: () -> Unit,
 ) {
+    val storageSample by historyStorageSample.collectAsStateWithLifecycle()
     var token by rememberSaveable { mutableStateOf("") }
     var showTagReset by rememberSaveable { mutableStateOf(false) }
     var tagResetAcknowledged by rememberSaveable { mutableStateOf(false) }
     val context = LocalContext.current
+    val crashLogStore = remember(context) { CrashLogStore(context.applicationContext) }
+    var crashLogAvailable by remember { mutableStateOf(crashLogStore.read() != null) }
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         uri?.let {
             runCatching {
@@ -291,7 +329,25 @@ private fun SettingsScreen(
         ) {
         SettingsSection(R.string.settings_section_prompt_generation)
         SettingSwitch(R.string.settings_formatter, showFormatter, onShowFormatterChange)
-        SettingSwitch(R.string.settings_weight_normalization, normalizeWeights, onNormalizeWeightsChange)
+        SettingSwitch(R.string.settings_weight_normalization, normalizeWeights, onNormalizeWeightsChange, R.string.help_weight_normalization_body)
+        SettingSwitch(R.string.settings_token_estimates, showTokenEstimates, onShowTokenEstimatesChange, R.string.help_token_estimates_body)
+        SettingSwitch(R.string.settings_use_text_rendering, useTextRendering, onUseTextRenderingChange, R.string.help_text_rendering_body)
+        Text(stringResource(R.string.color_helper), style = MaterialTheme.typography.titleMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            com.hjhsys.naiblockprompt.domain.model.ColorHelperMode.entries.forEach { mode ->
+                FilterChip(
+                    selected = colorHelperMode == mode,
+                    onClick = { onColorHelperModeChange(mode) },
+                    label = { Text(stringResource(when (mode) {
+                        com.hjhsys.naiblockprompt.domain.model.ColorHelperMode.ALWAYS -> R.string.color_helper_always
+                        com.hjhsys.naiblockprompt.domain.model.ColorHelperMode.WHILE_EDITING -> R.string.color_helper_editing
+                        com.hjhsys.naiblockprompt.domain.model.ColorHelperMode.OFF -> R.string.off
+                    })) },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+        Text(stringResource(R.string.color_helper_setting_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         SettingsSection(R.string.settings_section_appearance)
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             com.hjhsys.naiblockprompt.domain.model.AppearanceMode.entries.forEach { mode ->
@@ -316,7 +372,31 @@ private fun SettingsScreen(
         }
         Text(stringResource(R.string.save_folder_history_warning), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(stringResource(R.string.settings_history_limit_value, historyLimit))
-        Slider(value = historyLimit.toFloat(), onValueChange = { onHistoryLimitChange(it.toInt()) }, valueRange = 1f..100f, steps = 98)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            NumericSlider(
+                value = historyLimit.toDouble(),
+                spec = HISTORY_LIMIT_SLIDER,
+                onValueChange = { onHistoryLimitChange(it.toInt()) },
+                modifier = Modifier.weight(1f),
+            )
+            NumericValueEditor(
+                value = historyLimit.toDouble(),
+                spec = HISTORY_LIMIT_SLIDER,
+                label = stringResource(R.string.settings_history_limit),
+                onValueChange = { onHistoryLimitChange(it.toInt()) },
+            )
+        }
+        val estimatedHistoryBytes = HistoryStorageEstimator.estimatedBytes(storageSample, historyLimit)
+        Text(
+            if (estimatedHistoryBytes == null) stringResource(R.string.settings_history_storage_unavailable)
+            else stringResource(
+                R.string.settings_history_storage_estimate,
+                estimatedHistoryBytes.toDouble() / (1024.0 * 1024.0),
+                storageSample.sampleCount,
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         SettingsSection(R.string.settings_section_autocomplete_tags)
         Text(stringResource(R.string.settings_autocomplete), style = MaterialTheme.typography.titleMedium)
         AutocompleteSource.entries.forEach { source ->
@@ -365,11 +445,42 @@ private fun SettingsScreen(
             Spacer(Modifier.width(8.dp))
             Text(stringResource(R.string.help_user_guide))
         }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                enabled = crashLogAvailable,
+                onClick = {
+                    val report = crashLogStore.read() ?: return@OutlinedButton
+                    context.startActivity(Intent.createChooser(
+                        Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_SUBJECT, context.getString(R.string.crash_log_share_subject))
+                            putExtra(Intent.EXTRA_TEXT, report)
+                        },
+                        context.getString(R.string.crash_log_share),
+                    ))
+                },
+                modifier = Modifier.weight(1f),
+            ) { Text(stringResource(R.string.crash_log_share)) }
+            TextButton(
+                enabled = crashLogAvailable,
+                onClick = {
+                    crashLogStore.clear()
+                    crashLogAvailable = crashLogStore.read() != null
+                },
+            ) { Text(stringResource(R.string.crash_log_delete)) }
+        }
+        Text(
+            stringResource(if (crashLogAvailable) R.string.crash_log_available else R.string.crash_log_empty),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         Text(stringResource(R.string.app_version, BuildConfig.VERSION_NAME), style = MaterialTheme.typography.bodySmall)
         Text(stringResource(R.string.settings_saved), style = MaterialTheme.typography.bodySmall)
         }
     }
 }
+
+private val HISTORY_LIMIT_SLIDER = NumericSliderSpec(min = 1.0, max = 100.0, step = 1.0, displayDecimals = 0)
 
 @Composable
 private fun SettingsSection(@StringRes title: Int) {
@@ -414,6 +525,7 @@ private fun SettingSwitch(
     @StringRes label: Int,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
+    @StringRes helpBody: Int? = null,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -421,6 +533,7 @@ private fun SettingSwitch(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text(stringResource(label), modifier = Modifier.weight(1f))
+        helpBody?.let { HelpAffordance(title = label, body = it) }
         Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }

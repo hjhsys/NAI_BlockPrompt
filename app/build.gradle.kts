@@ -14,8 +14,8 @@ android {
         applicationId = "com.hjhsys.naiblockprompt"
         minSdk = 23
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -23,6 +23,19 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    // Release credentials are supplied locally, never stored in the repository.
+    val releaseStore = providers.environmentVariable("BLOCKPROMPT_KEYSTORE").orNull
+    if (!releaseStore.isNullOrBlank()) {
+        signingConfigs.create("release") {
+            storeFile = file(releaseStore)
+            storeType = "PKCS12"
+            storePassword = providers.environmentVariable("BLOCKPROMPT_STORE_PASSWORD").get()
+            keyAlias = providers.environmentVariable("BLOCKPROMPT_KEY_ALIAS").get()
+            keyPassword = providers.environmentVariable("BLOCKPROMPT_KEY_PASSWORD").get()
+        }
+        buildTypes.getByName("release").signingConfig = signingConfigs.getByName("release")
     }
 
     compileOptions {

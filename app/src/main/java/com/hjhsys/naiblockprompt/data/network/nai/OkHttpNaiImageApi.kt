@@ -5,6 +5,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -12,6 +16,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import java.io.IOException
 import okio.ByteString.Companion.decodeBase64
 import android.util.Log
+import com.hjhsys.naiblockprompt.BuildConfig
 
 class OkHttpNaiImageApi(
     private val client: OkHttpClient,
@@ -19,14 +24,23 @@ class OkHttpNaiImageApi(
     private val baseUrl: HttpUrl = "https://image.novelai.net/".toHttpUrl(),
 ) : NaiImageApi {
     override suspend fun generate(token: String, request: NaiImageGenerationRequest): NaiApiResult<GeneratedImagePayload> =
-        execute(
+        if (request.parameters.stream == "msgpack") executeBytes(
             Request.Builder()
-                .url(baseUrl.resolve("ai/generate-image")!!)
-                .post(json.encodeToString(request).toRequestBody(JSON_MEDIA_TYPE))
+                .url(baseUrl.resolve("ai/generate-image-stream")!!)
+                .post(generationBody(request))
                 .header("Authorization", bearer(token))
-                .header("Accept", "application/json")
+                .header("Accept", "application/msgpack")
+                .build(),
+        ) { body -> NaiMsgpackImageStream.decode(body, request.parameters.seed, captureDiagnostics = BuildConfig.DEBUG) }
+        else execute(
+            Request.Builder()
+                .url(baseUrl.resolve(if (request.parameters.stream == "sse") "ai/generate-image-stream" else "ai/generate-image")!!)
+                .post(generationBody(request))
+                .header("Authorization", bearer(token))
+                .header("Accept", if (request.parameters.stream == "sse") "text/event-stream" else "application/json")
                 .build(),
         ) { body ->
+            if (request.parameters.stream == "sse") return@execute parseImageSse(body)
             val response = json.decodeFromString<NaiImageGenerationResponse>(body)
             val first = response.images.firstOrNull()
                 ?: return@execute NaiApiResult.Failure(NaiApiFailure.InvalidResponse("images is empty"))
@@ -34,6 +48,61 @@ class OkHttpNaiImageApi(
                 ?: return@execute NaiApiResult.Failure(NaiApiFailure.InvalidResponse("invalid base64 image"))
             NaiApiResult.Success(GeneratedImagePayload(bytes, first.seed))
         }
+
+    internal fun parseImageSse(body: String): NaiApiResult<GeneratedImagePayload> {
+        var eventName: String? = null
+        val dataLines = mutableListOf<String>()
+        var finalPayload: GeneratedImagePayload? = null
+        var streamError: String? = null
+
+        fun flushEvent() {
+            if (dataLines.isEmpty()) {
+                eventName = null
+                return
+            }
+            val data = dataLines.joinToString("\n")
+            dataLines.clear()
+            val payload = runCatching { json.parseToJsonElement(data).jsonObject }.getOrNull()
+            val kind = (eventName ?: payload?.get("event_type")?.jsonPrimitive?.contentOrNull
+                ?: payload?.get("type")?.jsonPrimitive?.contentOrNull).orEmpty().lowercase()
+            when (kind) {
+                "final" -> {
+                    val image = payload?.get("image")?.jsonPrimitive?.contentOrNull
+                    val bytes = image?.substringAfter(',')?.decodeBase64()?.toByteArray()
+                    if (bytes == null) streamError = "final event has no valid image"
+                    else finalPayload = GeneratedImagePayload(bytes, payload["seed"]?.jsonPrimitive?.longOrNull)
+                }
+                "error" -> streamError = payload?.get("message")?.jsonPrimitive?.contentOrNull
+                    ?: payload?.get("error")?.jsonPrimitive?.contentOrNull
+                    ?: "image stream error"
+            }
+            eventName = null
+        }
+
+        body.lineSequence().forEach { line ->
+            when {
+                line.isBlank() -> flushEvent()
+                line.startsWith("event:") -> eventName = line.substringAfter(':').trim()
+                line.startsWith("data:") -> dataLines += line.substringAfter(':').trimStart()
+            }
+        }
+        flushEvent()
+        return finalPayload?.let { NaiApiResult.Success(it) }
+            ?: NaiApiResult.Failure(NaiApiFailure.InvalidResponse(streamError ?: "final image event is missing"))
+    }
+
+    internal fun generationBody(request: NaiImageGenerationRequest): RequestBody {
+        if (request.action != "infill") return json.encodeToString(request).toRequestBody(JSON_MEDIA_TYPE)
+        val image = requireNotNull(request.parameters.image?.decodeBase64()).toByteArray()
+        val mask = requireNotNull(request.parameters.mask?.decodeBase64()).toByteArray()
+        val wire = request.copy(parameters = request.parameters.copy(image = "image", mask = "mask"))
+        return MultipartBody.Builder().setType(MultipartBody.FORM)
+            .addFormDataPart("image", "image.png", image.toRequestBody("image/png".toMediaType()))
+            .addFormDataPart("mask", "mask.png", mask.toRequestBody("image/png".toMediaType()))
+            .addPart(Headers.headersOf("Content-Disposition", "form-data; name=\"request\""),
+                json.encodeToString(wire).toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+    }
 
     override suspend fun testConnection(token: String): NaiApiResult<Unit> {
         val url = baseUrl.newBuilder()

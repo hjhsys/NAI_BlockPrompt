@@ -38,7 +38,7 @@ class OkHttpAutocompleteApi(
             .addQueryParameter("limit", "12")
             .build().toString(),
     ) { body -> json.decodeFromString<List<DanbooruTag>>(body).map {
-        TagSuggestion(tag = it.name, source = SuggestionSource.DANBOORU, danbooruPostCount = it.postCount, category = it.category.toString())
+        TagSuggestion(tag = it.name, source = SuggestionSource.DANBOORU, danbooruPostCount = it.postCount, category = com.hjhsys.naiblockprompt.domain.tags.DanbooruCategory.normalize(it.category.toString()))
     } }
 
     private suspend fun <T> get(url: String, token: String? = null, parse: (String) -> T): Result<T> = withContext(Dispatchers.IO) {

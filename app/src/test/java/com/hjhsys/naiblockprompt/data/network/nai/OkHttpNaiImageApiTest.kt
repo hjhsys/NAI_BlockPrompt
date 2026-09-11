@@ -82,4 +82,54 @@ class OkHttpNaiImageApiTest {
             assertEquals(NaiApiFailure.Authentication, failure.error)
         } finally { server.shutdown() }
     }
+
+    @Test fun `inpaint uses web msgpack stream and keeps only the final image`() = runTest {
+        fun event(type: String, image: ByteArray): ByteArray = okio.Buffer().apply {
+            writeByte(0x83)
+            writeByte(0xaa).writeUtf8("event_type")
+            writeByte(0xa0 + type.length).writeUtf8(type)
+            writeByte(0xa5).writeUtf8("image")
+            writeByte(0xc4).writeByte(image.size).write(image)
+            writeByte(0xa7).writeUtf8("samp_ix")
+            writeByte(0)
+        }.readByteArray()
+        fun framed(vararg events: ByteArray) = okio.Buffer().apply {
+            events.forEach { writeInt(it.size).write(it) }
+        }
+        val intermediate = event("intermediate", byteArrayOf(9))
+        val final = event("final", byteArrayOf(4, 5, 6))
+        val server = MockWebServer().apply {
+            enqueue(MockResponse().setResponseCode(200).setHeader("Content-Type", "application/msgpack")
+                .setBody(framed(intermediate, final)))
+            start()
+        }
+        try {
+            val json = Json { encodeDefaults = true; explicitNulls = false; ignoreUnknownKeys = true }
+            val api = OkHttpNaiImageApi(OkHttpClient(), json, server.url("/"))
+            val session = Session.empty().copy(generationSettings = GenerationSettings("nai-diffusion-5-full", samplerId="k_euler", steps=28, scale=5f))
+            val base = (NaiRequestMapper { 77 }.prepare(session, true) as PrepareGenerationResult.Ready).generation.request
+            val request = base.copy(action = "infill", parameters = base.parameters.copy(
+                image = Base64.getEncoder().encodeToString(byteArrayOf(1)),
+                mask = Base64.getEncoder().encodeToString(byteArrayOf(2)),
+                stream = "msgpack",
+            ))
+
+            val result = api.generate("pst-secret", request) as NaiApiResult.Success
+
+            assertArrayEquals(byteArrayOf(4, 5, 6), result.value.bytes)
+            assertEquals(77L, result.value.seed)
+            val diagnostics = requireNotNull(result.value.streamDiagnostics)
+            assertArrayEquals(framed(intermediate, final).readByteArray(), diagnostics.rawResponse)
+            assertEquals(2, diagnostics.frames.size)
+            assertEquals("intermediate", diagnostics.frames[0].eventType)
+            assertEquals(0L, diagnostics.frames[0].sampleIndex)
+            assertArrayEquals(byteArrayOf(9), diagnostics.frames[0].image)
+            assertEquals("final", diagnostics.frames[1].eventType)
+            assertEquals(1, diagnostics.selectedFrameIndex)
+            val recorded = server.takeRequest()
+            assertEquals("/ai/generate-image-stream", recorded.path)
+            assertEquals("application/msgpack", recorded.getHeader("Accept"))
+            assertTrue(recorded.body.readUtf8().contains("\"stream\":\"msgpack\""))
+        } finally { server.shutdown() }
+    }
 }

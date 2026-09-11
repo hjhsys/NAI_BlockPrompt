@@ -9,4 +9,7 @@ captures/
 .cxx/
 *.jks
 *.keystore
+*.p12
+signing-credentials.json
+signing.properties
 secrets.properties

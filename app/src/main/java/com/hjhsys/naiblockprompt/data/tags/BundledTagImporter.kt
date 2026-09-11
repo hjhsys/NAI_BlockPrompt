@@ -32,7 +32,7 @@ class BundledTagImporter(
                     val fields = parseCsvLine(line)
                     if (fields.size < 3) return@forEach
                     val canonical = fields[0].trim()
-                    val category = categoryName(fields[1].toIntOrNull())
+                    val category = com.hjhsys.naiblockprompt.domain.tags.DanbooruCategory.normalize(fields[1].trim())
                     val postCount = fields[2].toLongOrNull()
                     if (canonical.isBlank() || postCount == null) return@forEach
                     val tagId = stableId(canonical)
@@ -77,7 +77,7 @@ class BundledTagImporter(
                     baseTagStatement.clearBindings()
                     baseTagStatement.bindString(1, tagId)
                     baseTagStatement.bindString(2, row.tag)
-                    row.sourceCategory?.let { baseTagStatement.bindString(3, it) } ?: baseTagStatement.bindNull(3)
+                    com.hjhsys.naiblockprompt.domain.tags.DanbooruCategory.normalize(row.sourceCategory)?.let { baseTagStatement.bindString(3, it) } ?: baseTagStatement.bindNull(3)
                     row.appCategory.takeIf(String::isNotBlank)?.let { baseTagStatement.bindString(4, it) } ?: baseTagStatement.bindNull(4)
                     row.postCount?.let { baseTagStatement.bindLong(5, it) } ?: baseTagStatement.bindNull(5)
                     baseTagStatement.bindLong(6, System.currentTimeMillis())
@@ -88,7 +88,7 @@ class BundledTagImporter(
                     translationStatement.bindString(2, tagId)
                     translationStatement.bindString(3, row.korean)
                     translationStatement.bindString(4, row.koreanAliases.joinToString(", "))
-                    translationStatement.bindString(5, TRANSLATION_SOURCE)
+                    translationStatement.bindString(5, row.translationSource.ifBlank { TRANSLATION_SOURCE })
                     translationStatement.bindLong(6, System.currentTimeMillis())
                     row.suggestedCategory.takeIf(String::isNotBlank)?.let { translationStatement.bindString(7, it) } ?: translationStatement.bindNull(7)
                     translationStatement.bindLong(8, if (row.needsReview) 1 else 0)
@@ -119,7 +119,7 @@ class BundledTagImporter(
     }
 
     companion object {
-        const val BUNDLED_VERSION = 20260906
+        const val BUNDLED_VERSION = 20260907
         const val ASSET = "danbooru_tags_pt20.csv"
         // Do not use a .gz suffix: Android's asset packager strips it after inflating the file.
         const val TRANSLATION_ASSET = "tag_translations_ko.jsonl.gzip"
@@ -134,7 +134,6 @@ class BundledTagImporter(
             ON CONFLICT(canonicalTag) DO UPDATE SET
                 danbooruCategory=excluded.danbooruCategory,
                 danbooruPostCount=excluded.danbooruPostCount,
-                danbooruSource=CASE WHEN tags.bundled=0 THEN 0 ELSE tags.danbooruSource END,
                 lastSeenAt=excluded.lastSeenAt,
                 bundled=1
         """
@@ -203,4 +202,7 @@ private data class BundledTranslationRow(
     @SerialName("needs_review") val needsReview: Boolean = false,
     @SerialName("source_category") val sourceCategory: String? = null,
     @SerialName("post_count") val postCount: Long? = null,
+    @SerialName("translation_source") val translationSource: String = "",
+    @SerialName("verification_status") val verificationStatus: String = "",
+    val confidence: Double? = null,
 )

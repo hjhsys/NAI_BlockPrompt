@@ -51,6 +51,11 @@ class SessionRepository(
 
     suspend fun hasStash(): Boolean = dao.getStash() != null
 
+    suspend fun restoreStash(): Session? = dao.getStash()?.let { entity -> runCatching {
+        require(entity.snapshotVersion == CURRENT_SNAPSHOT_VERSION)
+        json.decodeFromString(SessionSnapshot.serializer(), entity.snapshotJson).session
+    }.getOrNull() }
+
     private suspend fun saveStash(session: Session) {
         dao.upsertStash(StashEntity(snapshotVersion = CURRENT_SNAPSHOT_VERSION, snapshotJson = json.encodeToString(SessionSnapshot.serializer(), SessionSnapshot(session = session)), updatedAt = System.currentTimeMillis()))
     }

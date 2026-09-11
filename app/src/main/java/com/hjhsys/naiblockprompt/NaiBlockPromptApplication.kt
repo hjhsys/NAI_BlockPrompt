@@ -19,6 +19,7 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.*
 import com.hjhsys.naiblockprompt.data.tags.BundledTagImporter
 import com.hjhsys.naiblockprompt.data.backup.BackupRepository
+import com.hjhsys.naiblockprompt.data.diagnostics.CrashLogStore
 
 class NaiBlockPromptApplication : Application() {
     lateinit var container: AppContainer
@@ -26,8 +27,9 @@ class NaiBlockPromptApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        CrashLogStore(this).install()
         val database = Room.databaseBuilder(this, AppDatabase::class.java, "nai_block_prompt.db")
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13)
             .build()
         val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
         val client = OkHttpClient.Builder()
@@ -49,6 +51,25 @@ class NaiBlockPromptApplication : Application() {
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             BundledTagImporter(this@NaiBlockPromptApplication, database, settingsRepository).importIfNeeded()
         }
+    }
+}
+
+private val MIGRATION_12_13 = object : Migration(12, 13) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS tag_exclusions (canonicalTag TEXT NOT NULL PRIMARY KEY, origin TEXT NOT NULL, reasonCode TEXT NOT NULL, reasonText TEXT, userConfirmed INTEGER NOT NULL DEFAULT 0, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_tag_exclusions_origin ON tag_exclusions(origin)")
+    }
+}
+
+private val MIGRATION_11_12 = object : Migration(11, 12) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("UPDATE tags SET danbooruCategory = CASE danbooruCategory WHEN '0' THEN 'general' WHEN '1' THEN 'artist' WHEN '3' THEN 'copyright' WHEN '4' THEN 'character' WHEN '5' THEN 'meta' ELSE danbooruCategory END WHERE danbooruCategory IN ('0', '1', '3', '4', '5')")
+    }
+}
+
+private val MIGRATION_10_11 = object : Migration(10, 11) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE user_tag_overrides ADD COLUMN translationDeferred INTEGER NOT NULL DEFAULT 0")
     }
 }
 
@@ -112,6 +133,21 @@ private val MIGRATION_7_8 = object : Migration(7, 8) {
         // schema version. Keep those installations upgradeable without data loss.
         if (!db.hasColumn("tags", "bundled")) {
             db.execSQL("ALTER TABLE tags ADD COLUMN bundled INTEGER NOT NULL DEFAULT 0")
+        }
+    }
+}
+
+private val MIGRATION_8_9 = object : Migration(8, 9) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS wildcards (id TEXT NOT NULL PRIMARY KEY, name TEXT NOT NULL, valuesText TEXT NOT NULL, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL)")
+        db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_wildcards_name ON wildcards(name)")
+    }
+}
+
+private val MIGRATION_9_10 = object : Migration(9, 10) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        if (!db.hasColumn("wildcards", "folder")) {
+            db.execSQL("ALTER TABLE wildcards ADD COLUMN folder TEXT DEFAULT NULL")
         }
     }
 }

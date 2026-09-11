@@ -3,6 +3,7 @@ package com.hjhsys.naiblockprompt.domain.generation
 import com.hjhsys.naiblockprompt.data.network.nai.dto.*
 import com.hjhsys.naiblockprompt.domain.model.*
 import com.hjhsys.naiblockprompt.domain.prompt.PromptProcessor
+import com.hjhsys.naiblockprompt.domain.prompt.WildcardResolver
 import java.security.SecureRandom
 
 data class PreparedGeneration(
@@ -18,10 +19,43 @@ sealed interface PrepareGenerationResult {
 
 enum class MissingGenerationField { MODEL, UNSUPPORTED_MODEL, SAMPLER, STEPS, SCALE, FIXED_SEED }
 
+object VibeTransferRequestMapper {
+    fun isSupported(modelId: String): Boolean = !modelId.startsWith("nai-diffusion-5-")
+
+    fun withoutVibe(request: NaiImageGenerationRequest): NaiImageGenerationRequest = request.copy(
+        parameters = request.parameters.copy(
+            referenceImages = null,
+            referenceInformationExtracted = null,
+            referenceStrengths = null,
+        ),
+    )
+
+    fun attach(
+        request: NaiImageGenerationRequest,
+        encodedVibe: String,
+        informationExtracted: Float,
+        strength: Float,
+    ): NaiImageGenerationRequest {
+        if (!isSupported(request.model)) return withoutVibe(request)
+        return request.copy(
+            parameters = request.parameters.copy(
+                referenceImages = listOf(encodedVibe),
+                referenceInformationExtracted = listOf(informationExtracted),
+                referenceStrengths = listOf(strength),
+            ),
+        )
+    }
+}
+
 class NaiRequestMapper(
     private val randomSeed: () -> Long = { SecureRandom().nextInt().toLong() and 0xffff_ffffL },
 ) {
-    fun prepare(session: Session, normalizeWeights: Boolean): PrepareGenerationResult {
+    fun prepare(
+        session: Session,
+        normalizeWeights: Boolean,
+        wildcards: Map<String, List<String>> = emptyMap(),
+        includeTextRendering: Boolean = true,
+    ): PrepareGenerationResult {
         val settings = session.generationSettings
         val model = settings.modelId?.trim().takeUnless { it.isNullOrEmpty() }
             ?: return PrepareGenerationResult.Invalid(MissingGenerationField.MODEL)
@@ -37,21 +71,26 @@ class NaiRequestMapper(
             SeedMode.FIXED -> settings.seed ?: return PrepareGenerationResult.Invalid(MissingGenerationField.FIXED_SEED)
         }
 
-        fun joined(blocks: List<PromptBlock>) = PromptProcessor.joinEnabledBlocks(blocks, normalizeWeights)
+        fun joined(blocks: List<PromptBlock>) = PromptProcessor.joinEnabledBlocks(blocks, false)
         fun positive(blocks: List<PromptBlock>, textRendering: TextRenderingState) =
-            PromptProcessor.appendTextRendering(joined(blocks), textRendering)
-        val basePositive = positive(session.base.prompts.positiveBlocks, session.base.textRendering)
-        val baseNegative = joined(session.base.prompts.negativeBlocks)
+            if (includeTextRendering) PromptProcessor.appendTextRendering(joined(blocks), textRendering) else joined(blocks)
+        fun resolved(value: String): String {
+            val wildcardResolved = WildcardResolver.resolve(value, wildcards, seed)
+            val commaCleaned = PromptProcessor.cleanupExtraCommas(wildcardResolved)
+            return if (normalizeWeights) PromptProcessor.normalizeWeightClosings(commaCleaned) else commaCleaned
+        }
+        val basePositive = resolved(positive(session.base.prompts.positiveBlocks, session.base.textRendering))
+        val baseNegative = resolved(joined(session.base.prompts.negativeBlocks))
         val characters = session.characters.sortedBy { it.order }
         val useCoordinates = characters.isNotEmpty() && characters.all { it.position != null }
         val positiveCharacters = characters.map {
             NaiV4CharacterCaption(
-                positive(it.prompts.positiveBlocks, it.textRendering),
+                resolved(positive(it.prompts.positiveBlocks, it.textRendering)),
                 centers = listOf(it.position.toApiCoordinate()),
             )
         }
         val negativeCharacters = characters.map {
-            NaiV4CharacterCaption(joined(it.prompts.negativeBlocks), centers = listOf(it.position.toApiCoordinate()))
+            NaiV4CharacterCaption(resolved(joined(it.prompts.negativeBlocks)), centers = listOf(it.position.toApiCoordinate()))
         }
 
         val request = NaiImageGenerationRequest(
@@ -69,6 +108,7 @@ class NaiRequestMapper(
                 prompt = basePositive,
                 negativePrompt = baseNegative,
                 uc = baseNegative,
+                noiseSchedule = NaiGenerationCatalog.requestNoiseSchedule(model, settings.noiseSchedule),
                 useCoordinates = useCoordinates,
                 characterPrompts = characters.mapIndexed { index, character ->
                     NaiLegacyCharacterPrompt(

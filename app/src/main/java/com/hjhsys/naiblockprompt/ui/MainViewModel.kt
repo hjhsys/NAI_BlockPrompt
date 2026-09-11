@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.hjhsys.naiblockprompt.AppContainer
+import com.hjhsys.naiblockprompt.BuildConfig
+import android.util.Log
 import com.hjhsys.naiblockprompt.domain.editor.*
 import com.hjhsys.naiblockprompt.domain.model.AppSettings
 import com.hjhsys.naiblockprompt.domain.model.*
@@ -13,6 +15,7 @@ import com.hjhsys.naiblockprompt.data.library.*
 import com.hjhsys.naiblockprompt.data.local.entity.*
 import com.hjhsys.naiblockprompt.domain.generation.*
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -22,10 +25,12 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import com.hjhsys.naiblockprompt.domain.autocomplete.PromptFragment
+import com.hjhsys.naiblockprompt.domain.autocomplete.PromptAutocomplete
 import com.hjhsys.naiblockprompt.domain.autocomplete.TagSuggestion
 import com.hjhsys.naiblockprompt.domain.autocomplete.AutocompleteDeduplicator
 import kotlinx.coroutines.sync.Mutex
@@ -34,14 +39,21 @@ import kotlinx.coroutines.flow.asSharedFlow
 import com.hjhsys.naiblockprompt.domain.tags.TagTranslationImportPreview
 import com.hjhsys.naiblockprompt.domain.tags.TagTranslationExportFile
 import com.hjhsys.naiblockprompt.domain.image.NaiImageMetadata
+import java.util.concurrent.atomic.AtomicBoolean
 
-@OptIn(FlowPreview::class)
+@OptIn(FlowPreview::class, ExperimentalCoroutinesApi::class)
 class MainViewModel(private val container: AppContainer) : ViewModel() {
     data class TransferFile(val name: String, val mimeType: String, val bytes: ByteArray)
     private val _session = MutableStateFlow<Session?>(null)
     val session: StateFlow<Session?> = _session.asStateFlow()
     private val saveSignals = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     private val saveMutex = Mutex()
+    private val _transferFailed = MutableStateFlow(false)
+    val transferFailed = _transferFailed.asStateFlow()
+    fun dismissTransferFailure() { _transferFailed.value = false }
+    private val _wildcardSaveFailed = MutableStateFlow(false)
+    val wildcardSaveFailed = _wildcardSaveFailed.asStateFlow()
+    fun dismissWildcardSaveFailure() { _wildcardSaveFailed.value = false }
     private val requestMapper = NaiRequestMapper()
     private var retryGeneration: PreparedGeneration? = null
     private var duplicateGeneration: PreparedGeneration? = null
@@ -50,6 +62,10 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
     private val _generationState = MutableStateFlow<GenerationUiState>(GenerationUiState.Idle)
     val generationState: StateFlow<GenerationUiState> = _generationState.asStateFlow()
+    private val _currentResult = MutableStateFlow<GenerationRecord?>(null)
+    val currentResult: StateFlow<GenerationRecord?> = _currentResult.asStateFlow()
+    private val generationGate = GenerationRequestGate()
+    val generationInProgress: StateFlow<Boolean> = generationGate.inProgress
     private val _tokenConfigured = MutableStateFlow(container.tokenStore.isConfigured())
     val tokenConfigured: StateFlow<Boolean> = _tokenConfigured.asStateFlow()
     private val _connectionState = MutableStateFlow<ConnectionUiState>(ConnectionUiState.Idle)
@@ -57,12 +73,20 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     private val _subscriptionStatus = MutableStateFlow<SubscriptionUiState>(SubscriptionUiState.Unavailable)
     val subscriptionStatus: StateFlow<SubscriptionUiState> = _subscriptionStatus.asStateFlow()
     val history = container.libraryRepository.history.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val historyStorageSample = history.mapLatest { items -> container.libraryRepository.sampleHistoryStorage(items) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), com.hjhsys.naiblockprompt.data.library.HistoryStorageSample())
     val savedBlocks = container.libraryRepository.blocks.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val savedFolders = container.libraryRepository.folders.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val presets = container.libraryRepository.presets.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val savedSets = container.libraryRepository.sets.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     private val _hasStash = MutableStateFlow(false)
     val hasStash: StateFlow<Boolean> = _hasStash.asStateFlow()
+    private val previousWork = PreviousWorkMemory()
+    private val promptUndoHistory = PromptUndoHistory()
+    private val _undoablePromptBlocks = MutableStateFlow<Set<PromptUndoKey>>(emptySet())
+    val undoablePromptBlocks: StateFlow<Set<PromptUndoKey>> = _undoablePromptBlocks.asStateFlow()
+    private val _loadUiRevision = MutableStateFlow(0L)
+    val loadUiRevision: StateFlow<Long> = _loadUiRevision.asStateFlow()
     private val _savedWorkflow = MutableStateFlow<SavedWorkflow?>(null)
     val savedWorkflow: StateFlow<SavedWorkflow?> = _savedWorkflow.asStateFlow()
     private val _autocomplete = MutableStateFlow(AutocompleteUiState())
@@ -75,26 +99,53 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     val tagCount = container.autocompleteRepository.tagCount.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
     val missingTranslationCount = container.autocompleteRepository.missingTranslationCount.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
     val missingCategoryCount = container.autocompleteRepository.missingCategoryCount.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+    val deferredTranslationCount = container.autocompleteRepository.deferredTranslationCount.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
     private val tagDictionaryQuery = MutableStateFlow("")
     private val tagDictionaryFilter = MutableStateFlow(TagDictionaryFilter.ALL)
     private val tagDictionaryCategory = MutableStateFlow("")
     private val tagDictionarySort = MutableStateFlow(TagDictionarySort.POPULAR)
+    private val tagExclusionOrigin = MutableStateFlow<TagExclusionOrigin?>(null)
     private var tagInsertTarget: TagInsertTarget? = null
     private val _tagInsertAvailable = MutableStateFlow(false)
     val tagInsertAvailable: StateFlow<Boolean> = _tagInsertAvailable.asStateFlow()
     val usedTagCategories = container.autocompleteRepository.usedCategories.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val userTagCategories = container.autocompleteRepository.userCategories.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val wildcards = container.autocompleteRepository.wildcards.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val excludedTags = tagExclusionOrigin.flatMapLatest(container.autocompleteRepository::exclusions)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val dictionaryTags = combine(tagDictionaryQuery, tagDictionaryFilter, tagDictionaryCategory, tagDictionarySort) { query, filter, category, sort ->
         DictionarySearch(query, filter, category, sort)
     }.flatMapLatest { search -> container.autocompleteRepository.dictionary(search.query, search.filter, search.category, search.sort) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-    private var autocompleteJob: Job? = null
+    val dictionaryCount = combine(tagDictionaryQuery, tagDictionaryFilter, tagDictionaryCategory) { query, filter, category ->
+        Triple(query, filter, category)
+    }.flatMapLatest { (query, filter, category) -> container.autocompleteRepository.dictionaryCount(query, filter, category) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+    private var autocompleteLocalJob: Job? = null
+    private var autocompleteRemoteJob: Job? = null
+    private val autocompleteRequestGuard = AutocompleteRequestGuard()
     private val _translationExport = MutableSharedFlow<TagTranslationExportFile>(extraBufferCapacity = 1)
     val translationExport = _translationExport.asSharedFlow()
+    private val _translationClipboard = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val translationClipboard = _translationClipboard.asSharedFlow()
     private val _translationImportPreview = MutableStateFlow<TagTranslationImportPreview?>(null)
     val translationImportPreview = _translationImportPreview.asStateFlow()
+    private val _translationImportFailed = MutableStateFlow(false)
+    val translationImportFailed = _translationImportFailed.asStateFlow()
+    fun dismissTranslationImportFailure() { _translationImportFailed.value = false }
     private val _transferExport = MutableSharedFlow<TransferFile>(extraBufferCapacity = 1)
     val transferExport = _transferExport.asSharedFlow()
+
+    fun exportLatestInpaintDiagnostics() = viewModelScope.launch {
+        val bytes = container.generationRepository.exportLatestInpaintDiagnostics()
+        if (bytes == null) {
+            _transferFailed.value = true
+        } else {
+            _transferExport.emit(
+                TransferFile("nai_inpaint_diagnostics.zip", "application/zip", bytes),
+            )
+        }
+    }
 
     val settings = container.settingsRepository.settings.stateIn(
         viewModelScope,
@@ -109,13 +160,16 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
                 val seed = latest.snapshot?.generation?.usedSeed
                     ?: latest.snapshot?.session?.generationSettings?.seed
                     ?: return@let
-                _generationState.value = GenerationUiState.Success(
+                publishGenerationState(GenerationUiState.Success(
                     GenerationRecord(latest.entity.imagePath, latest.entity.thumbnailPath, seed),
                     autoOpenResult = false,
-                )
+                ))
             }
         }
-        viewModelScope.launch { _hasStash.value = container.sessionRepository.hasStash() }
+        viewModelScope.launch {
+            previousWork.load(container.sessionRepository.restoreStash())
+            _hasStash.value = previousWork.hasPrevious
+        }
         if (_tokenConfigured.value) refreshSubscriptionStatus()
         viewModelScope.launch {
             saveSignals.debounce(350).collect {
@@ -158,6 +212,40 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         transform: (PromptBlock) -> PromptBlock,
     ) = edit { SessionEditor.updateBlock(it, owner, polarity, id, transform) }
 
+    fun updateBlockContent(
+        owner: PromptOwner,
+        polarity: PromptPolarity,
+        id: String,
+        content: String,
+        previousSelectionStart: Int,
+        previousSelectionEnd: Int,
+        kind: PromptEditKind,
+    ) {
+        val current = _session.value ?: return
+        val block = current.findPromptBlock(owner, polarity, id) ?: return
+        if (block.locked || block.content == content) return
+        val key = PromptUndoKey(owner, polarity, id)
+        promptUndoHistory.recordBeforeChange(
+            key,
+            PromptEditorSnapshot(block.content, previousSelectionStart, previousSelectionEnd),
+            kind,
+        )
+        refreshUndoable(key)
+        edit { SessionEditor.updateBlock(it, owner, polarity, id) { item -> item.copy(content = content) } }
+    }
+
+    fun undoBlockContent(owner: PromptOwner, polarity: PromptPolarity, id: String): PromptEditorSnapshot? {
+        val current = _session.value ?: return null
+        val block = current.findPromptBlock(owner, polarity, id) ?: return null
+        if (block.locked) return null
+        val key = PromptUndoKey(owner, polarity, id)
+        val restored = promptUndoHistory.undo(key) ?: return null
+        edit { SessionEditor.updateBlock(it, owner, polarity, id) { item -> item.copy(content = restored.content) } }
+        refreshUndoable(key)
+        clearAutocomplete()
+        return restored
+    }
+
     fun setBlockEnabled(owner: PromptOwner, polarity: PromptPolarity, id: String, enabled: Boolean) = edit {
         SessionEditor.setBlockEnabled(it, owner, polarity, id, enabled)
     }
@@ -170,8 +258,39 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         SessionEditor.setBlockLocked(it, owner, polarity, id, locked)
     }
 
-    fun formatBlock(owner: PromptOwner, polarity: PromptPolarity, id: String, formatter: BlockFormatter) = edit {
-        SessionEditor.formatBlock(it, owner, polarity, id, formatter)
+    fun formatBlock(
+        owner: PromptOwner,
+        polarity: PromptPolarity,
+        id: String,
+        formatter: BlockFormatter,
+        selectionStart: Int,
+        selectionEnd: Int,
+    ) {
+        val current = _session.value ?: return
+        val block = current.findPromptBlock(owner, polarity, id) ?: return
+        val updated = SessionEditor.formatBlock(current, owner, polarity, id, formatter)
+        if (updated == current) return
+        val key = PromptUndoKey(owner, polarity, id)
+        promptUndoHistory.recordBeforeChange(
+            key,
+            PromptEditorSnapshot(block.content, selectionStart, selectionEnd),
+            PromptEditKind.DISCRETE,
+        )
+        refreshUndoable(key)
+        edit { updated }
+    }
+
+    private fun refreshUndoable(key: PromptUndoKey) {
+        _undoablePromptBlocks.value = if (promptUndoHistory.canUndo(key)) {
+            _undoablePromptBlocks.value + key
+        } else {
+            _undoablePromptBlocks.value - key
+        }
+    }
+
+    private fun clearPromptUndo() {
+        promptUndoHistory.clear()
+        _undoablePromptBlocks.value = emptySet()
     }
 
     fun updateTextRendering(owner: PromptOwner, transform: (TextRenderingState) -> TextRenderingState) = edit { current ->
@@ -195,7 +314,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         includeCharacters: Boolean,
         includeSettings: Boolean,
         includeSeed: Boolean,
-    ) = edit { current ->
+    ) {
+        val current = _session.value ?: return
         fun blocks(value: String?) = value?.let { listOf(PromptBlock(name = blockName, content = it)) }.orEmpty()
         val base = current.base.copy(prompts = current.base.prompts.copy(
             positiveBlocks = if (includePrompt && metadata.prompt != null) blocks(metadata.prompt) else current.base.prompts.positiveBlocks,
@@ -227,7 +347,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             seedMode = if (includeSeed && metadata.seed != null) SeedMode.FIXED else old.seedMode,
             seed = if (includeSeed && metadata.seed != null) metadata.seed else old.seed,
         )
-        current.copy(base = base, characters = characters, generationSettings = generationSettings)
+        replaceWithStash(current.copy(base = base, characters = characters, generationSettings = generationSettings))
     }
 
     private fun edit(transform: (Session) -> Session) {
@@ -255,6 +375,37 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         container.settingsRepository.setNormalizeWeights(value)
     }
 
+    fun setShowTokenEstimates(value: Boolean) = viewModelScope.launch {
+        container.settingsRepository.setShowTokenEstimates(value)
+    }
+    fun setUseTextRendering(value: Boolean) = viewModelScope.launch {
+        container.settingsRepository.setUseTextRendering(value)
+    }
+    fun setColorHelperMode(value: ColorHelperMode) = viewModelScope.launch { container.settingsRepository.setColorHelperMode(value) }
+    fun toggleFavoriteColor(hex: String) = viewModelScope.launch {
+        val current = settings.value.favoriteColors
+        val removing = hex in current
+        container.settingsRepository.setFavoriteColors(if (removing) current - hex else listOf(hex) + current)
+        val dates = settings.value.favoriteColorAddedAt.toMutableMap()
+        if (removing) dates.remove(hex) else dates[hex] = System.currentTimeMillis()
+        container.settingsRepository.setFavoriteColorAddedAt(dates)
+        recordRecentColor(hex)
+    }
+    fun recordRecentColor(hex: String) = viewModelScope.launch {
+        container.settingsRepository.setRecentColors(listOf(hex) + settings.value.recentColors.filterNot { it == hex })
+    }
+
+    fun insertColor(owner: PromptOwner, polarity: PromptPolarity, blockId: String, cursor: Int, hex: String) {
+        val block = _session.value?.findPromptBlock(owner, polarity, blockId) ?: return
+        val at = cursor.coerceIn(0, block.content.length)
+        updateBlockContent(
+            owner, polarity, blockId,
+            block.content.substring(0, at) + hex + block.content.substring(at),
+            at, at, PromptEditKind.DISCRETE,
+        )
+        recordRecentColor(hex)
+    }
+
     fun setHistoryLimit(value: Int) = viewModelScope.launch {
         container.settingsRepository.setHistoryLimit(value)
         container.libraryRepository.trimHistory(value)
@@ -272,40 +423,66 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     fun requestAutocomplete(blockId: String, fragment: PromptFragment?) {
-        autocompleteJob?.cancel()
+        autocompleteLocalJob?.cancel()
+        autocompleteRemoteJob?.cancel()
+        val requestRevision = autocompleteRequestGuard.next()
         if (fragment == null) {
             _autocomplete.value = AutocompleteUiState()
             return
         }
-        val requestKey = "$blockId:${fragment.text}"
-        _autocomplete.value = AutocompleteUiState(blockId, fragment, loading = true)
-        autocompleteJob = viewModelScope.launch {
-            val local = container.autocompleteRepository.local(fragment.text)
-            if (requestKey == "$blockId:${_autocomplete.value.fragment?.text}") {
-                _autocomplete.value = _autocomplete.value.copy(local = local)
+        val requestStartedAtNanos = System.nanoTime()
+        val remotePending = PromptAutocomplete.shouldQueryRemote(fragment)
+        _autocomplete.value = AutocompleteUiState(blockId, fragment, loading = remotePending, requestStartedAtNanos = requestStartedAtNanos)
+        fun isCurrentRequest(): Boolean = autocompleteRequestGuard.isCurrent(requestRevision, blockId, fragment, _autocomplete.value)
+        autocompleteLocalJob = viewModelScope.launch {
+            if (BuildConfig.DEBUG) {
+                Log.d("AutocompletePerf", "inputToLocalStartMs=${(System.nanoTime() - requestStartedAtNanos) / 1_000_000.0} chars=${fragment.text.length}")
             }
+            if (fragment.text.startsWith("__")) {
+                val prefix = fragment.text.removePrefix("__").lowercase()
+                val matches = wildcards.value.filter { it.name.lowercase().startsWith(prefix) }.take(12).map {
+                    TagSuggestion("__${it.name}__", com.hjhsys.naiblockprompt.domain.autocomplete.SuggestionSource.WILDCARD)
+                }
+                if (isCurrentRequest()) {
+                    _autocomplete.value = _autocomplete.value.copy(wildcards = matches, loading = false)
+                }
+                return@launch
+            }
+            val prefixLocal = container.autocompleteRepository.localPrefix(fragment.text)
+            if (isCurrentRequest()) {
+                _autocomplete.value = _autocomplete.value.withLocalResults(prefixLocal)
+                logLocalStateTiming(requestStartedAtNanos, "prefix", prefixLocal.size)
+            }
+            val local = container.autocompleteRepository.local(fragment.text)
+            if (isCurrentRequest()) {
+                _autocomplete.value = _autocomplete.value.withLocalResults(local)
+                logLocalStateTiming(requestStartedAtNanos, "rich", local.size)
+            }
+        }
+        if (!remotePending) return
+        autocompleteRemoteJob = viewModelScope.launch {
             delay(400)
             val source = settings.value.autocompleteSource
             val token = container.tokenStore.load()
             // The official Primary API Swagger currently verifies this suggest-tags model value.
             val model = "nai-diffusion-3"
             val result = container.autocompleteRepository.suggest(fragment.text, source, token, model)
-            if (requestKey == "$blockId:${_autocomplete.value.fragment?.text}") {
-                _autocomplete.value = AutocompleteUiState(
-                    blockId,
-                    fragment,
-                    local,
-                    AutocompleteDeduplicator.excludeLocal(local, result.novelAi),
-                    AutocompleteDeduplicator.excludeLocal(local, result.danbooru),
-                    novelAiFailed = result.novelAiFailed,
-                    danbooruFailed = result.danbooruFailed,
-                )
+            if (isCurrentRequest()) {
+                _autocomplete.value = _autocomplete.value.withRemoteResults(result)
             }
         }
     }
 
+    private fun logLocalStateTiming(startedAtNanos: Long, stage: String, count: Int) {
+        if (BuildConfig.DEBUG) {
+            Log.d("AutocompletePerf", "inputToLocalStateMs=${(System.nanoTime() - startedAtNanos) / 1_000_000.0} stage=$stage count=$count")
+        }
+    }
+
     fun clearAutocomplete() {
-        autocompleteJob?.cancel()
+        autocompleteLocalJob?.cancel()
+        autocompleteRemoteJob?.cancel()
+        autocompleteRequestGuard.invalidate()
         _autocomplete.value = AutocompleteUiState()
     }
 
@@ -317,24 +494,54 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     fun filterDictionary(filter: TagDictionaryFilter) { tagDictionaryFilter.value = filter }
     fun filterDictionaryCategory(category: String) { tagDictionaryCategory.value = category }
     fun sortDictionary(sort: TagDictionarySort) { tagDictionarySort.value = sort }
+    fun filterExcludedTags(origin: TagExclusionOrigin?) { tagExclusionOrigin.value = origin }
     fun addTagCategory(name: String) = viewModelScope.launch { container.autocompleteRepository.addCategory(name) }
+    fun saveWildcard(id: String?, name: String, valuesText: String, folder: String? = null) = viewModelScope.launch {
+        try {
+            container.autocompleteRepository.saveWildcard(id, name, valuesText, folder)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            _wildcardSaveFailed.value = true
+        }
+    }
+    fun deleteWildcard(item: WildcardEntity) = viewModelScope.launch { container.autocompleteRepository.deleteWildcard(item) }
     fun setTagThumbnail(item: TagDictionaryItem, uri: android.net.Uri) = viewModelScope.launch { container.autocompleteRepository.setThumbnail(item, uri) }
     fun setTagThumbnailFromFile(item: TagDictionaryItem, path: String) = viewModelScope.launch { container.autocompleteRepository.setThumbnailFromFile(item, path) }
     fun removeTagThumbnail(item: TagDictionaryItem) = viewModelScope.launch { container.autocompleteRepository.removeThumbnail(item) }
-    fun prepareTranslationExport(missingTranslation: Boolean, missingCategory: Boolean) = viewModelScope.launch {
-        _translationExport.emit(container.autocompleteRepository.exportTranslationBatch(missingTranslation, missingCategory))
+    fun prepareTranslationExport(missingTranslation: Boolean, missingCategory: Boolean, includeDeferred: Boolean = false) = viewModelScope.launch {
+        _translationExport.emit(container.autocompleteRepository.exportTranslationBatch(missingTranslation, missingCategory, includeDeferred = includeDeferred))
     }
-    fun prepareAllTranslationExport(missingTranslation: Boolean, missingCategory: Boolean) = viewModelScope.launch {
-        _translationExport.emit(container.autocompleteRepository.exportTranslationBatch(missingTranslation, missingCategory, allBatches = true))
+    fun prepareAllTranslationExport(missingTranslation: Boolean, missingCategory: Boolean, includeDeferred: Boolean = false) = viewModelScope.launch {
+        _translationExport.emit(container.autocompleteRepository.exportTranslationBatch(missingTranslation, missingCategory, allBatches = true, includeDeferred = includeDeferred))
+    }
+    fun copySelectedTagsForAi(items: List<TagDictionaryItem>) = viewModelScope.launch {
+        if (items.isNotEmpty()) _translationClipboard.emit(container.autocompleteRepository.exportSelectedTranslations(items))
     }
     fun previewTranslationImport(text: String) = viewModelScope.launch {
         _translationImportPreview.value = container.autocompleteRepository.previewTranslationImport(text)
     }
-    fun dismissTranslationImport() { _translationImportPreview.value = null }
-    fun applyTranslationImport(overwriteExisting: Boolean) = viewModelScope.launch {
-        val preview = _translationImportPreview.value ?: return@launch
-        container.autocompleteRepository.applyTranslationImport(preview, overwriteExisting)
+    fun previewTranslationFile(uri: android.net.Uri) = viewModelScope.launch {
         _translationImportPreview.value = null
+        try {
+            _translationImportPreview.value = container.autocompleteRepository.previewTranslationFile(uri)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            _translationImportFailed.value = true
+        }
+    }
+    fun dismissTranslationImport() { _translationImportPreview.value = null }
+    fun applyTranslationImport(overwriteExisting: Boolean, selectedDeleteIds: Set<String> = emptySet(), deferReviewed: Boolean = true) = viewModelScope.launch {
+        val preview = _translationImportPreview.value ?: return@launch
+        _translationImportPreview.value = null
+        try {
+            container.autocompleteRepository.applyTranslationImport(preview, overwriteExisting, selectedDeleteIds, deferReviewed)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            _translationImportFailed.value = true
+        }
     }
     fun setTagFavorite(item: TagDictionaryItem, favorite: Boolean) = viewModelScope.launch {
         container.autocompleteRepository.setFavorite(item, favorite)
@@ -351,6 +558,17 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     fun deleteUserOnlyTag(item: TagDictionaryItem) = viewModelScope.launch {
         container.autocompleteRepository.deleteUserOnlyTag(item)
     }
+    fun excludeTag(item: TagDictionaryItem) = viewModelScope.launch {
+        container.autocompleteRepository.excludeTag(item.canonicalTag)
+        clearAutocomplete()
+    }
+    fun restoreExcludedTag(item: ExcludedTagItem) = viewModelScope.launch {
+        container.autocompleteRepository.restoreExcludedTag(item.canonicalTag)
+        clearAutocomplete()
+    }
+    fun confirmExcludedTag(item: ExcludedTagItem) = viewModelScope.launch {
+        container.autocompleteRepository.confirmExcludedTag(item.canonicalTag)
+    }
     fun resetTagDatabaseToBundled() = viewModelScope.launch {
         container.autocompleteRepository.resetToBundledTags()
     }
@@ -358,16 +576,19 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         _transferExport.emit(TransferFile("nai_user_tag_db.zip", "application/zip", container.backupRepository.exportTagData()))
     }
     fun importSharedTagDatabase(bytes: ByteArray) = viewModelScope.launch {
-        runCatching { container.backupRepository.importTagData(bytes) }
+        runCatching { container.backupRepository.importTagData(bytes) }.onFailure { _transferFailed.value = true }
     }
     fun exportAppBackup() = viewModelScope.launch {
-        flushAutosave()
+        persistCurrent()
         _transferExport.emit(TransferFile("nai_blockprompt_backup.zip", "application/zip", container.backupRepository.exportAppBackup()))
     }
     fun importAppBackup(bytes: ByteArray) = viewModelScope.launch {
-        runCatching { container.backupRepository.importAppBackup(bytes) }.onSuccess {
+        saveMutex.withLock {
+        runCatching { container.backupRepository.importAppBackup(bytes) }.onFailure { _transferFailed.value = true }.onSuccess {
+            clearPromptUndo()
             _session.value = container.sessionRepository.restoreOrCreate()
             _hasStash.value = container.sessionRepository.hasStash()
+        }
         }
     }
     fun beginTagInsert(owner: PromptOwner, polarity: PromptPolarity, blockId: String, cursor: Int) {
@@ -378,9 +599,16 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     fun insertDictionaryTags(tags: List<String>) {
         val target = tagInsertTarget ?: return
         if (tags.isEmpty()) return
-        updateBlock(target.owner, target.polarity, target.blockId) { block ->
-            block.copy(content = TagInsertion.insert(block.content, target.cursor, tags))
-        }
+        val block = _session.value?.findPromptBlock(target.owner, target.polarity, target.blockId) ?: return
+        updateBlockContent(
+            target.owner,
+            target.polarity,
+            target.blockId,
+            TagInsertion.insert(block.content, target.cursor, tags),
+            target.cursor,
+            target.cursor,
+            PromptEditKind.DISCRETE,
+        )
         tags.forEach { tag ->
             viewModelScope.launch { container.autocompleteRepository.recordUse(tag) }
         }
@@ -414,6 +642,16 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     }
     fun finishBlockLoad(saved: SavedBlockEntity) {
         val workflow = _savedWorkflow.value as? SavedWorkflow.LoadBlock ?: return
+        val block = _session.value?.findPromptBlock(workflow.owner, workflow.polarity, workflow.blockId) ?: return
+        if (block.content != saved.content) {
+            val key = PromptUndoKey(workflow.owner, workflow.polarity, workflow.blockId)
+            promptUndoHistory.recordBeforeChange(
+                key,
+                PromptEditorSnapshot(block.content, block.content.length, block.content.length),
+                PromptEditKind.DISCRETE,
+            )
+            refreshUndoable(key)
+        }
         updateBlock(workflow.owner, workflow.polarity, workflow.blockId) { current ->
             current.copy(name = saved.name, content = saved.content, enabled = saved.enabled, locked = saved.locked, collapsed = saved.collapsed)
         }
@@ -429,11 +667,16 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch { container.libraryRepository.saveSet(name, workflow.set, folderId) }
         _savedWorkflow.value = null
     }
-    fun finishSetLoad(item: SavedSetItem) {
+    fun finishSetLoad(
+        item: SavedSetItem,
+        baseSelection: BaseSetImportSelection = BaseSetImportSelection(positive = true, negative = true),
+    ) {
         val workflow = _savedWorkflow.value as? SavedWorkflow.LoadSet ?: return
         val set = item.set ?: return
+        if (workflow.owner is PromptOwner.Base && !baseSelection.canApply) return
+        clearPromptUndo()
         edit { current -> when (val owner = workflow.owner) {
-            PromptOwner.Base -> if (set.kind == SavedSetKind.BASE) current.copy(base = current.base.copy(prompts = set.prompts, selectedPolarity = set.selectedPolarity, textRendering = set.textRendering)) else current
+            PromptOwner.Base -> if (set.kind == SavedSetKind.BASE) current.copy(base = BaseSetImport.apply(current.base, set, baseSelection)) else current
             is PromptOwner.Character -> if (set.kind == SavedSetKind.CHARACTER) current.copy(characters = current.characters.map { if (it.id == owner.id) it.copy(prompts = set.prompts, selectedPolarity = set.selectedPolarity, type = set.characterType ?: it.type, textRendering = set.textRendering) else it }) else current
         } }
         _savedWorkflow.value = null
@@ -469,6 +712,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
     fun restoreHistory(item: HistoryItem, options: RestoreOptions) {
         val source = item.snapshot?.session ?: return
+        val resolved = item.snapshot.generation
         val current = _session.value ?: return
         var generationSettings = if (options.settings) {
             source.generationSettings.copy(imageInput = if (options.inputImage) source.generationSettings.imageInput else current.generationSettings.imageInput)
@@ -481,31 +725,66 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         } else if (options.settings) {
             generationSettings = generationSettings.copy(seedMode = current.generationSettings.seedMode, seed = current.generationSettings.seed)
         }
+        val restoreOriginal = options.wildcardOriginal || resolved == null
+        val restoredBase = if (restoreOriginal) source.base else source.base.copy(
+            prompts = PromptPair(
+                positiveBlocks = resolvedBlocks(source.base.prompts.positiveBlocks, resolved.basePositive),
+                negativeBlocks = resolvedBlocks(source.base.prompts.negativeBlocks, resolved.baseNegative),
+            ),
+            textRendering = TextRenderingState(),
+        )
+        val restoredCharacters = if (restoreOriginal) source.characters else source.characters.sortedBy { it.order }.mapIndexed { index, character ->
+            character.copy(
+                prompts = PromptPair(
+                    positiveBlocks = resolvedBlocks(character.prompts.positiveBlocks, resolved.characterPositive.getOrElse(index) { "" }),
+                    negativeBlocks = resolvedBlocks(character.prompts.negativeBlocks, resolved.characterNegative.getOrElse(index) { "" }),
+                ),
+                textRendering = TextRenderingState(),
+            )
+        }
+        val baseSelection = BaseSetImportSelection(options.basePositive, options.baseNegative)
         replaceWithStash(current.copy(
-            base = if (options.base) source.base else current.base,
-            characters = if (options.characters) source.characters else current.characters,
+            base = BaseSetImport.applyOrKeep(current.base, restoredBase, baseSelection),
+            characters = if (options.characters) restoredCharacters else current.characters,
             generationSettings = generationSettings,
         ))
     }
 
+    private fun resolvedBlocks(source: List<PromptBlock>, content: String): List<PromptBlock> =
+        listOf((source.firstOrNull() ?: PromptBlock(name = "Resolved prompt")).copy(content = content, enabled = true, locked = false, order = 0))
+
     fun restorePreset(item: PresetItem) { item.session?.let(::replaceWithStash) }
     fun swapStash() {
         val current = _session.value ?: return
+        val previous = previousWork.swap(current) ?: return
+        val displayed = LoadedSessionDisplayPolicy.prepare(previous)
+
+        // Invalidate the old editor's local/remote queries before publishing the new Session.
+        clearAutocomplete()
+        clearPromptUndo()
+        _session.value = displayed
+        _hasStash.value = previousWork.hasPrevious
+        _loadUiRevision.value += 1
+
         viewModelScope.launch {
-            container.sessionRepository.swapWithStash(current)?.let {
-                _session.value = it
-                container.sessionRepository.save(it)
+            saveMutex.withLock {
+                container.sessionRepository.stashAndReplace(current, displayed)
             }
-            _hasStash.value = container.sessionRepository.hasStash()
         }
     }
 
     private fun replaceWithStash(replacement: Session) {
         val current = _session.value ?: return
         viewModelScope.launch {
-            container.sessionRepository.stashAndReplace(current, replacement)
-            _session.value = replacement
-            _hasStash.value = true
+            val displayed = LoadedSessionDisplayPolicy.prepare(replacement)
+            saveMutex.withLock {
+                container.sessionRepository.stashAndReplace(current, displayed)
+            }
+            previousWork.replaceWith(current)
+            clearPromptUndo()
+            _session.value = displayed
+            _hasStash.value = previousWork.hasPrevious
+            _loadUiRevision.value += 1
         }
     }
 
@@ -558,16 +837,30 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     fun generate() {
-        val current = _session.value ?: return
-        when (val prepared = requestMapper.prepare(current, settings.value.normalizeWeightClosings)) {
-            is PrepareGenerationResult.Invalid -> _generationState.value = GenerationUiState.Invalid(prepared.field)
+        if (!beginGeneration()) return
+        val current = _session.value ?: return endGeneration()
+        val wildcardValues = wildcards.value.associate { item -> item.name to item.valuesText.lines().filter(String::isNotBlank) }
+        when (val prepared = requestMapper.prepare(
+            current,
+            settings.value.normalizeWeightClosings,
+            wildcardValues,
+            includeTextRendering = settings.value.useTextRendering,
+        )) {
+            is PrepareGenerationResult.Invalid -> {
+                publishGenerationState(GenerationUiState.Invalid(prepared.field))
+                endGeneration()
+            }
             is PrepareGenerationResult.Ready -> viewModelScope.launch {
-                val previous = container.libraryRepository.latestGenerationWithOriginal()
-                val candidate = HistorySnapshotFactory.from(prepared.generation, prepared.generation.usedSeed).generation
-                if (previous != null && previous == candidate) {
-                    duplicateGeneration = prepared.generation
-                    _duplicateWarning.value = true
-                } else execute(prepared.generation)
+                try {
+                    val previous = container.libraryRepository.latestGenerationWithOriginal()
+                    val candidate = HistorySnapshotFactory.from(prepared.generation, prepared.generation.usedSeed).generation
+                    if (previous != null && previous == candidate) {
+                        duplicateGeneration = prepared.generation
+                        _duplicateWarning.value = true
+                    } else executeClaimed(prepared.generation)
+                } finally {
+                    endGeneration()
+                }
             }
         }
     }
@@ -581,28 +874,88 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     fun cancelDuplicateGeneration() { _duplicateWarning.value = false; duplicateGeneration = null }
 
     fun retry() { retryGeneration?.let(::execute) }
+    private var selectedImageSeed: Long? = null
+    fun selectImageSeed(seed: Long?) { selectedImageSeed = seed }
+    fun applyHistorySeed(seed: Long) {
+        if (!SeedSelection.isValid(seed)) return
+        selectedImageSeed = seed
+        updateGenerationSettings { SeedSelection.applyFixedSeed(it, seed) }
+    }
+    private val _imageInputApplied = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val imageInputApplied = _imageInputApplied.asSharedFlow()
+    fun useImageInput(input: ImageInputState) {
+        updateGenerationSettings { it.copy(imageInput = input) }
+        _imageInputApplied.tryEmit(Unit)
+    }
+
+    private fun selectedOrCurrentSeed(): Long? =
+        listOf(selectedImageSeed, _currentResult.value?.seed).firstOrNull(SeedSelection::isValid)
+
+    private fun lastSuccessfulSeed(): Long? =
+        settings.value.lastUsedSeed?.takeIf(SeedSelection::isValid)
+            ?: history.value.firstNotNullOfOrNull { item ->
+                item.snapshot?.generation?.usedSeed?.takeIf(SeedSelection::isValid)
+            }
+
+    fun changeSeedMode(mode: SeedMode) {
+        updateGenerationSettings { SeedSelection.changeMode(it, mode, selectedOrCurrentSeed(), lastSuccessfulSeed()) }
+    }
+
+    fun toggleSeedMode() {
+        updateGenerationSettings { SeedSelection.toggleMode(it, selectedOrCurrentSeed(), lastSuccessfulSeed()) }
+    }
 
     private fun execute(generation: PreparedGeneration) {
-        if (_generationState.value is GenerationUiState.Loading) return
-        val token = container.tokenStore.load() ?: run {
-            _generationState.value = GenerationUiState.MissingToken
-            return
-        }
+        if (!beginGeneration()) return
         viewModelScope.launch {
-            _generationState.value = GenerationUiState.Loading
-            when (val result = container.generationRepository.generate(token, generation)) {
-                is GenerationResult.Success -> {
-                    retryGeneration = null
-                    _generationState.value = GenerationUiState.Success(result.record, autoOpenResult = true)
-                    container.libraryRepository.trimHistory(settings.value.historyLimit)
-                    refreshSubscriptionStatus()
-                }
-                is GenerationResult.Failure -> {
-                    retryGeneration = generation
-                    _generationState.value = GenerationUiState.Failed(result.error)
-                }
+            try {
+                executeClaimed(generation)
+            } finally {
+                endGeneration()
             }
         }
+    }
+
+    private suspend fun executeClaimed(generation: PreparedGeneration) {
+        val token = container.tokenStore.load() ?: run {
+            publishGenerationState(GenerationUiState.MissingToken)
+            return
+        }
+        publishGenerationState(GenerationUiState.Loading)
+        when (val result = container.generationRepository.generate(token, generation)) {
+            is GenerationResult.Success -> {
+                val promptText = buildString {
+                    append(generation.request.input)
+                    append(' ').append(generation.request.parameters.negativePrompt)
+                    generation.request.parameters.characterPrompts.forEach { append(' ').append(it.prompt).append(' ').append(it.uc) }
+                }
+                val usedFavoriteColors = settings.value.favoriteColors.filter { promptText.contains(it, ignoreCase = true) }
+                if (usedFavoriteColors.isNotEmpty()) container.settingsRepository.recordFavoriteColorUsage(usedFavoriteColors)
+                retryGeneration = null
+                publishGenerationState(GenerationUiState.Success(result.record, autoOpenResult = true))
+                container.settingsRepository.setLastUsedSeed(result.record.seed)
+                selectedImageSeed = result.record.seed
+                container.libraryRepository.trimHistory(settings.value.historyLimit)
+                refreshSubscriptionStatus()
+            }
+            is GenerationResult.Failure -> {
+                retryGeneration = generation
+                publishGenerationState(GenerationUiState.Failed(result.error))
+            }
+        }
+    }
+
+    private fun publishGenerationState(state: GenerationUiState) {
+        _currentResult.value = GenerationResultRetention.next(_currentResult.value, state)
+        _generationState.value = state
+    }
+
+    private fun beginGeneration(): Boolean {
+        return generationGate.tryStart()
+    }
+
+    private fun endGeneration() {
+        generationGate.finish()
     }
 
     companion object {
@@ -613,12 +966,70 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     }
 }
 
+private fun Session.findPromptBlock(
+    owner: PromptOwner,
+    polarity: PromptPolarity,
+    blockId: String,
+): PromptBlock? {
+    val pair = when (owner) {
+        PromptOwner.Base -> base.prompts
+        is PromptOwner.Character -> characters.firstOrNull { it.id == owner.id }?.prompts
+    } ?: return null
+    val blocks = if (polarity == PromptPolarity.POSITIVE) pair.positiveBlocks else pair.negativeBlocks
+    return blocks.firstOrNull { it.id == blockId }
+}
+
+internal class PreviousWorkMemory {
+    private var previous: Session? = null
+    private var initialized = false
+
+    val hasPrevious: Boolean get() = previous != null
+
+    fun load(value: Session?) {
+        if (!initialized) {
+            previous = value
+            initialized = true
+        }
+    }
+
+    fun replaceWith(current: Session) {
+        previous = current
+        initialized = true
+    }
+
+    fun swap(current: Session): Session? {
+        val replacement = previous ?: return null
+        previous = current
+        initialized = true
+        return replacement
+    }
+}
+
+internal class GenerationRequestGate {
+    private val claimed = AtomicBoolean(false)
+    private val _inProgress = MutableStateFlow(false)
+    val inProgress: StateFlow<Boolean> = _inProgress.asStateFlow()
+
+    fun tryStart(): Boolean {
+        if (!claimed.compareAndSet(false, true)) return false
+        _inProgress.value = true
+        return true
+    }
+
+    fun finish() {
+        claimed.set(false)
+        _inProgress.value = false
+    }
+}
+
 data class RestoreOptions(
     val settings: Boolean = true,
-    val base: Boolean = true,
+    val basePositive: Boolean = true,
+    val baseNegative: Boolean = true,
     val characters: Boolean = true,
     val seed: Boolean = true,
     val inputImage: Boolean = false,
+    val wildcardOriginal: Boolean = true,
 )
 
 sealed interface SavedWorkflow {
@@ -637,6 +1048,11 @@ sealed interface GenerationUiState {
     data class Invalid(val field: MissingGenerationField) : GenerationUiState
     data class Success(val record: GenerationRecord, val autoOpenResult: Boolean = true) : GenerationUiState
     data class Failed(val error: NaiApiFailure) : GenerationUiState
+}
+
+internal object GenerationResultRetention {
+    fun next(current: GenerationRecord?, state: GenerationUiState): GenerationRecord? =
+        (state as? GenerationUiState.Success)?.record ?: current
 }
 
 sealed interface ConnectionUiState {
@@ -662,10 +1078,41 @@ data class AutocompleteUiState(
     val local: List<TagSuggestion> = emptyList(),
     val novelAi: List<TagSuggestion> = emptyList(),
     val danbooru: List<TagSuggestion> = emptyList(),
+    val wildcards: List<TagSuggestion> = emptyList(),
     val loading: Boolean = false,
     val novelAiFailed: Boolean = false,
     val danbooruFailed: Boolean = false,
+    val requestStartedAtNanos: Long = 0L,
 )
+
+internal fun AutocompleteUiState.withLocalResults(results: List<TagSuggestion>): AutocompleteUiState = copy(
+    local = results,
+    novelAi = AutocompleteDeduplicator.excludeLocal(results, novelAi),
+    danbooru = AutocompleteDeduplicator.excludeLocal(results, danbooru),
+)
+
+internal fun AutocompleteUiState.withRemoteResults(
+    results: com.hjhsys.naiblockprompt.data.autocomplete.AutocompleteResults,
+): AutocompleteUiState = copy(
+    novelAi = AutocompleteDeduplicator.excludeLocal(local, results.novelAi),
+    danbooru = AutocompleteDeduplicator.excludeLocal(local, results.danbooru),
+    loading = false,
+    novelAiFailed = results.novelAiFailed,
+    danbooruFailed = results.danbooruFailed,
+)
+
+internal class AutocompleteRequestGuard {
+    private var revision = 0L
+
+    fun next(): Long = ++revision
+
+    fun invalidate() {
+        revision++
+    }
+
+    fun isCurrent(requestRevision: Long, blockId: String, fragment: PromptFragment, state: AutocompleteUiState): Boolean =
+        requestRevision == revision && state.blockId == blockId && state.fragment == fragment
+}
 
 private data class TagInsertTarget(
     val owner: PromptOwner,

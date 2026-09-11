@@ -4,6 +4,8 @@ import android.content.Context
 import android.net.Uri
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.util.Log
+import com.hjhsys.naiblockprompt.BuildConfig
 import com.hjhsys.naiblockprompt.data.local.dao.TagDao
 import com.hjhsys.naiblockprompt.data.local.entity.TagEntity
 import com.hjhsys.naiblockprompt.domain.autocomplete.*
@@ -17,12 +19,17 @@ import com.hjhsys.naiblockprompt.domain.model.TagDictionaryItem
 import com.hjhsys.naiblockprompt.domain.model.TagDictionarySort
 import com.hjhsys.naiblockprompt.data.local.entity.UserTagOverrideEntity
 import com.hjhsys.naiblockprompt.data.local.entity.UserTagCategoryEntity
+import com.hjhsys.naiblockprompt.data.local.entity.TagExclusionEntity
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import java.io.File
 import com.hjhsys.naiblockprompt.domain.tags.*
 import com.hjhsys.naiblockprompt.domain.model.AppTagCategory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.hjhsys.naiblockprompt.domain.model.ExcludedTagItem
+import com.hjhsys.naiblockprompt.domain.model.TagExclusionOrigin
+import com.hjhsys.naiblockprompt.domain.model.TagExclusionReason
 
 data class AutocompleteResults(
     val novelAi: List<TagSuggestion> = emptyList(),
@@ -41,24 +48,86 @@ class AutocompleteRepository(
     val tagCount = tagDao.observeCount()
     val missingTranslationCount = tagDao.observeMissingTranslationCount()
     val missingCategoryCount = tagDao.observeMissingCategoryCount()
+    val deferredTranslationCount = tagDao.observeDeferredTranslationCount()
     val usedCategories = tagDao.observeUsedCategories()
     val userCategories = tagDao.observeUserCategories()
+    val wildcards = tagDao.observeWildcards()
+    fun exclusions(origin: TagExclusionOrigin?): Flow<List<ExcludedTagItem>> =
+        tagDao.observeTagExclusions(origin?.name.orEmpty()).map { rows ->
+            rows.map { row ->
+                ExcludedTagItem(
+                    canonicalTag = row.canonicalTag,
+                    origin = runCatching { TagExclusionOrigin.valueOf(row.origin) }.getOrDefault(TagExclusionOrigin.USER),
+                    reasonCode = row.reasonCode,
+                    reasonText = row.reasonText,
+                    userConfirmed = row.userConfirmed,
+                    updatedAt = row.updatedAt,
+                )
+            }
+        }
     fun dictionary(query: String, filter: TagDictionaryFilter, category: String, sort: TagDictionarySort): Flow<List<TagDictionaryItem>> =
         tagDao.observeDictionary(query.trim(), query.trim().replace(' ', '_'), filter.name, category, sort.name)
+    fun dictionaryCount(query: String, filter: TagDictionaryFilter, category: String): Flow<Int> =
+        tagDao.observeDictionaryCount(query.trim(), query.trim().replace(' ', '_'), filter.name, category)
 
     suspend fun addCategory(name: String) {
         name.trim().takeIf(String::isNotBlank)?.let { tagDao.upsertUserCategory(UserTagCategoryEntity(it, now())) }
     }
+
+    suspend fun excludeTag(
+        canonicalTag: String,
+        origin: TagExclusionOrigin = TagExclusionOrigin.USER,
+        reasonCode: String = TagExclusionReason.USER_HIDDEN.storageValue,
+        reasonText: String? = null,
+        userConfirmed: Boolean = origin == TagExclusionOrigin.USER,
+    ) {
+        val canonical = TagExclusionPolicy.canonical(canonicalTag)
+        require(canonical.isNotBlank())
+        val existing = tagDao.findTagExclusion(canonical)
+        val timestamp = now()
+        // Confirming an AI decision must not erase its original provenance or explanation.
+        val entity = mergeTagExclusion(existing, canonical, origin, reasonCode, reasonText, userConfirmed, timestamp)
+        tagDao.upsertTagExclusion(entity)
+    }
+
+    suspend fun restoreExcludedTag(canonicalTag: String) {
+        tagDao.deleteTagExclusion(TagExclusionPolicy.canonical(canonicalTag))
+    }
+
+    suspend fun confirmExcludedTag(canonicalTag: String) {
+        val canonical = TagExclusionPolicy.canonical(canonicalTag)
+        val existing = tagDao.findTagExclusion(canonical) ?: return
+        tagDao.upsertTagExclusion(existing.copy(userConfirmed = true, updatedAt = now()))
+    }
+
+    suspend fun saveWildcard(id: String?, name: String, valuesText: String, folder: String? = null) {
+        val timestamp = now()
+        val normalizedName = name.trim().removePrefix("__").removeSuffix("__").replace(' ', '_')
+        val existing = tagDao.findWildcardByName(normalizedName)
+        require(normalizedName.matches(Regex("[A-Za-z0-9_.-]+"))) { "Invalid wildcard name" }
+        require(existing == null || existing.id == id) { "Wildcard name already exists" }
+        tagDao.upsertWildcard(com.hjhsys.naiblockprompt.data.local.entity.WildcardEntity(
+            id = id ?: existing?.id ?: UUID.randomUUID().toString(),
+            name = normalizedName,
+            valuesText = valuesText.lines().map(String::trim).filter(String::isNotBlank).joinToString("\n"),
+            folder = folder?.trim()?.takeIf(String::isNotBlank),
+            createdAt = existing?.createdAt ?: timestamp,
+            updatedAt = timestamp,
+        ))
+    }
+
+    suspend fun deleteWildcard(item: com.hjhsys.naiblockprompt.data.local.entity.WildcardEntity) = tagDao.deleteWildcard(item)
 
     suspend fun exportTranslationBatch(
         missingTranslation: Boolean,
         missingCategory: Boolean,
         limit: Int = 1_000,
         allBatches: Boolean = false,
+        includeDeferred: Boolean = false,
     ): TagTranslationExportFile = withContext(Dispatchers.IO) {
-        require(missingTranslation || missingCategory)
-        val candidates = tagDao.translationCandidates(if (allBatches) Int.MAX_VALUE else limit, missingTranslation, missingCategory).map {
-            TagTranslationCandidate(it.canonicalTag, it.danbooruCategory, it.danbooruPostCount, it.korean, it.appCategory)
+        require(missingTranslation || missingCategory || includeDeferred)
+        val candidates = tagDao.translationCandidates(if (allBatches) Int.MAX_VALUE else limit, missingTranslation, missingCategory, includeDeferred).map {
+            TagTranslationCandidate(it.canonicalTag, it.danbooruCategory, it.danbooruPostCount, it.korean, it.appCategory, it.koreanAliases)
         }
         val categories = (AppTagCategory.entries.map { it.value } + tagDao.getUsedCategories() + tagDao.getUserCategories()).distinct()
         TagTranslationExportFile(
@@ -67,26 +136,62 @@ class AutocompleteRepository(
         )
     }
 
+    suspend fun exportSelectedTranslations(items: List<TagDictionaryItem>): String {
+        val categories = (AppTagCategory.entries.map { it.value } + tagDao.getUsedCategories() + tagDao.getUserCategories()).distinct()
+        return TagTranslationExchange.exportClipboard(items.map { item ->
+            TagTranslationCandidate(
+                tag = item.canonicalTag,
+                sourceCategory = item.danbooruCategory,
+                postCount = item.danbooruPostCount,
+                korean = item.korean,
+                appCategory = item.appCategory,
+                koreanAliases = item.koreanAliases,
+            )
+        }, categories)
+    }
+
     suspend fun previewTranslationImport(text: String): TagTranslationImportPreview {
         val parsed = TagTranslationExchange.parse(text)
         val knownCategories = (AppTagCategory.entries.map { it.value } + tagDao.getUsedCategories() + tagDao.getUserCategories()).toSet()
         val valid = mutableListOf<ValidatedTagTranslation>()
+        val exclusions = mutableListOf<ValidatedTagExclusion>()
         val unknown = mutableListOf<String>()
         val newCategories = linkedSetOf<String>()
         parsed.rows.distinctBy { it.tag }.forEach { row ->
             val tag = tagDao.findByCanonical(row.tag)
             if (tag == null) unknown += row.tag
             else {
+                if (row.status == TagTranslationStatus.EXCLUDED_CANDIDATE) {
+                    exclusions += ValidatedTagExclusion(tag.id, row)
+                    return@forEach
+                }
                 val category = row.appCategory ?: row.suggestedCategory
                 if (category != null && category !in knownCategories) newCategories += category
-                valid += ValidatedTagTranslation(tag.id, row)
+                valid += ValidatedTagTranslation(tag.id, row, canDelete = row.needsReview && tagDao.canDeleteTranslationTypo(tag.id))
             }
         }
-        return TagTranslationImportPreview(valid, parsed.invalidLines, unknown, newCategories.toList(), valid.count { it.row.needsReview })
+        return TagTranslationImportPreview(
+            validRows = valid,
+            invalidLines = parsed.invalidLines,
+            unknownTags = unknown,
+            newCategories = newCategories.toList(),
+            reviewCount = valid.count { it.row.status == TagTranslationStatus.REVIEW || it.row.needsReview },
+            excludedCandidates = exclusions,
+            unchangedCount = valid.count { it.row.status == TagTranslationStatus.UNCHANGED },
+        )
     }
 
-    suspend fun applyTranslationImport(preview: TagTranslationImportPreview, overwriteExisting: Boolean) {
-        val applicable = preview.validRows.filterNot { it.row.needsReview }
+    suspend fun previewTranslationFile(uri: Uri): TagTranslationImportPreview = withContext(Dispatchers.IO) {
+        val text = context.contentResolver.openInputStream(uri)?.use(TranslationResultReader::read)
+            ?: error("Cannot open translation result")
+        val preview = previewTranslationImport(text)
+        require(preview.validRows.isNotEmpty() || preview.excludedCandidates.isNotEmpty() || preview.unknownTags.isNotEmpty()) { "No translation rows" }
+        preview
+    }
+
+    suspend fun applyTranslationImport(preview: TagTranslationImportPreview, overwriteExisting: Boolean, selectedDeleteIds: Set<String> = emptySet(), deferReviewed: Boolean = true) {
+        val deleteIds = preview.validRows.filter { it.canDelete && it.row.needsReview && it.tagId in selectedDeleteIds }.map { it.tagId }.toSet()
+        val applicable = preview.validRows.filter { it.row.status == TagTranslationStatus.TRANSLATED && !it.row.needsReview }
         val knownCategories = (AppTagCategory.entries.map { it.value } + tagDao.getUsedCategories() + tagDao.getUserCategories()).toSet()
         val categories = emptyList<UserTagCategoryEntity>()
         val overrides = applicable.map { validated ->
@@ -103,7 +208,25 @@ class AutocompleteRepository(
                 updatedAt = now(),
             )
         }
-        tagDao.applyTranslationImport(overrides, categories)
+        val deferred = if (deferReviewed) preview.validRows.filter { it.row.needsReview && it.tagId !in deleteIds }.map { validated ->
+            val old = tagDao.findOverride(validated.tagId)
+            old?.copy(translationDeferred = true) ?: UserTagOverrideEntity(
+                id = UUID.nameUUIDFromBytes("override:${validated.tagId}".toByteArray()).toString(),
+                tagId = validated.tagId, korean = null, koreanAliases = null, appCategory = null,
+                favorite = false, thumbnailPath = null, updatedAt = now(), translationDeferred = true,
+            )
+        } else emptyList()
+        tagDao.applyTranslationImport(overrides + deferred, categories, deleteIds)
+        preview.excludedCandidates.forEach { candidate ->
+            excludeTag(
+                canonicalTag = candidate.row.tag,
+                origin = TagExclusionOrigin.AI,
+                reasonCode = requireNotNull(candidate.row.exclusionReasonCode),
+                reasonText = candidate.row.exclusionReasonText,
+                userConfirmed = false,
+            )
+        }
+        if (deleteIds.isNotEmpty()) cache.clear()
     }
 
     suspend fun setThumbnail(item: TagDictionaryItem, uri: Uri) {
@@ -134,7 +257,7 @@ class AutocompleteRepository(
     suspend fun removeThumbnail(item: TagDictionaryItem) {
         item.thumbnailPath?.let(::File)?.takeIf(File::isFile)?.delete()
         val old = tagDao.findOverride(item.id) ?: return
-        if (!old.favorite && old.korean == null && old.koreanAliases == null && old.appCategory == null) tagDao.clearUserOverride(item.id)
+        if (!old.favorite && old.korean == null && old.koreanAliases == null && old.appCategory == null && !old.translationDeferred) tagDao.clearUserOverride(item.id)
         else tagDao.upsertUserOverride(old.copy(thumbnailPath = null, updatedAt = now()))
     }
 
@@ -144,6 +267,7 @@ class AutocompleteRepository(
             id = old?.id ?: UUID.nameUUIDFromBytes("override:${item.id}".toByteArray()).toString(),
             tagId = item.id, korean = old?.korean, koreanAliases = old?.koreanAliases,
             appCategory = old?.appCategory, favorite = old?.favorite ?: item.favorite,
+            translationDeferred = old?.translationDeferred ?: false,
             thumbnailPath = path, updatedAt = now(),
         ))
     }
@@ -169,7 +293,7 @@ class AutocompleteRepository(
     suspend fun resetUserDetails(item: TagDictionaryItem) {
         val old = tagDao.findOverride(item.id) ?: return
         if (old.favorite || old.thumbnailPath != null) {
-            tagDao.upsertUserOverride(old.copy(korean = null, koreanAliases = null, appCategory = null, updatedAt = now()))
+            tagDao.upsertUserOverride(old.copy(korean = null, koreanAliases = null, appCategory = null, updatedAt = now(), translationDeferred = false))
         } else tagDao.clearUserOverride(item.id)
     }
 
@@ -209,7 +333,26 @@ class AutocompleteRepository(
     private val cache = mutableMapOf<String, Cached>()
     private val lastRequest = mutableMapOf<SuggestionSource, Long>()
 
-    suspend fun local(query: String): List<TagSuggestion> = tagDao.searchAutocomplete(query, query.replace(' ', '_')).map {
+    suspend fun localPrefix(query: String): List<TagSuggestion> {
+        val normalizeStarted = System.nanoTime()
+        val canonicalPrefix = query.trim().replace(' ', '_').lowercase()
+        val normalizedAt = System.nanoTime()
+        if (canonicalPrefix.isBlank()) return emptyList()
+        val rows = tagDao.searchPrefix(canonicalPrefix)
+        val queriedAt = System.nanoTime()
+        val suggestions = rows.map { it.toLocalSuggestion() }
+        logLocalTiming("prefix", query.length, normalizedAt - normalizeStarted, queriedAt - normalizedAt, System.nanoTime() - queriedAt, suggestions.size)
+        return suggestions
+    }
+
+    suspend fun local(query: String): List<TagSuggestion> {
+        val normalizeStarted = System.nanoTime()
+        val trimmed = query.trim()
+        val canonicalPrefix = trimmed.replace(' ', '_')
+        val normalizedAt = System.nanoTime()
+        val rows = tagDao.searchAutocomplete(trimmed, canonicalPrefix)
+        val queriedAt = System.nanoTime()
+        val suggestions = rows.map {
         TagSuggestion(
             tag = it.canonicalTag,
             source = SuggestionSource.LOCAL,
@@ -219,6 +362,28 @@ class AutocompleteRepository(
             category = it.appCategory ?: it.danbooruCategory,
             useCount = it.useCount,
             lastUsedAt = it.lastUsedAt,
+        )
+        }
+        logLocalTiming("rich", query.length, normalizedAt - normalizeStarted, queriedAt - normalizedAt, System.nanoTime() - queriedAt, suggestions.size)
+        return suggestions
+    }
+
+    private fun TagEntity.toLocalSuggestion() = TagSuggestion(
+        tag = canonicalTag,
+        source = SuggestionSource.LOCAL,
+        danbooruPostCount = danbooruPostCount,
+        naiCount = naiCount,
+        naiConfidence = naiConfidence,
+        category = appCategory ?: danbooruCategory,
+        useCount = useCount,
+        lastUsedAt = lastUsedAt,
+    )
+
+    private fun logLocalTiming(kind: String, queryLength: Int, normalizeNanos: Long, queryNanos: Long, mapNanos: Long, count: Int) {
+        if (!BuildConfig.DEBUG) return
+        Log.d(
+            "AutocompletePerf",
+            "local=$kind chars=$queryLength normalizeMs=${normalizeNanos / 1_000_000.0} dbFilterRankMs=${queryNanos / 1_000_000.0} mapMs=${mapNanos / 1_000_000.0} count=$count",
         )
     }
 
@@ -237,8 +402,9 @@ class AutocompleteRepository(
         File(context.filesDir, "tag_thumbnails").deleteRecursively()
     }
 
-    /** Remote suggestions become local data only after the user explicitly selects one. */
+    /** Selection records usage; verified API responses are also persisted on lookup. */
     suspend fun recordSelection(suggestion: TagSuggestion) {
+        if (suggestion.source == SuggestionSource.WILDCARD) return
         persist(suggestion)
         recordUse(suggestion.tag)
     }
@@ -251,12 +417,18 @@ class AutocompleteRepository(
         val danResult = dan?.await()
         val values = naiResult?.getOrNull().orEmpty() + danResult?.getOrNull().orEmpty()
         values.forEach { persist(it) }
+        val excluded = excludedCanonicals(values)
         AutocompleteResults(
-            novelAi = naiResult?.getOrNull().orEmpty(),
-            danbooru = danResult?.getOrNull().orEmpty(),
+            novelAi = TagExclusionPolicy.filter(naiResult?.getOrNull().orEmpty(), excluded),
+            danbooru = TagExclusionPolicy.filter(danResult?.getOrNull().orEmpty(), excluded),
             novelAiFailed = missingNaiToken || naiResult?.isFailure == true,
             danbooruFailed = danResult?.isFailure == true,
         )
+    }
+
+    private suspend fun excludedCanonicals(values: List<TagSuggestion>): Set<String> {
+        val canonical = values.map { TagExclusionPolicy.canonical(it.tag) }.filter(String::isNotBlank).distinct()
+        return if (canonical.isEmpty()) emptySet() else tagDao.findExcludedCanonicals(canonical).toSet()
     }
 
     private suspend fun fetch(source: SuggestionSource, keyPart: String, call: suspend () -> Result<List<TagSuggestion>>): Result<List<TagSuggestion>> {
@@ -269,12 +441,12 @@ class AutocompleteRepository(
     }
 
     private suspend fun persist(suggestion: TagSuggestion) {
-        val canonical = suggestion.tag.replace(' ', '_')
+        val canonical = TagExclusionPolicy.canonical(suggestion.tag)
         val old = tagDao.findByCanonical(canonical)
         tagDao.upsertTag(TagEntity(
             id = old?.id ?: UUID.nameUUIDFromBytes(canonical.toByteArray()).toString(),
             canonicalTag = canonical,
-            danbooruCategory = suggestion.category ?: old?.danbooruCategory,
+            danbooruCategory = DanbooruCategory.normalize(suggestion.category ?: old?.danbooruCategory),
             appCategory = old?.appCategory,
             legacyPostCount = old?.legacyPostCount,
             danbooruPostCount = suggestion.danbooruPostCount ?: old?.danbooruPostCount,
@@ -286,6 +458,29 @@ class AutocompleteRepository(
             lastSeenAt = now(),
             useCount = old?.useCount ?: 0,
             lastUsedAt = old?.lastUsedAt,
+            bundled = old?.bundled ?: false,
         ))
     }
+}
+
+internal fun mergeTagExclusion(
+    existing: TagExclusionEntity?,
+    canonical: String,
+    origin: TagExclusionOrigin,
+    reasonCode: String,
+    reasonText: String?,
+    userConfirmed: Boolean,
+    timestamp: Long,
+): TagExclusionEntity = if (existing != null) {
+    existing.copy(userConfirmed = existing.userConfirmed || userConfirmed, updatedAt = timestamp)
+} else {
+    TagExclusionEntity(
+        canonicalTag = canonical,
+        origin = origin.name,
+        reasonCode = reasonCode,
+        reasonText = reasonText?.trim()?.takeIf(String::isNotBlank),
+        userConfirmed = userConfirmed,
+        createdAt = existing?.createdAt ?: timestamp,
+        updatedAt = timestamp,
+    )
 }

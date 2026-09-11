@@ -6,6 +6,10 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PromptProcessorTest {
+    @Test fun extraCommaCleanupRemovesOnlyEmptyElementsAndPreservesMeaningfulWhitespace() {
+        assertEquals("1girl,     solo, long hair", PromptProcessor.cleanupExtraCommas("1girl, ,,     solo,, long hair"))
+    }
+
     @Test fun `closed and open comments are removed`() {
         assertEquals("a, c", PromptProcessor.stripComments("a, ## memo ##c"))
         assertEquals("a, ", PromptProcessor.stripComments("a, ## memo\ncontinues"))
@@ -84,6 +88,13 @@ class PromptProcessorTest {
             "base,\nText: HELLO WORLD\n\nGOOD MORNING",
             PromptProcessor.appendTextRendering("base,", TextRenderingState(true, "HELLO WORLD\n\nGOOD MORNING")),
         )
+        assertEquals(
+            "base,\nred handwritten sign,\nText: HELLO",
+            PromptProcessor.appendTextRendering(
+                "base,",
+                TextRenderingState(enabled = true, content = "HELLO", description = "red handwritten sign,"),
+            ),
+        )
     }
 
     @Test fun `enabled blocks join in order with comments stripped`() {
@@ -92,11 +103,33 @@ class PromptProcessorTest {
             PromptBlock(name = "off", content = "hidden", enabled = false, order = 2),
             PromptBlock(name = "a", content = "first, ##note##", order = 0),
         )
-        assertEquals("first, second,", PromptProcessor.joinEnabledBlocks(blocks, true))
+        assertEquals("first,\n\nsecond,", PromptProcessor.joinEnabledBlocks(blocks, true))
     }
 
     @Test fun `weight spans exclude comments and retain strength`() {
         val spans = PromptProcessor.weightSpans("0.7::soft :: ## 2.0::ignored :: ## 1.5::strong ::")
         assertEquals(listOf(0.7f, 1.5f), spans.map { it.weight })
+    }
+
+    @Test fun `editable and incomplete syntax always produces valid highlight ranges`() {
+        val cases = listOf(
+            "plain prompt",
+            "1.2::shirt ::",
+            "1.2::shirt, long hair ::",
+            "1.2:shirt ::",
+            "1.2::shirt :",
+            "1.2::shirt",
+            "1.2::shirt ## comment::inside ## ::",
+            "1.2::shirt ||red|blue|| ::",
+            "::",
+            ":",
+            "",
+        )
+        cases.forEach { input ->
+            val ranges = PromptProcessor.weightSpans(input).map { it.start to it.endExclusive } +
+                PromptProcessor.commentSpans(input).map { it.start to it.endExclusive } +
+                PromptProcessor.randomizerSpans(input).map { it.start to it.endExclusive }
+            assertTrue("Invalid highlight range for '$input': $ranges", ranges.all { (start, end) -> start >= 0 && end in start..input.length })
+        }
     }
 }

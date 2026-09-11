@@ -7,6 +7,78 @@ import java.util.zip.ZipInputStream
 
 class TagTranslationExchangeTest {
     @Test
+    fun `clipboard export contains only selected rows and preserves existing fields`() {
+        val text = TagTranslationExchange.exportClipboard(
+            listOf(TagTranslationCandidate("alice_(series)", "character", 12, "앨리스", "character", "앨리스짱")),
+            listOf("character", "copyright"),
+        )
+
+        assertTrue(text.contains("\"tag\":\"alice_(series)\""))
+        assertTrue(text.contains("\"source_category\":\"character\""))
+        assertTrue(text.contains("\"ko\":\"앨리스\""))
+        assertTrue(text.contains("앨리스짱"))
+        assertFalse(text.contains("unselected_tag"))
+    }
+
+    @Test
+    fun `clipboard guidance distinguishes character and copyright proper names`() {
+        val text = TagTranslationExchange.exportClipboard(emptyList(), listOf("character", "copyright"))
+        assertTrue(text.contains("For character tags"))
+        assertTrue(text.contains("official/common Korean names"))
+        assertTrue(text.contains("For copyright tags"))
+        assertTrue(text.contains("officially distributed Korean title"))
+    }
+
+    @Test
+    fun `parse supports exclusion candidate and rejects incomplete exclusion`() {
+        val parsed = TagTranslationExchange.parse(
+            """
+            {"tag":"white_shair","status":"excluded_candidate","reason_code":"typo","reason_text":"철자 오류로 보임","ko":"","aliases_ko":[],"app_category":""}
+            {"tag":"bad","status":"excluded_candidate","reason_code":"guess"}
+            """.trimIndent(),
+        )
+
+        assertEquals(1, parsed.rows.size)
+        assertEquals(TagTranslationStatus.EXCLUDED_CANDIDATE, parsed.rows.single().status)
+        assertEquals("typo", parsed.rows.single().exclusionReasonCode)
+        assertEquals(1, parsed.invalidLines)
+    }
+
+    @Test
+    fun `parse accepts partial result and deterministic first duplicate`() {
+        val parsed = TagTranslationExchange.parse(
+            """
+            {"tag":"smile","status":"translated","ko":"미소","aliases_ko":[],"app_category":"expression"}
+            {"tag":"smile","status":"translated","ko":"웃음","aliases_ko":[],"app_category":"expression"}
+            """.trimIndent(),
+        )
+
+        assertEquals("미소", parsed.rows.distinctBy { it.tag }.single().korean)
+    }
+    @Test
+    fun `bundle distinguishes numeric source categories and preserves source metadata`() {
+        val bytes = TagTranslationExchange.exportBundle(
+            listOf(TagTranslationCandidate("white_shair", "0", 0, null, null)),
+            listOf("0", "1", "general", "hair"),
+        )
+        val entries = mutableMapOf<String, String>()
+        ZipInputStream(ByteArrayInputStream(bytes)).use { zip ->
+            while (true) {
+                val entry = zip.nextEntry ?: break
+                entries[entry.name] = zip.readBytes().toString(Charsets.UTF_8)
+            }
+        }
+        val manifest = entries.getValue("categories.json")
+        assertFalse(manifest.contains("\"id\":\"0\""))
+        assertTrue(manifest.contains("\"id\":\"artist\""))
+        val row = entries.getValue("tags_to_process.jsonl")
+        assertTrue(row.contains("\"source_category\":\"0\""))
+        assertTrue(row.contains("\"post_count\":0"))
+        assertTrue(row.contains("white_shair"))
+        assertTrue(entries.getValue("translation_instructions.md").contains("leave them absent"))
+    }
+
+    @Test
     fun `export includes instructions categories and candidates`() {
         val text = TagTranslationExchange.export(
             listOf(TagTranslationCandidate("school_uniform", "general", 123L, null, null)),
