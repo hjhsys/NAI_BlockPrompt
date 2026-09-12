@@ -1732,8 +1732,11 @@ Document를 우선합니다.
   ZIP 저장 뒤 클립보드에는 tag payload 대신 외부 AI용 짧은 안내문만 복사합니다.
 - 제외 목록은 AI 제안과 사용자 직접 제외 provenance를 유지하며 필터, 다중 선택, AI 제안의 사용자
   확정/확정 해제, 복구 전 확인을 지원합니다. Room schema 변경은 없습니다.
-- 새 앱 백업은 OOM 방지를 위해 이미지와 History/태그 썸네일 bytes를 포함하지 않습니다. 세션,
-  Stash, Library, History metadata, 사용자 태그 데이터, Wildcard와 설정은 유지하며 Token은 계속
-  제외합니다. 이전 media 포함 백업은 읽기 호환성을 유지합니다.
+- 앱 백업 포맷 v3는 OOM 방지를 위해 재생성 가능한 기본 번들 태그 전체를 제외하고 JSON을 ZIP에
+  직접 스트리밍합니다. History/태그 미리보기 썸네일은 `backup.json`의 ByteArray 숫자 배열이
+  아니라 ZIP 내부 개별 media entry로 저장하며, 복원 시 앱 내부 썸네일 폴더로 풀어 DB 경로를
+  다시 연결합니다. 세션, Stash, Library, History metadata, 사용자 태그 데이터, Wildcard와 설정은
+  유지하며 생성 원본과 Token은 계속 제외합니다. 이전 v1/v2 media 포함 백업은 읽기 호환성을
+  유지합니다.
 - Inpaint는 웹 호환 mask 전처리/응답 합성 적용 후 V5 Full 실기기에서 경계 artifact 제거를
   확인했습니다. V4.5 Full과 추가 해상도/마스크 조합은 후속 실기기 검증 대상입니다.

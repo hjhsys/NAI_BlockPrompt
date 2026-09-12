@@ -74,7 +74,10 @@ interface TagDao {
     @Upsert suspend fun upsertWildcards(entities: List<WildcardEntity>)
     @Upsert suspend fun upsertWildcard(entity: WildcardEntity)
     @Delete suspend fun deleteWildcard(entity: WildcardEntity)
-    @Query("SELECT * FROM tags WHERE bundled = 0 OR useCount > 0 OR lastUsedAt IS NOT NULL OR novelAiSource = 1 OR danbooruSource = 1 OR userCreated = 1") suspend fun listPortableTags(): List<TagEntity>
+    // Bundled tags are reproducible from the app asset. Export only bundled rows with
+    // user activity plus non-bundled/discovered rows; source flags are also present on
+    // the bundled catalog and would otherwise serialize the entire catalog.
+    @Query("SELECT * FROM tags WHERE bundled = 0 OR useCount > 0 OR lastUsedAt IS NOT NULL OR userCreated = 1") suspend fun listPortableTags(): List<TagEntity>
     @Query("SELECT * FROM tag_aliases WHERE tagId IN (SELECT id FROM tags WHERE bundled = 0)") suspend fun listPortableAliases(): List<TagAliasEntity>
     @Query("SELECT * FROM user_tag_overrides") suspend fun listUserOverrides(): List<UserTagOverrideEntity>
     @Query("SELECT * FROM tag_exclusions") suspend fun listTagExclusions(): List<TagExclusionEntity>

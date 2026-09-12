@@ -437,7 +437,7 @@
     <string name="export_shared_tag_db">Share user Tag DB</string>
     <string name="import_shared_tag_db">Import shared Tag DB</string>
     <string name="backup_and_restore">Backup and restore</string>
-    <string name="backup_description">Transfers settings, current work, saved items, favorites, history metadata, and the user Tag DB. API tokens, generated images, and thumbnails are excluded.</string>
+    <string name="backup_description">Transfers settings, current work, saved items, favorites, history metadata and preview thumbnails, and the user Tag DB. API tokens and original generated images are excluded.</string>
     <string name="backup_export_succeeded">Backup saved.</string>
     <string name="backup_export_failed">Could not save the backup. Check the selected location and available storage.</string>
     <string name="export_backup">Export backup</string>
