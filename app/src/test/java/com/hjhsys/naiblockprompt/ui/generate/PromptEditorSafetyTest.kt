@@ -27,7 +27,7 @@ class PromptEditorSafetyTest {
 
     @Test
     fun `syntax transformation preserves text and identity offsets while weight syntax is incomplete`() {
-        val transformation = PromptVisualTransformation(Color.Red, Color.Blue, Color.Green, Color.Yellow)
+        val transformation = PromptVisualTransformation(Color.Red, Color.Blue, Color.Gray, Color.Green, Color.Yellow)
         val cases = listOf(
             "plain prompt",
             "1.2::shirt ::",
@@ -50,6 +50,39 @@ class PromptEditorSafetyTest {
                 assertEquals(offset, transformed.offsetMapping.transformedToOriginal(offset))
             }
         }
+    }
+
+    @Test
+    fun `weight visual style covers numeric prefix and delimiters without changing text or offsets`() {
+        val source = "tag, 0.8::soft style ::, ||red|blue||, 1.2::strong lighting ::, end"
+        val transformation = PromptVisualTransformation(Color.Red, Color.Blue, Color.Gray, Color.Green, Color.Yellow)
+
+        val transformed = transformation.filter(AnnotatedString(source))
+        val expectedWeights = listOf("0.8::soft style ::", "1.2::strong lighting ::")
+        expectedWeights.forEach { weightText ->
+            val start = source.indexOf(weightText)
+            val range = transformed.text.spanStyles.single { style ->
+                style.start == start && style.end == start + weightText.length && style.item.background != Color.Unspecified
+            }
+            assertEquals(start, range.start)
+            assertEquals(start + weightText.length, range.end)
+        }
+        assertEquals(source, transformed.text.text)
+        (0..source.length).forEach { offset ->
+            assertEquals(offset, transformed.offsetMapping.originalToTransformed(offset))
+            assertEquals(offset, transformed.offsetMapping.transformedToOriginal(offset))
+        }
+    }
+
+    @Test
+    fun `weight visual style excludes delimiters inside comments`() {
+        val source = "## 1.5::comment :: ##"
+        val transformation = PromptVisualTransformation(Color.Red, Color.Blue, Color.Gray, Color.Green, Color.Yellow)
+
+        val transformed = transformation.filter(AnnotatedString(source))
+
+        assertEquals(source, transformed.text.text)
+        assertEquals(0, transformed.text.spanStyles.count { it.item.background != Color.Unspecified })
     }
 
     @Test

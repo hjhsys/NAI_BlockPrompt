@@ -3,6 +3,8 @@ package com.hjhsys.naiblockprompt.domain.model
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import com.hjhsys.naiblockprompt.domain.editor.PromptOwner
+import com.hjhsys.naiblockprompt.domain.editor.SessionEditor
 
 class SessionSnapshotTest {
     private val json = Json { encodeDefaults = true }
@@ -61,5 +63,27 @@ class SessionSnapshotTest {
         )
 
         assertEquals(TextRenderingState(true, "HELLO", ""), restored)
+    }
+
+    @Test
+    fun snapshotRoundTripPreservesSplitAndMergedBlockStructure() {
+        val originalBlock = PromptBlock(name = "Imported", content = "ABC, DEF, GHI")
+        var session = Session.empty().copy(base = BasePrompt(PromptPair(positiveBlocks = listOf(originalBlock))))
+        session = SessionEditor.splitBlockAtCursor(
+            session, PromptOwner.Base, PromptPolarity.POSITIVE, originalBlock.id, 10, "Block 2",
+        )
+        val restoredSplit = json.decodeFromString(
+            SessionSnapshot.serializer(),
+            json.encodeToString(SessionSnapshot.serializer(), SessionSnapshot(session = session)),
+        ).session
+        assertEquals(session.base.prompts.positiveBlocks, restoredSplit.base.prompts.positiveBlocks)
+
+        val currentId = restoredSplit.base.prompts.positiveBlocks[1].id
+        val merged = SessionEditor.mergeBlockWithPrevious(restoredSplit, PromptOwner.Base, PromptPolarity.POSITIVE, currentId)
+        val restoredMerged = json.decodeFromString(
+            SessionSnapshot.serializer(),
+            json.encodeToString(SessionSnapshot.serializer(), SessionSnapshot(session = merged)),
+        ).session
+        assertEquals(merged.base.prompts.positiveBlocks, restoredMerged.base.prompts.positiveBlocks)
     }
 }

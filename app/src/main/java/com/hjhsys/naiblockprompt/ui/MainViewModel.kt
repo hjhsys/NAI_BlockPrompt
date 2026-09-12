@@ -38,6 +38,8 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.asSharedFlow
 import com.hjhsys.naiblockprompt.domain.tags.TagTranslationImportPreview
 import com.hjhsys.naiblockprompt.domain.tags.TagTranslationExportFile
+import com.hjhsys.naiblockprompt.domain.tags.AiTranslationExportScope
+import com.hjhsys.naiblockprompt.domain.model.TagExclusionFilter
 import com.hjhsys.naiblockprompt.domain.image.NaiImageMetadata
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -104,14 +106,14 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     private val tagDictionaryFilter = MutableStateFlow(TagDictionaryFilter.ALL)
     private val tagDictionaryCategory = MutableStateFlow("")
     private val tagDictionarySort = MutableStateFlow(TagDictionarySort.POPULAR)
-    private val tagExclusionOrigin = MutableStateFlow<TagExclusionOrigin?>(null)
+    private val tagExclusionFilter = MutableStateFlow(TagExclusionFilter.ALL)
     private var tagInsertTarget: TagInsertTarget? = null
     private val _tagInsertAvailable = MutableStateFlow(false)
     val tagInsertAvailable: StateFlow<Boolean> = _tagInsertAvailable.asStateFlow()
     val usedTagCategories = container.autocompleteRepository.usedCategories.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val userTagCategories = container.autocompleteRepository.userCategories.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val wildcards = container.autocompleteRepository.wildcards.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-    val excludedTags = tagExclusionOrigin.flatMapLatest(container.autocompleteRepository::exclusions)
+    val excludedTags = tagExclusionFilter.flatMapLatest(container.autocompleteRepository::exclusions)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val dictionaryTags = combine(tagDictionaryQuery, tagDictionaryFilter, tagDictionaryCategory, tagDictionarySort) { query, filter, category, sort ->
         DictionarySearch(query, filter, category, sort)
@@ -126,8 +128,6 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     private val autocompleteRequestGuard = AutocompleteRequestGuard()
     private val _translationExport = MutableSharedFlow<TagTranslationExportFile>(extraBufferCapacity = 1)
     val translationExport = _translationExport.asSharedFlow()
-    private val _translationClipboard = MutableSharedFlow<String>(extraBufferCapacity = 1)
-    val translationClipboard = _translationClipboard.asSharedFlow()
     private val _translationImportPreview = MutableStateFlow<TagTranslationImportPreview?>(null)
     val translationImportPreview = _translationImportPreview.asStateFlow()
     private val _translationImportFailed = MutableStateFlow(false)
@@ -195,6 +195,14 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
     fun addBlock(owner: PromptOwner, polarity: PromptPolarity, name: String) = edit {
         SessionEditor.addBlock(it, owner, polarity, name)
+    }
+
+    fun splitBlockAtCursor(owner: PromptOwner, polarity: PromptPolarity, id: String, cursor: Int, newBlockName: String) = edit {
+        SessionEditor.splitBlockAtCursor(it, owner, polarity, id, cursor, newBlockName)
+    }
+
+    fun mergeBlockWithPrevious(owner: PromptOwner, polarity: PromptPolarity, id: String) = edit {
+        SessionEditor.mergeBlockWithPrevious(it, owner, polarity, id)
     }
 
     fun removeBlock(owner: PromptOwner, polarity: PromptPolarity, id: String) = edit {
@@ -381,6 +389,9 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     fun setUseTextRendering(value: Boolean) = viewModelScope.launch {
         container.settingsRepository.setUseTextRendering(value)
     }
+    fun setQuickEditWeightStep(value: String) = viewModelScope.launch {
+        container.settingsRepository.setQuickEditWeightStep(value)
+    }
     fun setColorHelperMode(value: ColorHelperMode) = viewModelScope.launch { container.settingsRepository.setColorHelperMode(value) }
     fun toggleFavoriteColor(hex: String) = viewModelScope.launch {
         val current = settings.value.favoriteColors
@@ -494,7 +505,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     fun filterDictionary(filter: TagDictionaryFilter) { tagDictionaryFilter.value = filter }
     fun filterDictionaryCategory(category: String) { tagDictionaryCategory.value = category }
     fun sortDictionary(sort: TagDictionarySort) { tagDictionarySort.value = sort }
-    fun filterExcludedTags(origin: TagExclusionOrigin?) { tagExclusionOrigin.value = origin }
+    fun filterExcludedTags(filter: TagExclusionFilter) { tagExclusionFilter.value = filter }
     fun addTagCategory(name: String) = viewModelScope.launch { container.autocompleteRepository.addCategory(name) }
     fun saveWildcard(id: String?, name: String, valuesText: String, folder: String? = null) = viewModelScope.launch {
         try {
@@ -515,8 +526,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     fun prepareAllTranslationExport(missingTranslation: Boolean, missingCategory: Boolean, includeDeferred: Boolean = false) = viewModelScope.launch {
         _translationExport.emit(container.autocompleteRepository.exportTranslationBatch(missingTranslation, missingCategory, allBatches = true, includeDeferred = includeDeferred))
     }
-    fun copySelectedTagsForAi(items: List<TagDictionaryItem>) = viewModelScope.launch {
-        if (items.isNotEmpty()) _translationClipboard.emit(container.autocompleteRepository.exportSelectedTranslations(items))
+    fun prepareTagsForAiExport(scope: AiTranslationExportScope, selectedItems: List<TagDictionaryItem>) = viewModelScope.launch {
+        _translationExport.emit(container.autocompleteRepository.exportTranslationsForAi(scope, selectedItems))
     }
     fun previewTranslationImport(text: String) = viewModelScope.launch {
         _translationImportPreview.value = container.autocompleteRepository.previewTranslationImport(text)
@@ -566,8 +577,18 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         container.autocompleteRepository.restoreExcludedTag(item.canonicalTag)
         clearAutocomplete()
     }
-    fun confirmExcludedTag(item: ExcludedTagItem) = viewModelScope.launch {
-        container.autocompleteRepository.confirmExcludedTag(item.canonicalTag)
+    fun restoreExcludedTags(items: Collection<ExcludedTagItem>) = viewModelScope.launch {
+        container.autocompleteRepository.restoreExcludedTags(items.map(ExcludedTagItem::canonicalTag))
+        clearAutocomplete()
+    }
+    fun setExcludedTagUserConfirmed(item: ExcludedTagItem, confirmed: Boolean) = viewModelScope.launch {
+        container.autocompleteRepository.setExcludedTagUserConfirmed(item.canonicalTag, confirmed)
+    }
+    fun setExcludedTagsUserConfirmed(items: Collection<ExcludedTagItem>, confirmed: Boolean) = viewModelScope.launch {
+        container.autocompleteRepository.setExcludedTagsUserConfirmed(items.map(ExcludedTagItem::canonicalTag), confirmed)
+    }
+    fun setShowExclusionConfirmationHelp(value: Boolean) = viewModelScope.launch {
+        container.settingsRepository.setShowExclusionConfirmationHelp(value)
     }
     fun resetTagDatabaseToBundled() = viewModelScope.launch {
         container.autocompleteRepository.resetToBundledTags()

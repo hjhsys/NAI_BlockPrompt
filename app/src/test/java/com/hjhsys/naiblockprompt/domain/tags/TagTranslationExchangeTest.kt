@@ -7,6 +7,57 @@ import java.util.zip.ZipInputStream
 
 class TagTranslationExchangeTest {
     @Test
+    fun `missing plus selected unions five candidates and preserves translated selection fields`() {
+        val missing = (1..3).map { index ->
+            TagTranslationCandidate("missing_$index", "general", index.toLong(), null, null)
+        }
+        val selected = listOf(
+            TagTranslationCandidate("translated_1", "character", 10, "번역 1", "character", "별칭 1"),
+            TagTranslationCandidate("translated_2", "copyright", 20, "번역 2", "copyright", "별칭 2"),
+        )
+
+        val resolved = AiTranslationExportSelection.resolve(
+            AiTranslationExportScope.MISSING_AND_SELECTED,
+            missing,
+            selected,
+        )
+
+        assertEquals(5, resolved.size)
+        assertEquals("번역 1", resolved.single { it.tag == "translated_1" }.korean)
+        assertEquals("별칭 1", resolved.single { it.tag == "translated_1" }.koreanAliases)
+    }
+
+    @Test
+    fun `export scopes use effective translation and dedupe canonical tags`() {
+        val untranslated = TagTranslationCandidate("needs_ko", "general", 1, null, null)
+        val overlapping = TagTranslationCandidate("overlap", "general", 2, "", null)
+        val effectivelyTranslated = TagTranslationCandidate("base_translated", "general", 3, "기본 번역", "general", "기존 별칭")
+        val selectedTranslated = TagTranslationCandidate("selected_translated", "character", 4, "선택 번역", "character", "선택 별칭")
+
+        val missingOnly = AiTranslationExportSelection.resolve(
+            AiTranslationExportScope.MISSING_ONLY,
+            listOf(untranslated, overlapping, effectivelyTranslated),
+            listOf(selectedTranslated),
+        )
+        val selectedOnly = AiTranslationExportSelection.resolve(
+            AiTranslationExportScope.SELECTED_ONLY,
+            listOf(untranslated),
+            listOf(overlapping, selectedTranslated),
+        )
+        val combined = AiTranslationExportSelection.resolve(
+            AiTranslationExportScope.MISSING_AND_SELECTED,
+            listOf(untranslated, overlapping, effectivelyTranslated),
+            listOf(overlapping, selectedTranslated),
+        )
+
+        assertEquals(listOf("needs_ko", "overlap"), missingOnly.map { it.tag })
+        assertEquals(listOf("overlap", "selected_translated"), selectedOnly.map { it.tag })
+        assertEquals(listOf("needs_ko", "overlap", "selected_translated"), combined.map { it.tag })
+        assertEquals(1, combined.count { it.tag == "overlap" })
+        assertFalse(combined.any { it.tag == "base_translated" })
+    }
+
+    @Test
     fun `clipboard export contains only selected rows and preserves existing fields`() {
         val text = TagTranslationExchange.exportClipboard(
             listOf(TagTranslationCandidate("alice_(series)", "character", 12, "앨리스", "character", "앨리스짱")),
@@ -23,10 +74,28 @@ class TagTranslationExchangeTest {
     @Test
     fun `clipboard guidance distinguishes character and copyright proper names`() {
         val text = TagTranslationExchange.exportClipboard(emptyList(), listOf("character", "copyright"))
-        assertTrue(text.contains("For character tags"))
-        assertTrue(text.contains("official/common Korean names"))
-        assertTrue(text.contains("For copyright tags"))
-        assertTrue(text.contains("officially distributed Korean title"))
+        assertTrue(text.contains("may be Character/Copyright proper names"))
+        assertTrue(text.contains("official Korean localization"))
+        assertTrue(text.contains("Namuwiki may be used as a cross-check"))
+        assertTrue(text.contains("sources conflict"))
+    }
+
+    @Test
+    fun `bundle guidance requires research and Korean proper name cross check`() {
+        val bytes = TagTranslationExchange.exportBundle(emptyList(), listOf("character", "copyright"))
+        val entries = mutableMapOf<String, String>()
+        ZipInputStream(ByteArrayInputStream(bytes)).use { zip ->
+            while (true) {
+                val entry = zip.nextEntry ?: break
+                entries[entry.name] = zip.readBytes().toString(Charsets.UTF_8)
+            }
+        }
+
+        val instructions = entries.getValue("translation_instructions.md")
+        assertTrue(instructions.contains("must not be classified or translated from spelling alone"))
+        assertTrue(instructions.contains("official Korean localization"))
+        assertTrue(instructions.contains("Namuwiki may be used to verify common Korean usage"))
+        assertTrue(instructions.contains("return `review`"))
     }
 
     @Test

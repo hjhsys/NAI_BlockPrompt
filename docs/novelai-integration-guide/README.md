@@ -2,7 +2,7 @@
 
 > Android/Kotlin 클라이언트를 실제로 구현하고 테스트하면서 확인한 내용과 실패 사례를 정리한 공개 참고 문서입니다.
 
-- 마지막 갱신: 2026-09-11
+- 마지막 갱신: 2026-09-12
 - 예제 환경: Kotlin, Jetpack Compose, kotlinx.serialization, OkHttp
 - 범위: 이미지 생성, 태그 자동완성, 구독 잔량, Vibe/Precise Reference, Inpaint, 저장과 진단
 - 비범위: NovelAI 웹 프런트엔드 복제, 비공개 캐시 프로토콜, 자동화된 대량 생성

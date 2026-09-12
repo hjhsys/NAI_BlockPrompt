@@ -10,8 +10,8 @@ An Android-only Kotlin/Jetpack Compose prompt-block editor and unofficial NovelA
 
 버전 **1.0**. [GitHub Releases](https://github.com/hjhsys/NAI_BlockPrompt/releases)에서 서명된 APK를 받을 수 있습니다. 비공식 개인 프로젝트이며 중요한 데이터는 별도 백업을 권장합니다.
 
-- **Generate:** Base / Character별 Positive·Negative, Block 추가·정렬·잠금·접기·ON/OFF, Character 전체 접기, Text Rendering, 주석, 가중치 강조·보정, 한 줄씩/합쳐서 정리.
-- **생성:** 모델·해상도·Sampler·Steps·Guidance·Seed 설정, Character Positioning, Image2Image, Vibe Transfer와 로컬 인코딩 캐시, Precise Reference. 지원 범위는 모델에 따라 다릅니다.
+- **Generate:** Base / Character별 Positive·Negative, Block 추가·정렬·잠금·접기·ON/OFF, Character 전체 접기, Text Rendering, 주석, 가중치 강조·보정, 한 줄씩/합쳐서 정리, Prompt Undo와 빠른 Tag/Chunk 편집.
+- **생성:** 모델·해상도·Sampler·Steps·Guidance·Seed 설정, Random/Fixed Seed 빠른 전환, Character Positioning, Image2Image, Vibe Transfer와 로컬 인코딩 캐시, Precise Reference, Inpaint. 지원 범위는 모델에 따라 다릅니다.
 - **이미지/History:** PNG 메타데이터 선택 가져오기, 원본 저장, 썸네일·설정·Seed 보존, 부분 복원, 즐겨찾기, 실패 요청 Retry, 원본 유실 안내.
 - **Library:** Blocks / Sets / Presets 저장·검색·폴더 분류·불러오기. 이전 작업은 1-slot Stash로 보관합니다.
 - **Tags:** 201,273개 canonical 태그와 한국어 번역, 별칭·카테고리 검색, 사용자 번역 override, 즐겨찾기, 사용 기록, 미리보기 이미지, 출처 표시.
@@ -34,11 +34,11 @@ DB·색상 도우미 버튼은 기존 오른쪽 위치에서 시작합니다. �
 
 기본 태그와 한국어 번역은 앱 asset에서 로컬 Room DB에 반영합니다. 사용자 번역·별칭·카테고리는 별도 override로 관리합니다. 출처는 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), 번들 생성은 [tools/tag_db/README.md](tools/tag_db/README.md)를 참고하세요.
 
-AI 번역 내보내기는 지침·카테고리·JSONL을 ZIP으로 제공합니다. 미번역/미분류 조건으로 최대 1,000개를 추출하며, 개발자용 전체 내보내기는 1,000개씩 분할합니다. 파일을 외부 AI에 전달하고 결과를 앱으로 가져오는 방식입니다.
+AI 번역 내보내기는 지침·카테고리·JSONL을 ZIP으로 제공합니다. Tag 선택 화면에서는 `미번역만`, `선택만`, `미번역 + 선택` 중 범위를 고를 수 있습니다. 미번역 여부는 Base 번역과 사용자 Override를 합친 실제 한국어 표시값을 기준으로 판단하고, 같은 canonical tag는 한 번만 내보냅니다. 개발자용 전체 내보내기는 1,000개씩 분할합니다. 파일을 외부 AI에 전달하고 결과를 앱으로 가져오는 방식입니다.
 
-ZIP 저장 후 AI 설명문이 클립보드에 복사됩니다. 결과 JSONL/TXT 또는 ZIP을 가져올 수 있습니다. 판단 불가 항목은 검토 보류로 저장해 기본 내보내기에서 제외하고, 원하면 보류 항목을 다시 내보낼 수 있습니다. AI 오타 제안은 사용자가 개별 선택·재확인한 경우에만 삭제하며 기본 DB와 개인 데이터는 보호합니다.
+ZIP 저장 후 클립보드에는 태그 원문 대신 외부 AI에 붙여넣을 짧은 안내문만 복사됩니다. 결과 JSONL/TXT 또는 ZIP을 가져올 수 있습니다. 판단 불가 항목은 검토 보류로 저장합니다. AI가 제안한 제외 항목과 사용자가 직접 제외한 항목은 출처를 보존하며, 필터·다중 선택·사용자 확정/확정 해제·복구 확인으로 관리합니다. 제외 상태는 자동완성과 사전 노출만 제어하며 Prompt 문자열을 임의로 고치지 않습니다.
 
-사용자 태그 DB 공유와 전체 백업은 별개입니다. 전체 백업에는 세션·Stash·Library·History metadata와 썸네일·사용자 태그 수정·Wildcard·색상 설정 등이 포함됩니다. **생성 원본 PNG, NovelAI Token, 기본 태그 asset은 제외**됩니다. 새 기기에서는 Token과 저장 폴더 권한을 다시 설정하고 입력/레퍼런스 이미지도 별도로 준비해야 합니다.
+사용자 태그 DB 공유와 전체 백업은 별개입니다. 전체 백업에는 세션·Stash·Library·History metadata·사용자 태그 수정·Wildcard·색상 설정 등이 포함됩니다. 메모리 사용량과 파일 크기를 제한하기 위해 **생성 원본 PNG, History/태그 썸네일, NovelAI Token, 기본 태그 asset은 제외**됩니다. 새 기기에서는 Token과 저장 폴더 권한을 다시 설정하고 생성 원본과 입력/레퍼런스 이미지도 별도로 준비해야 합니다. 예전 백업에 포함된 썸네일은 가져오기 호환성을 유지합니다.
 
 현재 백업에는 아래 알려진 문제가 있으므로 중요한 원본과 프롬프트를 별도로 보관하고 복원을 검증하세요.
 
@@ -49,7 +49,8 @@ ZIP 저장 후 AI 설명문이 클립보드에 복사됩니다. 결과 JSONL/TXT
 - 생성 후 저장 재시도용 이미지는 메모리에 보존되므로 프로세스 종료 후에는 유지되지 않습니다.
 - 토큰은 공식 계산값이 아닌 실험적 추정치입니다. 표시를 끌 수 있으며 생성을 차단하지 않습니다.
 - Anlas 안내는 모든 설정 조합의 총 비용을 보장하지 않습니다.
-- Wildcard TXT Export, 전용 폴더 관리, Undo/Redo, Inpaint는 미제공입니다.
+- Wildcard TXT Export, 전용 폴더 관리, Redo는 미제공입니다. Prompt Undo와 Quick Edit는 제공하지만 모든 Android 기본 텍스트 편집 동작을 대체하지는 않습니다.
+- Inpaint는 V5 Full 실기기에서 웹 호환 마스크 전처리·합성 경로를 확인했습니다. V4.5 Full과 다양한 해상도·마스크 모양은 추가 실기기 회귀 검증이 필요합니다.
 - 단위 테스트와 별도로 실제 기기의 DB migration·백업 왕복·백그라운드 복원·모델별 생성 검증이 필요합니다.
 
 ## 빌드와 테스트
@@ -83,6 +84,8 @@ Token은 Android Keystore로 암호화하여 로컬에 저장합니다. 생성�
 - [최신 제품 요구사항 (Google Docs)](https://docs.google.com/document/d/1MaEP_W8AMXoTPj6aB5DGFnceK7fdPrv9UUyQhv4WPts/edit?usp=sharing)
 - [로컬 요구사항 스냅샷](docs/NAI_APP_NOTES.md)
 - [NovelAI API 조사 기록](docs/NAI_IMAGE_API_SPIKE.md)
+- [NovelAI 이미지 API 연동 실전 가이드](docs/novelai-integration-guide/README.md)
+- [1.0 릴리스 노트](docs/releases/1.0.md)
 - [태그 번들 생성 도구](tools/tag_db/README.md)
 - [개발 규칙](AGENTS.md)
 

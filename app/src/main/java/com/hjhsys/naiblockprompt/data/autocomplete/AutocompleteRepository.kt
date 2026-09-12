@@ -29,6 +29,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.hjhsys.naiblockprompt.domain.model.ExcludedTagItem
 import com.hjhsys.naiblockprompt.domain.model.TagExclusionOrigin
+import com.hjhsys.naiblockprompt.domain.model.TagExclusionFilter
 import com.hjhsys.naiblockprompt.domain.model.TagExclusionReason
 
 data class AutocompleteResults(
@@ -52,12 +53,14 @@ class AutocompleteRepository(
     val usedCategories = tagDao.observeUsedCategories()
     val userCategories = tagDao.observeUserCategories()
     val wildcards = tagDao.observeWildcards()
-    fun exclusions(origin: TagExclusionOrigin?): Flow<List<ExcludedTagItem>> =
-        tagDao.observeTagExclusions(origin?.name.orEmpty()).map { rows ->
-            rows.map { row ->
+    fun exclusions(filter: TagExclusionFilter): Flow<List<ExcludedTagItem>> =
+        tagDao.observeTagExclusions("").map { rows ->
+            rows.mapNotNull { row ->
+                val itemOrigin = runCatching { TagExclusionOrigin.valueOf(row.origin) }.getOrDefault(TagExclusionOrigin.USER)
+                if (!TagExclusionPolicy.matchesFilter(itemOrigin, row.userConfirmed, filter)) return@mapNotNull null
                 ExcludedTagItem(
                     canonicalTag = row.canonicalTag,
-                    origin = runCatching { TagExclusionOrigin.valueOf(row.origin) }.getOrDefault(TagExclusionOrigin.USER),
+                    origin = itemOrigin,
                     reasonCode = row.reasonCode,
                     reasonText = row.reasonText,
                     userConfirmed = row.userConfirmed,
@@ -94,10 +97,26 @@ class AutocompleteRepository(
         tagDao.deleteTagExclusion(TagExclusionPolicy.canonical(canonicalTag))
     }
 
-    suspend fun confirmExcludedTag(canonicalTag: String) {
+    suspend fun restoreExcludedTags(canonicalTags: Collection<String>) {
+        canonicalTags.map(TagExclusionPolicy::canonical).filter(String::isNotBlank).distinct().forEach {
+            tagDao.deleteTagExclusion(it)
+        }
+    }
+
+    suspend fun setExcludedTagUserConfirmed(canonicalTag: String, confirmed: Boolean) {
         val canonical = TagExclusionPolicy.canonical(canonicalTag)
         val existing = tagDao.findTagExclusion(canonical) ?: return
-        tagDao.upsertTagExclusion(existing.copy(userConfirmed = true, updatedAt = now()))
+        if (existing.origin != TagExclusionOrigin.AI.name) return
+        tagDao.upsertTagExclusion(existing.copy(userConfirmed = confirmed, updatedAt = now()))
+    }
+
+    suspend fun setExcludedTagsUserConfirmed(canonicalTags: Collection<String>, confirmed: Boolean) {
+        val timestamp = now()
+        val updates = canonicalTags.map(TagExclusionPolicy::canonical).filter(String::isNotBlank).distinct().mapNotNull { canonical ->
+            tagDao.findTagExclusion(canonical)?.takeIf { it.origin == TagExclusionOrigin.AI.name }
+                ?.copy(userConfirmed = confirmed, updatedAt = timestamp)
+        }
+        if (updates.isNotEmpty()) tagDao.upsertTagExclusions(updates)
     }
 
     suspend fun saveWildcard(id: String?, name: String, valuesText: String, folder: String? = null) {
@@ -136,19 +155,33 @@ class AutocompleteRepository(
         )
     }
 
-    suspend fun exportSelectedTranslations(items: List<TagDictionaryItem>): String {
+    suspend fun exportTranslationsForAi(
+        scope: AiTranslationExportScope,
+        selectedItems: List<TagDictionaryItem>,
+    ): TagTranslationExportFile = withContext(Dispatchers.IO) {
         val categories = (AppTagCategory.entries.map { it.value } + tagDao.getUsedCategories() + tagDao.getUserCategories()).distinct()
-        return TagTranslationExchange.exportClipboard(items.map { item ->
-            TagTranslationCandidate(
-                tag = item.canonicalTag,
-                sourceCategory = item.danbooruCategory,
-                postCount = item.danbooruPostCount,
-                korean = item.korean,
-                appCategory = item.appCategory,
-                koreanAliases = item.koreanAliases,
-            )
-        }, categories)
+        val missingQueue = if (scope != AiTranslationExportScope.SELECTED_ONLY) {
+            tagDao.translationCandidates(Int.MAX_VALUE, missingTranslation = true, missingCategory = false)
+                .map(::translationCandidate)
+        } else {
+            emptyList()
+        }
+        val selected = selectedItems.map(::translationCandidate)
+        val candidates = AiTranslationExportSelection.resolve(scope, missingQueue, selected)
+        TagTranslationExportFile(
+            fileName = "nai_tags_translation_selection.zip",
+            content = TagTranslationExchange.exportBundle(candidates, categories),
+        )
     }
+
+    private fun translationCandidate(item: TagDictionaryItem) = TagTranslationCandidate(
+        tag = item.canonicalTag,
+        sourceCategory = item.danbooruCategory,
+        postCount = item.danbooruPostCount,
+        korean = item.korean,
+        appCategory = item.appCategory,
+        koreanAliases = item.koreanAliases,
+    )
 
     suspend fun previewTranslationImport(text: String): TagTranslationImportPreview {
         val parsed = TagTranslationExchange.parse(text)

@@ -30,6 +30,8 @@ class SettingsRepository(private val context: Context) {
         val imageSaveTreeUri = stringPreferencesKey("image_save_tree_uri")
         val appearanceMode = stringPreferencesKey("appearance_mode")
         val bundledTagVersion = intPreferencesKey("bundled_tag_version")
+        val quickEditWeightStep = stringPreferencesKey("quick_edit_weight_step")
+        val showExclusionConfirmationHelp = booleanPreferencesKey("show_exclusion_confirmation_help")
     }
 
     val settings: Flow<AppSettings> = context.settingsDataStore.data.map { prefs ->
@@ -50,6 +52,8 @@ class SettingsRepository(private val context: Context) {
                 ?: AutocompleteSource.BOTH,
             imageSaveTreeUri = prefs[Keys.imageSaveTreeUri],
             appearanceMode = prefs[Keys.appearanceMode]?.let { runCatching { AppearanceMode.valueOf(it) }.getOrNull() } ?: AppearanceMode.SYSTEM,
+            quickEditWeightStep = prefs[Keys.quickEditWeightStep]?.takeIf(::isValidWeightStep) ?: "0.1",
+            showExclusionConfirmationHelp = prefs[Keys.showExclusionConfirmationHelp] ?: true,
         )
     }
 
@@ -77,6 +81,12 @@ class SettingsRepository(private val context: Context) {
     suspend fun setImageSaveTreeUri(value: String?) = context.settingsDataStore.edit { prefs ->
         if (value == null) prefs.remove(Keys.imageSaveTreeUri) else prefs[Keys.imageSaveTreeUri] = value
     }
+    suspend fun setQuickEditWeightStep(value: String) = context.settingsDataStore.edit { prefs ->
+        if (isValidWeightStep(value)) prefs[Keys.quickEditWeightStep] = value.trim()
+    }
+    suspend fun setShowExclusionConfirmationHelp(value: Boolean) = context.settingsDataStore.edit {
+        it[Keys.showExclusionConfirmationHelp] = value
+    }
     suspend fun bundledTagVersion(): Int = context.settingsDataStore.data.map { it[Keys.bundledTagVersion] ?: 0 }.first()
     suspend fun setBundledTagVersion(value: Int) = context.settingsDataStore.edit { it[Keys.bundledTagVersion] = value }
     suspend fun current(): AppSettings = settings.first()
@@ -95,6 +105,8 @@ class SettingsRepository(private val context: Context) {
         setAutocompleteSource(settings.autocompleteSource)
         setAppearanceMode(settings.appearanceMode)
         setImageSaveTreeUri(settings.imageSaveTreeUri)
+        setQuickEditWeightStep(settings.quickEditWeightStep)
+        setShowExclusionConfirmationHelp(settings.showExclusionConfirmationHelp)
     }
 
     private fun decodeColors(value: String?): List<String> = value.orEmpty().split(',').map(String::trim).filter(String::isNotBlank)
@@ -106,4 +118,6 @@ class SettingsRepository(private val context: Context) {
         val parts = entry.split('=', limit = 2)
         if (parts.size == 2) parts[1].toLongOrNull()?.let { parts[0] to it } else null
     }.toMap()
+
+    private fun isValidWeightStep(value: String): Boolean = value.toBigDecimalOrNull()?.let { it > java.math.BigDecimal.ZERO } == true
 }

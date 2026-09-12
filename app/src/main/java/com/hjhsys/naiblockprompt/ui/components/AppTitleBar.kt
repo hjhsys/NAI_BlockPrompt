@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.MoreVert
@@ -23,6 +24,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.style.TextOverflow
@@ -71,14 +73,7 @@ fun AppTitleBar(
                         Column(Modifier.weight(1f).padding(end = 8.dp)) {
                             Text(stringResource(title), style = MaterialTheme.typography.titleLarge)
                             subtitle?.let {
-                                Text(
-                                    it,
-                                    modifier = if (onSubtitleClick == null) Modifier else Modifier.clickable(onClick = onSubtitleClick),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
+                                TitleSubtitle(it, onSubtitleClick)
                             }
                         }
                         Column(Modifier.weight(1.35f), horizontalAlignment = Alignment.End) {
@@ -90,14 +85,7 @@ fun AppTitleBar(
                 Text(stringResource(title), style = MaterialTheme.typography.titleLarge)
                 if (subtitle != null || trailingSubtitle != null) Row(Modifier.fillMaxWidth()) {
                     subtitle?.let {
-                        Text(
-                            it,
-                            modifier = Modifier.weight(1f).then(if (onSubtitleClick == null) Modifier else Modifier.clickable(onClick = onSubtitleClick)),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        TitleSubtitle(it, onSubtitleClick, Modifier.weight(1f))
                     }
                     androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
                     trailingSubtitle?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1) }
@@ -142,4 +130,29 @@ fun AppTitleBar(
         }
         }
     }
+}
+
+@Composable
+private fun TitleSubtitle(
+    text: String,
+    onClick: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    val interactiveModifier = if (onClick == null) {
+        Modifier
+    } else {
+        Modifier
+            .clip(MaterialTheme.shapes.small)
+            .background(MaterialTheme.colorScheme.secondaryContainer)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+    }
+    Text(
+        text,
+        modifier = modifier.then(interactiveModifier),
+        style = MaterialTheme.typography.labelSmall,
+        color = if (onClick == null) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSecondaryContainer,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
 }

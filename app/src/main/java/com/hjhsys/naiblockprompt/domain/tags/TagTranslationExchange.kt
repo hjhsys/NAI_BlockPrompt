@@ -14,6 +14,32 @@ data class TagTranslationCandidate(
     val koreanAliases: String? = null,
 )
 
+enum class AiTranslationExportScope {
+    MISSING_ONLY,
+    SELECTED_ONLY,
+    MISSING_AND_SELECTED,
+}
+
+object AiTranslationExportSelection {
+    fun resolve(
+        scope: AiTranslationExportScope,
+        missingQueue: List<TagTranslationCandidate>,
+        selected: List<TagTranslationCandidate>,
+    ): List<TagTranslationCandidate> {
+        val candidates = when (scope) {
+            AiTranslationExportScope.MISSING_ONLY -> missingQueue.filter { it.isEffectivelyUntranslated() }
+            AiTranslationExportScope.SELECTED_ONLY -> selected
+            AiTranslationExportScope.MISSING_AND_SELECTED ->
+                missingQueue.filter { it.isEffectivelyUntranslated() } + selected
+        }
+        return LinkedHashMap<String, TagTranslationCandidate>().apply {
+            candidates.forEach { candidate -> put(candidate.tag, candidate) }
+        }.values.toList()
+    }
+
+    private fun TagTranslationCandidate.isEffectivelyUntranslated(): Boolean = korean.isNullOrBlank()
+}
+
 enum class TagTranslationStatus(val wireValue: String) {
     TRANSLATED("translated"), UNCHANGED("unchanged"), REVIEW("review"), EXCLUDED_CANDIDATE("excluded_candidate");
 
@@ -64,8 +90,9 @@ object TagTranslationExchange {
         appendLine("Preserve canonical `tag` exactly; never invent or rename a tag. Keep reasonable existing ko/aliases_ko values.")
         appendLine("Return: tag, status (translated|unchanged|review|excluded_candidate), ko, aliases_ko, app_category.")
         appendLine("For uncertain meanings use status=review instead of guessing. For typo/invalid/noise use status=excluded_candidate plus reason_code (typo|invalid|noise) and a clear reason_text.")
-        appendLine("For character tags, use the series suffix for identification and prefer verified official/common Korean names; do not confirm arbitrary transliterations. If uncertain, use review.")
-        appendLine("For copyright tags, prefer the officially distributed Korean title; do not invent literal translations. Put only verified useful alternatives in aliases_ko.")
+        appendLine("For tags that are or may be Character/Copyright proper names, do not classify or translate from spelling alone: research the work and character first, using the series suffix when present.")
+        appendLine("Prefer official Korean localization, publisher/distributor sites, game/anime sites, documentation, and credits. Because original/global and Korean names can differ, cross-check established Korean usage with reliable Korean-language references; Namuwiki may be used as a cross-check, but not instead of a conflicting available official source.")
+        appendLine("Use the verified official or commonly established Korean name as ko, keep only useful verified alternatives in aliases_ko, and use review when sources conflict or identification remains uncertain. Never invent a literal translation or arbitrary transliteration.")
         appendLine("Do not include credentials, prompts, paths, commentary, Markdown fences, or rows not present below.")
         appendLine(buildJsonObject {
             put("type", "nai_block_prompt_translation_selection")
@@ -123,8 +150,10 @@ Translate and classify every row in the `tags_to_process*.jsonl` files.
 - If there is evidence of a spelling/concatenation error, set `is_typo` to true and explain briefly in Korean in `typo_reason`; also set `needs_review` to true. Otherwise use false and an empty reason. Zero posts or an unfamiliar proper name alone is NOT evidence of a typo. The user, not the AI, decides deletion.
 - Do not add explanations, omit rows, reorder fields meaningfully, or wrap the final file in prose.
 - For `excluded_candidate`, leave translation fields empty and include `reason_code` (typo, invalid, or noise) plus a clear `reason_text`. Never change `tag`.
-- Character tags: use `(series)` for identification; prefer verified official/common Korean names, not arbitrary transliteration. If uncertain, return review.
-- Copyright tags: prefer the officially distributed Korean title and never invent a literal title. Keep only verified useful alternate spellings in aliases_ko.
+- Tags that are or may be Character/Copyright proper names must not be classified or translated from spelling alone. Research the work and character first, using `(series)` for identification when present.
+- Source priority for proper names: official Korean localization, publisher/distributor sites, official game/anime sites, documentation, or credits; then reliable encyclopedic/wiki references. Original/global names and officially used Korean names can differ.
+- Cross-check the established Korean form with Korean-language references. Namuwiki may be used to verify common Korean usage, but do not prefer it over a conflicting available official Korean source.
+- Use the verified official or commonly established Korean name in `ko`; keep only useful verified alternatives in `aliases_ko`. If sources conflict or identification remains uncertain, return `review`. Never invent a literal title or arbitrary transliteration.
 """
         val manifest = buildJsonObject {
             put("version", VERSION)

@@ -18,6 +18,8 @@ data class AppSettings(
     val imageSaveTreeUri: String? = null,
     val appearanceMode: AppearanceMode = AppearanceMode.SYSTEM,
     val lastUsedSeed: Long? = null,
+    val quickEditWeightStep: String = "0.1",
+    val showExclusionConfirmationHelp: Boolean = true,
 )
 
 @Serializable enum class AutocompleteSource { NOVEL_AI, DANBOORU, BOTH }

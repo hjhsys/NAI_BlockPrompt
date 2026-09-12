@@ -29,7 +29,63 @@ data class RandomizerSpan(
     val endExclusive: Int,
 )
 
+data class PromptSplit(
+    val left: String,
+    val right: String,
+)
+
 object PromptProcessor {
+    /**
+     * Splits only when [cursor] is immediately after a top-level comma or inside the
+     * whitespace following it. Delimiters and tag text are never guessed or moved.
+     */
+    fun splitAtTopLevelComma(input: String, cursor: Int): PromptSplit? {
+        if (cursor !in 0..input.length) return null
+        var index = 0
+        var inComment = false
+        var inWeight = false
+        var inRandomizer = false
+        while (index < input.length) {
+            when {
+                input.startsWith("##", index) -> {
+                    inComment = !inComment
+                    index += 2
+                }
+                !inComment && input.startsWith("::", index) -> {
+                    inWeight = !inWeight
+                    index += 2
+                }
+                !inComment && !inWeight && input.startsWith("||", index) -> {
+                    inRandomizer = !inRandomizer
+                    index += 2
+                }
+                !inComment && !inWeight && !inRandomizer && input[index] == ',' -> {
+                    val commaEnd = index + 1
+                    var rightStart = commaEnd
+                    while (rightStart < input.length && input[rightStart].isWhitespace()) rightStart++
+                    if (cursor in commaEnd..rightStart) {
+                        val left = input.substring(0, commaEnd).trimEnd()
+                        val right = input.substring(rightStart).trimEnd()
+                        if (left.trim().trim(',').isEmpty() || right.trim().trim(',').isEmpty()) return null
+                        return PromptSplit(left, right)
+                    }
+                    index++
+                }
+                else -> index++
+            }
+        }
+        return null
+    }
+
+    /** Uses the same separator shape as two adjacent blocks while retaining editor text. */
+    fun mergeBlockContents(upper: String, current: String): String {
+        val first = upper.trim()
+        val second = current.trim()
+        if (first.isEmpty()) return second
+        if (second.isEmpty()) return first
+        return "${if (first.endsWith(',')) first else "$first,"}\n\n$second"
+    }
+
     fun commentSpans(input: String): List<CommentSpan> {
         val spans = mutableListOf<CommentSpan>()
         var opening: Int? = null
@@ -111,7 +167,7 @@ object PromptProcessor {
             val weightText = input.substring(0, opening)
                 .takeLastWhile { it.isDigit() || it == '.' || it == '-' }
             val weight = weightText.toFloatOrNull() ?: 1f
-            WeightSpan(opening, closing + 2, weight)
+            WeightSpan(opening - weightText.length, closing + 2, weight)
         }
     }
 

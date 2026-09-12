@@ -41,6 +41,8 @@ data class AppBackupData(
     val sets: List<SavedSetEntity>,
     val history: List<HistoryEntryEntity>,
     val tagData: PortableTagData,
+    // Read compatibility for v1/v2 backups. New exports intentionally leave media
+    // empty so JSON encoding cannot expand thumbnail bytes into a huge integer array.
     val historyThumbnails: Map<String, ByteArray> = emptyMap(),
     val tagThumbnails: Map<String, ByteArray> = emptyMap(),
     val wildcards: List<WildcardEntity> = emptyList(),
@@ -80,8 +82,6 @@ class BackupRepository(
             presets = savedDao.listPresets(), sets = savedDao.listSets(),
             history = history.map { it.copy(imagePath = "", thumbnailPath = "") },
             tagData = tagData.copy(overrides = tagData.overrides.map { it.copy(thumbnailPath = null) }),
-            historyThumbnails = history.mapNotNull { row -> File(row.thumbnailPath).takeIf(File::isFile)?.readBytes()?.let { row.id to it } }.toMap(),
-            tagThumbnails = tagData.overrides.mapNotNull { row -> row.thumbnailPath?.let(::File)?.takeIf(File::isFile)?.readBytes()?.let { row.tagId to it } }.toMap(),
             wildcards = tagDao.listWildcards(),
         )
         zip("backup.json", json.encodeToString(payload))

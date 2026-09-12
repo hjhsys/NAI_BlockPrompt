@@ -46,6 +46,8 @@ import com.hjhsys.naiblockprompt.domain.model.AppTagCategory
 import com.hjhsys.naiblockprompt.domain.model.TagDictionarySort
 import com.hjhsys.naiblockprompt.domain.model.ExcludedTagItem
 import com.hjhsys.naiblockprompt.domain.model.TagExclusionOrigin
+import com.hjhsys.naiblockprompt.domain.model.TagExclusionFilter
+import com.hjhsys.naiblockprompt.domain.tags.AiTranslationExportScope
 import com.hjhsys.naiblockprompt.ui.MainViewModel
 import com.hjhsys.naiblockprompt.ui.components.AppTitleBar
 import com.hjhsys.naiblockprompt.ui.components.AppTitleMenuItem
@@ -68,6 +70,7 @@ fun TagDatabaseScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit) {
     val importPreview by viewModel.translationImportPreview.collectAsStateWithLifecycle()
     val importFailed by viewModel.translationImportFailed.collectAsStateWithLifecycle()
     val excludedTags by viewModel.excludedTags.collectAsStateWithLifecycle()
+    val settings by viewModel.settings.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
     val exportScope = rememberCoroutineScope()
@@ -120,18 +123,13 @@ fun TagDatabaseScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit) {
     var aiSelectionMode by rememberSaveable { mutableStateOf(false) }
     var aiToolsExpanded by rememberSaveable { mutableStateOf(false) }
     val aiSelected = remember { mutableStateMapOf<String, TagDictionaryItem>() }
+    var showAiExportScope by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         viewModel.translationExport.collect { content ->
             exportContent = content.content
             exportFileName = content.fileName
             exportLauncher.launch(exportFileName)
-        }
-    }
-    LaunchedEffect(Unit) {
-        viewModel.translationClipboard.collect { content ->
-            clipboard.setText(AnnotatedString(content))
-            android.widget.Toast.makeText(context, R.string.ai_translation_selection_copied, android.widget.Toast.LENGTH_SHORT).show()
         }
     }
     LaunchedEffect(Unit) {
@@ -164,6 +162,15 @@ fun TagDatabaseScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit) {
         viewModel.addUserTag(canonical, ko, aliases, category); adding = false
     }
     if (addingCategory) AddCategoryDialog({ addingCategory = false }) { viewModel.addTagCategory(it); addingCategory = false }
+    if (showAiExportScope) AiTranslationExportScopeDialog(
+        missingCount = missingTranslationCount,
+        selectedCount = aiSelected.size,
+        onDismiss = { showAiExportScope = false },
+        onExport = { scope ->
+            showAiExportScope = false
+            viewModel.prepareTagsForAiExport(scope, aiSelected.values.toList())
+        },
+    )
     if (showExportOptions) TranslationExportOptionsDialog(
         onDismiss = { showExportOptions = false },
         onExport = { missingTranslation, missingCategory, includeDeferred ->
@@ -224,8 +231,10 @@ fun TagDatabaseScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit) {
             ExcludedTagsScreen(
                 items = excludedTags,
                 onFilter = viewModel::filterExcludedTags,
-                onRestore = viewModel::restoreExcludedTag,
-                onConfirm = viewModel::confirmExcludedTag,
+                onRestore = viewModel::restoreExcludedTags,
+                onSetUserConfirmed = viewModel::setExcludedTagsUserConfirmed,
+                showConfirmationHelp = settings.showExclusionConfirmationHelp,
+                onShowConfirmationHelpChange = viewModel::setShowExclusionConfirmationHelp,
                 modifier = Modifier.fillMaxSize(),
             )
         } else {
@@ -259,8 +268,8 @@ fun TagDatabaseScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit) {
                                 Text(stringResource(R.string.clear_selection))
                             }
                             FilledTonalButton(
-                                enabled = aiSelected.isNotEmpty(),
-                                onClick = { viewModel.copySelectedTagsForAi(aiSelected.values.toList()) },
+                                enabled = aiSelected.isNotEmpty() || missingTranslationCount > 0,
+                                onClick = { showAiExportScope = true },
                                 modifier = Modifier.weight(1f),
                             ) {
                                 Icon(Icons.Default.ContentCopy, null, Modifier.size(18.dp))
@@ -383,35 +392,175 @@ fun TagDatabaseScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit) {
 @Composable
 private fun ExcludedTagsScreen(
     items: List<ExcludedTagItem>,
-    onFilter: (TagExclusionOrigin?) -> Unit,
-    onRestore: (ExcludedTagItem) -> Unit,
-    onConfirm: (ExcludedTagItem) -> Unit,
+    onFilter: (TagExclusionFilter) -> Unit,
+    onRestore: (Collection<ExcludedTagItem>) -> Unit,
+    onSetUserConfirmed: (Collection<ExcludedTagItem>, Boolean) -> Unit,
+    showConfirmationHelp: Boolean,
+    onShowConfirmationHelpChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var filter by rememberSaveable { mutableStateOf<TagExclusionOrigin?>(null) }
-    LaunchedEffect(filter) { onFilter(filter) }
+    var filter by rememberSaveable { mutableStateOf(TagExclusionFilter.ALL) }
+    var selectionMode by rememberSaveable { mutableStateOf(false) }
+    val selected = remember { mutableStateMapOf<String, ExcludedTagItem>() }
+    var pendingRestore by remember { mutableStateOf<List<ExcludedTagItem>?>(null) }
+    var pendingConfirmationHelp by remember { mutableStateOf<List<ExcludedTagItem>?>(null) }
+    var hideConfirmationHelp by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(filter) {
+        selected.clear()
+        onFilter(filter)
+    }
+    val selectedItems = selected.values.toList()
+    val pendingAiItems = selectedItems.filter { it.origin == TagExclusionOrigin.AI && !it.userConfirmed }
+    val confirmedAiItems = selectedItems.filter { it.origin == TagExclusionOrigin.AI && it.userConfirmed }
+    pendingRestore?.let { restoreItems ->
+        AlertDialog(
+            onDismissRequest = { pendingRestore = null },
+            title = { Text(stringResource(R.string.restore_excluded_tag_title)) },
+            text = {
+                Text(
+                    if (restoreItems.size == 1) stringResource(R.string.restore_excluded_tag_message, restoreItems.single().canonicalTag)
+                    else stringResource(R.string.restore_excluded_tags_message, restoreItems.size),
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onRestore(restoreItems)
+                    pendingRestore = null
+                    selected.clear()
+                    selectionMode = false
+                }) {
+                    Text(stringResource(R.string.restore_excluded_tag_confirm))
+                }
+            },
+            dismissButton = { TextButton(onClick = { pendingRestore = null }) { Text(stringResource(R.string.cancel)) } },
+        )
+    }
+    pendingConfirmationHelp?.let { confirmItems ->
+        AlertDialog(
+            onDismissRequest = { pendingConfirmationHelp = null; hideConfirmationHelp = false },
+            title = { Text(stringResource(R.string.confirm_excluded_tag_help_title)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(stringResource(R.string.confirm_excluded_tag_help_message))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = hideConfirmationHelp, onCheckedChange = { hideConfirmationHelp = it })
+                        Text(stringResource(R.string.do_not_show_again))
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onSetUserConfirmed(confirmItems, true)
+                    if (hideConfirmationHelp) onShowConfirmationHelpChange(false)
+                    pendingConfirmationHelp = null
+                    hideConfirmationHelp = false
+                    selected.clear()
+                    selectionMode = false
+                }) { Text(stringResource(R.string.confirm_excluded_tag)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingConfirmationHelp = null; hideConfirmationHelp = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
+    }
     Column(modifier.padding(horizontal = 12.dp)) {
         LazyRow(
             contentPadding = PaddingValues(vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            item { FilterChip(selected = filter == null, onClick = { filter = null }, label = { Text(stringResource(R.string.excluded_filter_all)) }) }
-            item { FilterChip(selected = filter == TagExclusionOrigin.AI, onClick = { filter = TagExclusionOrigin.AI }, label = { Text(stringResource(R.string.excluded_origin_ai)) }) }
-            item { FilterChip(selected = filter == TagExclusionOrigin.USER, onClick = { filter = TagExclusionOrigin.USER }, label = { Text(stringResource(R.string.excluded_origin_user)) }) }
+            item { FilterChip(selected = filter == TagExclusionFilter.ALL, onClick = { filter = TagExclusionFilter.ALL }, label = { Text(stringResource(R.string.excluded_filter_all)) }) }
+            item { FilterChip(selected = filter == TagExclusionFilter.NEEDS_REVIEW, onClick = { filter = TagExclusionFilter.NEEDS_REVIEW }, label = { Text(stringResource(R.string.excluded_filter_needs_review)) }) }
+            item { FilterChip(selected = filter == TagExclusionFilter.USER_CONFIRMED, onClick = { filter = TagExclusionFilter.USER_CONFIRMED }, label = { Text(stringResource(R.string.excluded_filter_user_confirmed)) }) }
+            item { FilterChip(selected = filter == TagExclusionFilter.AI_SUGGESTED, onClick = { filter = TagExclusionFilter.AI_SUGGESTED }, label = { Text(stringResource(R.string.excluded_filter_ai_suggested)) }) }
+            item { FilterChip(selected = filter == TagExclusionFilter.USER_DIRECT, onClick = { filter = TagExclusionFilter.USER_DIRECT }, label = { Text(stringResource(R.string.excluded_filter_user_direct)) }) }
+        }
+        if (!selectionMode) {
+            TextButton(onClick = { selectionMode = true }, modifier = Modifier.align(Alignment.End)) {
+                Icon(Icons.Default.Checklist, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(stringResource(R.string.excluded_select_multiple))
+            }
+        } else {
+            ElevatedCard(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                Column(Modifier.fillMaxWidth().padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(stringResource(R.string.excluded_selected_count, selected.size), style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                        TextButton(onClick = { items.forEach { selected[it.canonicalTag] = it } }) {
+                            Text(stringResource(R.string.select_all_visible))
+                        }
+                        IconButton(onClick = { selected.clear(); selectionMode = false }) {
+                            Icon(Icons.Default.Close, stringResource(R.string.cancel))
+                        }
+                    }
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        item {
+                            FilledTonalButton(
+                                enabled = pendingAiItems.isNotEmpty(),
+                                onClick = {
+                                    if (showConfirmationHelp) pendingConfirmationHelp = pendingAiItems
+                                    else {
+                                        onSetUserConfirmed(pendingAiItems, true)
+                                        selected.clear()
+                                        selectionMode = false
+                                    }
+                                },
+                            ) { Text(stringResource(R.string.excluded_batch_confirm, pendingAiItems.size)) }
+                        }
+                        item {
+                            OutlinedButton(
+                                enabled = confirmedAiItems.isNotEmpty(),
+                                onClick = {
+                                    onSetUserConfirmed(confirmedAiItems, false)
+                                    selected.clear()
+                                    selectionMode = false
+                                },
+                            ) { Text(stringResource(R.string.excluded_batch_unconfirm, confirmedAiItems.size)) }
+                        }
+                        item {
+                            OutlinedButton(
+                                enabled = selectedItems.isNotEmpty(),
+                                onClick = { pendingRestore = selectedItems },
+                            ) { Text(stringResource(R.string.excluded_batch_restore, selectedItems.size)) }
+                        }
+                    }
+                }
+            }
         }
         if (items.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(stringResource(R.string.excluded_tags_empty)) }
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 12.dp)) {
                 items(items, key = { it.canonicalTag }) { item ->
-                    ElevatedCard(Modifier.fillMaxWidth()) {
+                    ElevatedCard(
+                        Modifier.fillMaxWidth().then(
+                            if (selectionMode) Modifier.clickable {
+                                if (selected.containsKey(item.canonicalTag)) selected.remove(item.canonicalTag)
+                                else selected[item.canonicalTag] = item
+                            } else Modifier,
+                        ),
+                    ) {
                         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            if (selectionMode) {
+                                Checkbox(
+                                    checked = selected.containsKey(item.canonicalTag),
+                                    onCheckedChange = { checked ->
+                                        if (checked) selected[item.canonicalTag] = item else selected.remove(item.canonicalTag)
+                                    },
+                                )
+                                Spacer(Modifier.width(4.dp))
+                            }
                             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                 Text(item.canonicalTag.replace('_', ' '), style = MaterialTheme.typography.titleMedium)
                                 Text(
                                     stringResource(
                                         R.string.excluded_origin_reason,
-                                        stringResource(if (item.origin == TagExclusionOrigin.AI) R.string.excluded_origin_ai else R.string.excluded_origin_user),
+                                        stringResource(
+                                            if (item.origin == TagExclusionOrigin.AI && item.userConfirmed) R.string.excluded_origin_ai_user
+                                            else if (item.origin == TagExclusionOrigin.AI) R.string.excluded_origin_ai
+                                            else R.string.excluded_origin_user,
+                                        ),
                                         item.reasonCode,
                                     ),
                                     style = MaterialTheme.typography.labelMedium,
@@ -422,13 +571,26 @@ private fun ExcludedTagsScreen(
                                     Text(stringResource(R.string.excluded_user_confirmed), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                                 }
                             }
-                            Column {
-                                if (item.origin == TagExclusionOrigin.AI && !item.userConfirmed) {
-                                    IconButton(onClick = { onConfirm(item) }) {
-                                        Icon(Icons.Default.CheckCircle, stringResource(R.string.confirm_excluded_tag))
+                            if (!selectionMode) Column {
+                                if (item.origin == TagExclusionOrigin.AI) {
+                                    IconToggleButton(
+                                        checked = item.userConfirmed,
+                                        onCheckedChange = { checked ->
+                                            if (checked && showConfirmationHelp) pendingConfirmationHelp = listOf(item)
+                                            else onSetUserConfirmed(listOf(item), checked)
+                                        },
+                                    ) {
+                                        Icon(
+                                            if (item.userConfirmed) Icons.Default.CheckCircle else Icons.Default.CheckCircleOutline,
+                                            stringResource(
+                                                if (item.userConfirmed) R.string.unconfirm_excluded_tag
+                                                else R.string.confirm_excluded_tag,
+                                            ),
+                                            tint = if (item.userConfirmed) MaterialTheme.colorScheme.primary else LocalContentColor.current,
+                                        )
                                     }
                                 }
-                                IconButton(onClick = { onRestore(item) }) {
+                                IconButton(onClick = { pendingRestore = listOf(item) }) {
                                     Icon(Icons.Default.Restore, stringResource(R.string.restore_excluded_tag))
                                 }
                             }
@@ -963,6 +1125,54 @@ private fun TranslationImportDialog(
                 if (selectedDeleteIds.isNotEmpty()) confirmDeletion = true else onApply(overwrite, emptySet(), deferReviewed)
             }) {
                 Text(stringResource(R.string.apply_import))
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+    )
+}
+
+@Composable
+private fun AiTranslationExportScopeDialog(
+    missingCount: Int,
+    selectedCount: Int,
+    onDismiss: () -> Unit,
+    onExport: (AiTranslationExportScope) -> Unit,
+) {
+    var scope by rememberSaveable { mutableStateOf(AiTranslationExportScope.MISSING_AND_SELECTED) }
+    val options = listOf(
+        AiTranslationExportScope.MISSING_ONLY to R.string.ai_export_scope_missing_only,
+        AiTranslationExportScope.SELECTED_ONLY to R.string.ai_export_scope_selected_only,
+        AiTranslationExportScope.MISSING_AND_SELECTED to R.string.ai_export_scope_missing_and_selected,
+    )
+    val canExport = when (scope) {
+        AiTranslationExportScope.MISSING_ONLY -> missingCount > 0
+        AiTranslationExportScope.SELECTED_ONLY -> selectedCount > 0
+        AiTranslationExportScope.MISSING_AND_SELECTED -> missingCount > 0 || selectedCount > 0
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.ai_export_scope_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    stringResource(R.string.ai_export_scope_summary, missingCount, selectedCount),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                options.forEach { (option, label) ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().clickable { scope = option },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = scope == option, onClick = { scope = option })
+                        Text(stringResource(label))
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = canExport, onClick = { onExport(scope) }) {
+                Text(stringResource(R.string.copy_for_ai))
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },

@@ -6,6 +6,40 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PromptProcessorTest {
+    @Test fun `top level comma split accepts comma whitespace boundary only`() {
+        val input = "ABC, DEF, GHI"
+
+        assertEquals(PromptSplit("ABC,", "DEF, GHI"), PromptProcessor.splitAtTopLevelComma(input, 5))
+        assertNull(PromptProcessor.splitAtTopLevelComma(input, 7))
+        assertNull(PromptProcessor.splitAtTopLevelComma(input, 0))
+        assertNull(PromptProcessor.splitAtTopLevelComma(input, input.length))
+    }
+
+    @Test fun `top level comma split rejects protected syntax commas`() {
+        val cases = listOf(
+            "1.2::ABC, DEF ::",
+            "|| ABC, DEF ||",
+            "## ABC, DEF ##",
+        )
+
+        cases.forEach { input ->
+            assertNull(input, PromptProcessor.splitAtTopLevelComma(input, input.indexOf(',') + 2))
+        }
+    }
+
+    @Test fun `merge content reproduces adjacent block join shape`() {
+        val merged = PromptProcessor.mergeBlockContents("ABC, DEF", "GHI")
+
+        assertEquals("ABC, DEF,\n\nGHI", merged)
+        assertEquals(
+            PromptProcessor.joinEnabledBlocks(
+                listOf(PromptBlock(name = "upper", content = "ABC, DEF"), PromptBlock(name = "current", content = "GHI", order = 1)),
+                false,
+            ),
+            PromptProcessor.joinEnabledBlocks(listOf(PromptBlock(name = "merged", content = merged)), false),
+        )
+    }
+
     @Test fun extraCommaCleanupRemovesOnlyEmptyElementsAndPreservesMeaningfulWhitespace() {
         assertEquals("1girl,     solo, long hair", PromptProcessor.cleanupExtraCommas("1girl, ,,     solo,, long hair"))
     }
@@ -109,6 +143,24 @@ class PromptProcessorTest {
     @Test fun `weight spans exclude comments and retain strength`() {
         val spans = PromptProcessor.weightSpans("0.7::soft :: ## 2.0::ignored :: ## 1.5::strong ::")
         assertEquals(listOf(0.7f, 1.5f), spans.map { it.weight })
+    }
+
+    @Test fun `weight spans include numeric prefix through closing delimiter`() {
+        val input = "before, 0.8::soft style ::, 1.2::strong lighting ::, after"
+        val spans = PromptProcessor.weightSpans(input)
+
+        assertEquals(
+            listOf("0.8::soft style ::", "1.2::strong lighting ::"),
+            spans.map { input.substring(it.start, it.endExclusive) },
+        )
+    }
+
+    @Test fun `weight spans ignore comment syntax and coexist with randomizer`() {
+        val input = "||red|blue||, ## 1.5::comment :: ##, 0.8::soft style ::"
+        val spans = PromptProcessor.weightSpans(input)
+
+        assertEquals(listOf("0.8::soft style ::"), spans.map { input.substring(it.start, it.endExclusive) })
+        assertEquals("||red|blue||", PromptProcessor.randomizerSpans(input).single().let { input.substring(it.start, it.endExclusive) })
     }
 
     @Test fun `editable and incomplete syntax always produces valid highlight ranges`() {

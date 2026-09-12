@@ -80,6 +80,49 @@ object SessionEditor {
     fun addBlock(session: Session, owner: PromptOwner, polarity: PromptPolarity, name: String): Session =
         session.updateBlocks(owner, polarity) { blocks -> blocks + PromptBlock(name = name, order = blocks.size) }
 
+    fun splitBlockAtCursor(
+        session: Session,
+        owner: PromptOwner,
+        polarity: PromptPolarity,
+        blockId: String,
+        cursor: Int,
+        newBlockName: String,
+    ): Session = session.updateBlocks(owner, polarity) { source ->
+        val blocks = source.sortedBy { it.order }
+        val index = blocks.indexOfFirst { it.id == blockId }
+        val block = blocks.getOrNull(index) ?: return@updateBlocks source
+        if (block.locked) return@updateBlocks source
+        val split = PromptProcessor.splitAtTopLevelComma(block.content, cursor) ?: return@updateBlocks source
+        val created = PromptBlock(
+            name = newBlockName,
+            content = split.right,
+            enabled = block.enabled,
+            order = index + 1,
+        )
+        blocks.toMutableList().apply {
+            this[index] = block.copy(content = split.left)
+            add(index + 1, created)
+        }.reindexBlocks()
+    }
+
+    fun mergeBlockWithPrevious(
+        session: Session,
+        owner: PromptOwner,
+        polarity: PromptPolarity,
+        blockId: String,
+    ): Session = session.updateBlocks(owner, polarity) { source ->
+        val blocks = source.sortedBy { it.order }
+        val index = blocks.indexOfFirst { it.id == blockId }
+        if (index <= 0) return@updateBlocks source
+        val upper = blocks[index - 1]
+        val current = blocks[index]
+        if (upper.locked || current.locked || upper.enabled != current.enabled) return@updateBlocks source
+        blocks.toMutableList().apply {
+            this[index - 1] = upper.copy(content = PromptProcessor.mergeBlockContents(upper.content, current.content))
+            removeAt(index)
+        }.reindexBlocks()
+    }
+
     fun updateBlock(
         session: Session,
         owner: PromptOwner,

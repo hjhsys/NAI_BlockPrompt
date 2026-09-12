@@ -1713,3 +1713,27 @@ overlay/source 오염, mask PNG 형식, frame 선택, decode/save 문제가 아�
 2026-09-11 V5 Full 실기기 테스트에서 새 mask로 생성한 결과 초록 격자와 굵은 경계가 사라졌으며,
 웹 호환 요청 mask와 합성 경로가 정상 동작함을 확인했습니다. V4.5 Full은 별도 실기기 회귀 검증이
 남아 있습니다.
+
+---
+
+## 2026-09-12 1.0 릴리스 기준 구현 상태
+
+이 절은 1.0 태그 시점의 로컬 구현 상태를 기록합니다. 요구사항 해석이 충돌하면 최신 Main Project
+Document를 우선합니다.
+
+- 앱 버전은 `versionName 1.0`, `versionCode 2`입니다.
+- Title의 Random/Fixed Seed 빠른 전환은 현재 상태를 compact tonal 영역으로 표시합니다.
+- 정상적으로 닫힌 Weight span은 숫자와 양쪽 `::`, 본문 전체에 foreground/background style을
+  적용하며 Prompt 문자열과 cursor offset은 바꾸지 않습니다. `## ... ##` 내부는 제외합니다.
+- Prompt Quick Edit는 원문 표시를 유지한 semantic selection, decimal-safe weight 증감(음수 포함),
+  주석, 삭제, 이동, Undo를 제공합니다. 단일 tag weight는 내부를 탭해도 group 전체를 선택합니다.
+- AI 번역 ZIP은 `미번역만`, `선택만`, `미번역 + 선택` 범위를 지원합니다. effective 한국어 번역이
+  비어 있는 canonical tag만 미번역으로 보며 union은 canonical tag 기준으로 중복 제거합니다.
+  ZIP 저장 뒤 클립보드에는 tag payload 대신 외부 AI용 짧은 안내문만 복사합니다.
+- 제외 목록은 AI 제안과 사용자 직접 제외 provenance를 유지하며 필터, 다중 선택, AI 제안의 사용자
+  확정/확정 해제, 복구 전 확인을 지원합니다. Room schema 변경은 없습니다.
+- 새 앱 백업은 OOM 방지를 위해 이미지와 History/태그 썸네일 bytes를 포함하지 않습니다. 세션,
+  Stash, Library, History metadata, 사용자 태그 데이터, Wildcard와 설정은 유지하며 Token은 계속
+  제외합니다. 이전 media 포함 백업은 읽기 호환성을 유지합니다.
+- Inpaint는 웹 호환 mask 전처리/응답 합성 적용 후 V5 Full 실기기에서 경계 artifact 제거를
+  확인했습니다. V4.5 Full과 추가 해상도/마스크 조합은 후속 실기기 검증 대상입니다.

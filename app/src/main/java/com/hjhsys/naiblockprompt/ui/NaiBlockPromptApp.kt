@@ -41,6 +41,8 @@ import com.hjhsys.naiblockprompt.domain.model.AutocompleteSource
 import com.hjhsys.naiblockprompt.ui.database.TagDatabaseScreen
 import com.hjhsys.naiblockprompt.ui.help.HelpScreen
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
@@ -107,7 +109,10 @@ fun NaiBlockPromptApp(container: AppContainer) {
             if (currentRoute != MainDestination.TagPicker.route &&
                 currentRoute != MainDestination.Help.route
             ) NavigationBar(
-                modifier = Modifier.height(88.dp).navigationBarsPadding(),
+                // Keep the compact 72dp bar above the system navigation/gesture inset.
+                // Applying height first would include the inset inside that fixed height
+                // and squeeze/crop the labels on devices with a tall bottom inset.
+                modifier = Modifier.navigationBarsPadding().height(72.dp),
                 windowInsets = WindowInsets(0, 0, 0, 0),
             ) {
                 listOf(MainDestination.Database, MainDestination.Generate, MainDestination.Saved).forEach { destination ->
@@ -120,8 +125,9 @@ fun NaiBlockPromptApp(container: AppContainer) {
                                 launchSingleTop = true
                             }
                         },
-                        icon = { Icon(destination.icon, contentDescription = null, modifier = Modifier.size(24.dp)) },
-                        label = { Text(stringResource(destination.label), style = MaterialTheme.typography.labelSmall) },
+                        modifier = Modifier.height(72.dp),
+                        icon = { Icon(destination.icon, contentDescription = null, modifier = Modifier.size(22.dp)) },
+                        label = { Text(stringResource(destination.label), style = MaterialTheme.typography.labelSmall, maxLines = 1) },
                     )
                 }
             }
@@ -172,6 +178,8 @@ fun NaiBlockPromptApp(container: AppContainer) {
                     showTokenEstimates = settings.showTokenEstimates,
                     useTextRendering = settings.useTextRendering,
                     colorHelperMode = settings.colorHelperMode,
+                    quickEditWeightStep = settings.quickEditWeightStep,
+                    showExclusionConfirmationHelp = settings.showExclusionConfirmationHelp,
                     historyLimit = settings.historyLimit,
                     historyStorageSample = viewModel.historyStorageSample,
                     autocompleteSource = settings.autocompleteSource,
@@ -184,6 +192,8 @@ fun NaiBlockPromptApp(container: AppContainer) {
                     onShowTokenEstimatesChange = viewModel::setShowTokenEstimates,
                     onUseTextRenderingChange = viewModel::setUseTextRendering,
                     onColorHelperModeChange = viewModel::setColorHelperMode,
+                    onQuickEditWeightStepChange = viewModel::setQuickEditWeightStep,
+                    onShowExclusionConfirmationHelpChange = viewModel::setShowExclusionConfirmationHelp,
                     onHistoryLimitChange = viewModel::setHistoryLimit,
                     onAutocompleteSourceChange = viewModel::setAutocompleteSource,
                     onAppearanceModeChange = viewModel::setAppearanceMode,
@@ -236,6 +246,8 @@ private fun SettingsScreen(
     showTokenEstimates: Boolean,
     useTextRendering: Boolean,
     colorHelperMode: com.hjhsys.naiblockprompt.domain.model.ColorHelperMode,
+    quickEditWeightStep: String,
+    showExclusionConfirmationHelp: Boolean,
     historyLimit: Int,
     historyStorageSample: kotlinx.coroutines.flow.StateFlow<HistoryStorageSample>,
     autocompleteSource: AutocompleteSource,
@@ -248,6 +260,8 @@ private fun SettingsScreen(
     onShowTokenEstimatesChange: (Boolean) -> Unit,
     onUseTextRenderingChange: (Boolean) -> Unit,
     onColorHelperModeChange: (com.hjhsys.naiblockprompt.domain.model.ColorHelperMode) -> Unit,
+    onQuickEditWeightStepChange: (String) -> Unit,
+    onShowExclusionConfirmationHelpChange: (Boolean) -> Unit,
     onHistoryLimitChange: (Int) -> Unit,
     onAutocompleteSourceChange: (AutocompleteSource) -> Unit,
     onAppearanceModeChange: (com.hjhsys.naiblockprompt.domain.model.AppearanceMode) -> Unit,
@@ -284,7 +298,15 @@ private fun SettingsScreen(
     var pendingBackupImport by remember { mutableStateOf<ByteArray?>(null) }
     val backupExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
         val file = backupExport ?: return@rememberLauncherForActivityResult
-        uri?.let { context.contentResolver.openOutputStream(it)?.use { output -> output.write(file.bytes) } }
+        uri?.let {
+            runCatching {
+                requireNotNull(context.contentResolver.openOutputStream(it)).use { output -> output.write(file.bytes) }
+            }.onSuccess {
+                android.widget.Toast.makeText(context, context.getString(R.string.backup_export_succeeded), android.widget.Toast.LENGTH_SHORT).show()
+            }.onFailure {
+                android.widget.Toast.makeText(context, context.getString(R.string.backup_export_failed), android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
     }
     val backupImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let { context.contentResolver.openInputStream(it)?.use { input -> pendingBackupImport = input.readBytes() } }
@@ -332,6 +354,20 @@ private fun SettingsScreen(
         SettingSwitch(R.string.settings_weight_normalization, normalizeWeights, onNormalizeWeightsChange, R.string.help_weight_normalization_body)
         SettingSwitch(R.string.settings_token_estimates, showTokenEstimates, onShowTokenEstimatesChange, R.string.help_token_estimates_body)
         SettingSwitch(R.string.settings_use_text_rendering, useTextRendering, onUseTextRenderingChange, R.string.help_text_rendering_body)
+        var quickStepDraft by rememberSaveable(quickEditWeightStep) { mutableStateOf(quickEditWeightStep) }
+        OutlinedTextField(
+            value = quickStepDraft,
+            onValueChange = { value ->
+                quickStepDraft = value
+                if (value.toBigDecimalOrNull()?.let { it > java.math.BigDecimal.ZERO } == true) onQuickEditWeightStepChange(value)
+            },
+            label = { Text(stringResource(R.string.settings_quick_edit_weight_step)) },
+            supportingText = { Text(stringResource(R.string.settings_quick_edit_weight_step_hint)) },
+            isError = quickStepDraft.toBigDecimalOrNull()?.let { it <= java.math.BigDecimal.ZERO } ?: true,
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            modifier = Modifier.fillMaxWidth(),
+        )
         Text(stringResource(R.string.color_helper), style = MaterialTheme.typography.titleMedium)
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             com.hjhsys.naiblockprompt.domain.model.ColorHelperMode.entries.forEach { mode ->
@@ -409,6 +445,12 @@ private fun SettingsScreen(
         }
         Text(stringResource(R.string.tag_database_maintenance), style = MaterialTheme.typography.titleMedium)
         Text(stringResource(R.string.tag_database_maintenance_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        SettingSwitch(
+            R.string.settings_exclusion_confirmation_help,
+            showExclusionConfirmationHelp,
+            onShowExclusionConfirmationHelpChange,
+            R.string.settings_exclusion_confirmation_help_hint,
+        )
         OutlinedButton(onClick = { showTagReset = true }) { Text(stringResource(R.string.reset_to_bundled_tags)) }
         SettingsSection(R.string.backup_and_restore)
         Text(stringResource(R.string.backup_description), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

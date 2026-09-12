@@ -28,6 +28,8 @@ enum class TagDictionarySort { POPULAR, APP_USAGE, RECENT, NAME }
 
 enum class TagExclusionOrigin { AI, USER }
 
+enum class TagExclusionFilter { ALL, NEEDS_REVIEW, USER_CONFIRMED, AI_SUGGESTED, USER_DIRECT }
+
 enum class TagExclusionReason(val storageValue: String) {
     TYPO("typo"), INVALID("invalid"), NOISE("noise"), USER_HIDDEN("user-hidden"),
 }

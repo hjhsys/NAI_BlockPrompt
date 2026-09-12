@@ -3,10 +3,12 @@ package com.hjhsys.naiblockprompt.data.backup
 import com.hjhsys.naiblockprompt.data.local.entity.TagEntity
 import com.hjhsys.naiblockprompt.data.local.entity.UserTagOverrideEntity
 import com.hjhsys.naiblockprompt.data.local.entity.TagExclusionEntity
+import com.hjhsys.naiblockprompt.data.local.entity.HistoryEntryEntity
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class BackupPayloadTest {
@@ -31,7 +33,7 @@ class BackupPayloadTest {
         assertEquals(emptyList<TagExclusionEntity>(), restored.exclusions)
     }
 
-    @Test fun `app backup payload preserves thumbnail bytes`() {
+    @Test fun `legacy app backup payload still reads thumbnail bytes`() {
         val payload = AppBackupData(
             settings = com.hjhsys.naiblockprompt.domain.model.AppSettings(), currentSession = null, stash = null,
             folders = emptyList(), blocks = emptyList(), presets = emptyList(), sets = emptyList(), history = emptyList(),
@@ -40,5 +42,23 @@ class BackupPayloadTest {
         )
         val restored = json.decodeFromString<AppBackupData>(json.encodeToString(payload))
         assertArrayEquals(byteArrayOf(1, 2, 3), restored.historyThumbnails.getValue("history"))
+    }
+
+    @Test fun `metadata only app backup preserves favorite history without media`() {
+        val history = HistoryEntryEntity(
+            id = "favorite", createdAt = 1, imagePath = "", thumbnailPath = "", model = "nai-diffusion-4-5-full",
+            snapshotVersion = 1, snapshotJson = "{\"snapshotVersion\":1}", favorite = true,
+        )
+        val payload = AppBackupData(
+            settings = com.hjhsys.naiblockprompt.domain.model.AppSettings(), currentSession = null, stash = null,
+            folders = emptyList(), blocks = emptyList(), presets = emptyList(), sets = emptyList(), history = listOf(history),
+            tagData = PortableTagData(tags = emptyList(), aliases = emptyList(), overrides = emptyList(), categories = emptyList()),
+        )
+
+        val restored = json.decodeFromString<AppBackupData>(json.encodeToString(payload))
+
+        assertEquals(history, restored.history.single())
+        assertFalse(restored.historyThumbnails.isNotEmpty())
+        assertFalse(restored.tagThumbnails.isNotEmpty())
     }
 }
