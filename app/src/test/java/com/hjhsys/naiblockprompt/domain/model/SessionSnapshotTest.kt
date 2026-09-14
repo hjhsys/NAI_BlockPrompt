@@ -53,6 +53,8 @@ class SessionSnapshotTest {
         assertEquals(TextRenderingState(), restored.session.base.textRendering)
         assertEquals(TextRenderingState(), restored.session.characters.single().textRendering)
         assertEquals(false, restored.session.characters.single().collapsed)
+        assertEquals(true, restored.session.characters.single().enabled)
+        assertEquals(false, restored.session.base.collapsed)
     }
 
     @Test

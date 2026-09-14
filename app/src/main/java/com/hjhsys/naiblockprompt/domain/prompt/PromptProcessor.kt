@@ -77,6 +77,37 @@ object PromptProcessor {
         return null
     }
 
+    /** Cherry-pick draft split: accepts the same comma boundary plus a top-level line break. */
+    fun splitAtTopLevelBoundary(input: String, cursor: Int): PromptSplit? {
+        splitAtTopLevelComma(input, cursor)?.let { return it }
+        if (cursor !in 0..input.length) return null
+        var index = 0
+        var inComment = false
+        var inWeight = false
+        var inRandomizer = false
+        while (index < input.length) {
+            when {
+                input.startsWith("##", index) -> { inComment = !inComment; index += 2 }
+                !inComment && input.startsWith("::", index) -> { inWeight = !inWeight; index += 2 }
+                !inComment && !inWeight && input.startsWith("||", index) -> { inRandomizer = !inRandomizer; index += 2 }
+                !inComment && !inWeight && !inRandomizer && (input[index] == '\n' || input[index] == '\r') -> {
+                    val breakEnd = if (input[index] == '\r' && input.getOrNull(index + 1) == '\n') index + 2 else index + 1
+                    var rightStart = breakEnd
+                    while (rightStart < input.length && input[rightStart].isWhitespace()) rightStart++
+                    if (cursor in breakEnd..rightStart) {
+                        val left = input.substring(0, index).trimEnd()
+                        val right = input.substring(rightStart).trimEnd()
+                        if (left.trim().trim(',').isEmpty() || right.trim().trim(',').isEmpty()) return null
+                        return PromptSplit(left, right)
+                    }
+                    index = breakEnd
+                }
+                else -> index++
+            }
+        }
+        return null
+    }
+
     /** Uses the same separator shape as two adjacent blocks while retaining editor text. */
     fun mergeBlockContents(upper: String, current: String): String {
         val first = upper.trim()

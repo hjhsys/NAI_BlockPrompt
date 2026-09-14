@@ -168,6 +168,16 @@ class PromptQuickEditTest {
         )
     }
 
+    @Test fun `original source slot remains a no-op drop target`() {
+        val text = "ABC, DEF, GHI"
+        val source = selection(text, "DEF")
+        val sourceIndex = PromptQuickEdit.parse(text).indexOfFirst { it.range == source.range }
+        val original = PromptQuickEdit.dropTargets(text, source).first {
+            it.parentWeightRange == null && it.itemIndex == sourceIndex
+        }
+        assertTrue(PromptQuickEdit.move(text, source, original) is QuickEditResult.Unsupported)
+    }
+
     @Test fun `unrelated prompt text and selection source remain unchanged`() {
         val text = "keep  spacing, ABC, keep\nline"
         val selected = selection(text, "ABC")
@@ -206,6 +216,6 @@ class PromptQuickEditTest {
         history.recordBeforeChange(key, PromptEditorSnapshot(before, 2, 2), PromptEditKind.DISCRETE)
         val after = changed(PromptQuickEdit.adjustWeight(before, selection(before, "ABC"), BigDecimal("0.1")))
         assertEquals("1.1::ABC ::", after)
-        assertEquals(before, history.undo(key)?.content)
+        assertEquals(before, history.undo(key, PromptEditorSnapshot(after, after.length, after.length))?.content)
     }
 }

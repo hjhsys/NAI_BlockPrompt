@@ -155,15 +155,19 @@ object PromptQuickEdit {
                 }
             }
         }
-        return targets.filterNot { target ->
-            target.parentWeightRange == selection.parentWeightRange && containerIndex(top, selection) in setOf(target.itemIndex, target.itemIndex - 1)
-        }.distinctBy { Triple(it.parentWeightRange, it.itemIndex, it.offset) }
+        // Keep the source slot visible: dropping back there is an intentional no-op and
+        // gives drag gestures a stable cancel destination.
+        return targets.distinctBy { Triple(it.parentWeightRange, it.itemIndex, it.offset) }
     }
 
     fun move(text: String, selection: QuickEditSelection, target: QuickEditDropTarget): QuickEditResult {
         val top = parse(text)
         val sourceUnit = top.flatMap { listOf(it) + it.children }.firstOrNull { it.range == selection.range } ?: return QuickEditResult.Unsupported
         if (sourceUnit.type == QuickEditUnitType.WEIGHT_GROUP && target.parentWeightRange != null) return QuickEditResult.Unsupported
+        val sourceIndex = containerIndex(top, selection)
+        if (target.parentWeightRange == selection.parentWeightRange &&
+            sourceIndex in setOf(target.itemIndex, target.itemIndex - 1)
+        ) return QuickEditResult.Unsupported
 
         data class Node(val type: QuickEditUnitType, val weight: BigDecimal?, val text: String, val originalRange: QuickEditRange, val children: MutableList<Node> = mutableListOf(), var dirty: Boolean = false)
         fun node(u: QuickEditUnit) = Node(u.type, u.weightValue, text.slice(u.range), u.range, u.children.map { Node(it.type, null, text.slice(it.range), it.range) }.toMutableList())

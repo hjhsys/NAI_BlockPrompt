@@ -38,6 +38,7 @@ data class BasePrompt(
     val prompts: PromptPair = PromptPair(),
     val selectedPolarity: PromptPolarity = PromptPolarity.POSITIVE,
     val textRendering: TextRenderingState = TextRenderingState(),
+    val collapsed: Boolean = false,
 )
 
 @Serializable
@@ -60,6 +61,8 @@ data class CharacterPrompt(
     val selectedPolarity: PromptPolarity = PromptPolarity.POSITIVE,
     val textRendering: TextRenderingState = TextRenderingState(),
     val collapsed: Boolean = false,
+    /** Master generation switch. Nested editor state is deliberately preserved while disabled. */
+    val enabled: Boolean = true,
 )
 
 @Serializable

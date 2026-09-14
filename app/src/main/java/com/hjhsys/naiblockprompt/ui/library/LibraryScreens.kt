@@ -43,6 +43,9 @@ import com.hjhsys.naiblockprompt.ui.components.ImageCardActions
 import com.hjhsys.naiblockprompt.ui.components.ImageViewer
 import com.hjhsys.naiblockprompt.domain.editor.BaseSetImportSelection
 import com.hjhsys.naiblockprompt.domain.editor.PromptOwner
+import com.hjhsys.naiblockprompt.domain.editor.PromptCherryPick
+import com.hjhsys.naiblockprompt.domain.editor.PromptCherryPickDraft
+import com.hjhsys.naiblockprompt.ui.generate.PromptCherryPickDialog
 import com.hjhsys.naiblockprompt.domain.generation.SeedSelection
 import com.hjhsys.naiblockprompt.domain.model.SavedSetKind
 import java.io.File
@@ -66,10 +69,16 @@ fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, isActive
         }
     }
     var restore by remember { mutableStateOf<HistoryItem?>(null) }
+    var cherryPick by remember { mutableStateOf<PromptCherryPickDraft?>(null) }
     var viewerReference by remember { mutableStateOf<String?>(null) }
     var actionImage by remember { mutableStateOf<HistoryItem?>(null) }
     actionImage?.let { item -> com.hjhsys.naiblockprompt.ui.components.ImageActionsDialog(item.entity.imagePath, viewModel) { actionImage = null } }
     restore?.let { item -> RestoreDialog(item, { restore = null }) { options -> viewModel.restoreHistory(item, options); restore = null; onRestored() } }
+    cherryPick?.let { draft -> session?.let { current ->
+        PromptCherryPickDialog(current, draft, dismiss = { cherryPick = null }) { blocks, selected, destination ->
+            viewModel.appendCherryPickedSelection(blocks, selected, destination)
+        }
+    } }
     viewerReference?.let { reference -> ImageViewer(reference) { viewerReference = null } }
     Scaffold(contentWindowInsets = WindowInsets(0, 0, 0, 0), topBar = { AppTitleBar(
         R.string.history_title,
@@ -139,6 +148,10 @@ fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, isActive
                         onImportInformation = { restore = item },
                         seedEnabled = actualSeed != null,
                         onApplySeed = { actualSeed?.let(viewModel::applyHistorySeed) },
+                        promptSelectionEnabled = item.snapshot?.session != null,
+                        onImportPromptSelection = item.snapshot?.session?.let { source ->
+                            { cherryPick = PromptCherryPick.fromSession(source) }
+                        },
                     )
                 }
             }

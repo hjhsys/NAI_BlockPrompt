@@ -66,6 +66,37 @@ class SessionEditorTest {
         assertTrue(reopened.characters.single().prompts.positiveBlocks.single().collapsed)
     }
 
+    @Test fun `base collapse and character master switch preserve nested content`() {
+        val character = CharacterPrompt(prompts = PromptPair(listOf(PromptBlock(name = "P", content = "tag", enabled = false))))
+        val source = Session.empty().copy(characters = listOf(character))
+        val collapsed = SessionEditor.setBaseCollapsed(source, true)
+        val disabled = SessionEditor.setCharacterEnabled(collapsed, character.id, false)
+        assertTrue(disabled.base.collapsed)
+        assertFalse(disabled.characters.single().enabled)
+        assertEquals(character.prompts, disabled.characters.single().prompts)
+    }
+
+    @Test fun `clear content preserves all block metadata`() {
+        val block = PromptBlock(name = "Keep", content = "remove", enabled = false, collapsed = true, order = 3)
+        val source = Session.empty().copy(base = BasePrompt(PromptPair(listOf(block))))
+        val cleared = SessionEditor.clearBlockContent(source, PromptOwner.Base, PromptPolarity.POSITIVE, block.id)
+            .base.prompts.positiveBlocks.single()
+        assertEquals(block.copy(content = ""), cleared)
+    }
+
+    @Test fun `block copy appends across owners with a new editable id`() {
+        val source = PromptBlock(name = "Cross", content = "tag", locked = true, collapsed = true)
+        val destination = CharacterPrompt()
+        val session = Session.empty().copy(characters = listOf(destination))
+        val pasted = SessionEditor.appendBlockCopy(session, PromptOwner.Character(destination.id), PromptPolarity.NEGATIVE, source)
+            .characters.single().prompts.negativeBlocks.single()
+        assertEquals("Cross", pasted.name)
+        assertEquals("tag", pasted.content)
+        assertNotEquals(source.id, pasted.id)
+        assertFalse(pasted.locked)
+        assertFalse(pasted.collapsed)
+    }
+
     @Test fun `character type creates one ordinary positive block with matching initial content`() {
         val expected = mapOf(
             CharacterType.GIRL to "girl",

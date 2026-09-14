@@ -87,6 +87,10 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     private val promptUndoHistory = PromptUndoHistory()
     private val _undoablePromptBlocks = MutableStateFlow<Set<PromptUndoKey>>(emptySet())
     val undoablePromptBlocks: StateFlow<Set<PromptUndoKey>> = _undoablePromptBlocks.asStateFlow()
+    private val _redoablePromptBlocks = MutableStateFlow<Set<PromptUndoKey>>(emptySet())
+    val redoablePromptBlocks: StateFlow<Set<PromptUndoKey>> = _redoablePromptBlocks.asStateFlow()
+    private val _blockClipboard = MutableStateFlow<PromptBlock?>(null)
+    val blockClipboard: StateFlow<PromptBlock?> = _blockClipboard.asStateFlow()
     private val _loadUiRevision = MutableStateFlow(0L)
     val loadUiRevision: StateFlow<Long> = _loadUiRevision.asStateFlow()
     private val _savedWorkflow = MutableStateFlow<SavedWorkflow?>(null)
@@ -190,6 +194,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     fun moveCharacter(id: String, direction: MoveDirection) = edit { SessionEditor.moveCharacter(it, id, direction) }
     fun setCharacterType(id: String, type: CharacterType) = edit { SessionEditor.setCharacterType(it, id, type) }
     fun setCharacterCollapsed(id: String, collapsed: Boolean) = edit { SessionEditor.setCharacterCollapsed(it, id, collapsed) }
+    fun setBaseCollapsed(collapsed: Boolean) = edit { SessionEditor.setBaseCollapsed(it, collapsed) }
+    fun setCharacterEnabled(id: String, enabled: Boolean) = edit { SessionEditor.setCharacterEnabled(it, id, enabled) }
     fun setCharacterPositioningEnabled(enabled: Boolean) = edit { SessionEditor.setCharacterPositioningEnabled(it, enabled) }
     fun setCharacterPosition(id: String, position: CharacterPosition) = edit { SessionEditor.setCharacterPosition(it, id, position) }
 
@@ -242,16 +248,39 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         edit { SessionEditor.updateBlock(it, owner, polarity, id) { item -> item.copy(content = content) } }
     }
 
-    fun undoBlockContent(owner: PromptOwner, polarity: PromptPolarity, id: String): PromptEditorSnapshot? {
+    fun undoBlockContent(owner: PromptOwner, polarity: PromptPolarity, id: String, selectionStart: Int, selectionEnd: Int): PromptEditorSnapshot? {
         val current = _session.value ?: return null
         val block = current.findPromptBlock(owner, polarity, id) ?: return null
         if (block.locked) return null
         val key = PromptUndoKey(owner, polarity, id)
-        val restored = promptUndoHistory.undo(key) ?: return null
+        val restored = promptUndoHistory.undo(key, PromptEditorSnapshot(block.content, selectionStart, selectionEnd)) ?: return null
         edit { SessionEditor.updateBlock(it, owner, polarity, id) { item -> item.copy(content = restored.content) } }
         refreshUndoable(key)
         clearAutocomplete()
         return restored
+    }
+
+    fun redoBlockContent(owner: PromptOwner, polarity: PromptPolarity, id: String, selectionStart: Int, selectionEnd: Int): PromptEditorSnapshot? {
+        val current = _session.value ?: return null
+        val block = current.findPromptBlock(owner, polarity, id) ?: return null
+        if (block.locked) return null
+        val key = PromptUndoKey(owner, polarity, id)
+        val restored = promptUndoHistory.redo(key, PromptEditorSnapshot(block.content, selectionStart, selectionEnd)) ?: return null
+        edit { SessionEditor.updateBlock(it, owner, polarity, id) { item -> item.copy(content = restored.content) } }
+        refreshUndoable(key)
+        clearAutocomplete()
+        return restored
+    }
+
+    fun clearBlockContent(owner: PromptOwner, polarity: PromptPolarity, id: String, selectionStart: Int, selectionEnd: Int) {
+        val current = _session.value ?: return
+        val block = current.findPromptBlock(owner, polarity, id) ?: return
+        if (block.locked || block.content.isEmpty()) return
+        val key = PromptUndoKey(owner, polarity, id)
+        promptUndoHistory.recordBeforeChange(key, PromptEditorSnapshot(block.content, selectionStart, selectionEnd), PromptEditKind.DISCRETE)
+        refreshUndoable(key)
+        edit { SessionEditor.clearBlockContent(it, owner, polarity, id) }
+        clearAutocomplete()
     }
 
     fun setBlockEnabled(owner: PromptOwner, polarity: PromptPolarity, id: String, enabled: Boolean) = edit {
@@ -294,11 +323,42 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         } else {
             _undoablePromptBlocks.value - key
         }
+        _redoablePromptBlocks.value = if (promptUndoHistory.canRedo(key)) {
+            _redoablePromptBlocks.value + key
+        } else {
+            _redoablePromptBlocks.value - key
+        }
     }
 
     private fun clearPromptUndo() {
         promptUndoHistory.clear()
         _undoablePromptBlocks.value = emptySet()
+        _redoablePromptBlocks.value = emptySet()
+    }
+
+    fun appendCherryPicked(
+        draft: PromptCherryPickDraft,
+        basePositiveBlockIds: Set<String>,
+        baseNegativeBlockIds: Set<String>,
+        characterImports: List<CharacterCherryPick>,
+    ) = edit { current -> PromptCherryPick.append(current, draft, basePositiveBlockIds, baseNegativeBlockIds, characterImports) }
+
+    fun appendCherryPickedSelection(sourceBlocks: List<PromptBlock>, selectedBlockIds: Set<String>, destination: CherryPickDestination) =
+        edit { current -> PromptCherryPick.appendSelection(current, sourceBlocks, selectedBlockIds, destination) }
+
+    fun copyBlockForPaste(block: PromptBlock) { _blockClipboard.value = block.copy() }
+
+    fun cutBlockForPaste(owner: PromptOwner, polarity: PromptPolarity, blockId: String) {
+        val current = _session.value ?: return
+        val block = current.findPromptBlock(owner, polarity, blockId) ?: return
+        if (block.locked) return
+        _blockClipboard.value = block.copy()
+        edit { SessionEditor.removeBlock(it, owner, polarity, blockId) }
+    }
+
+    fun pasteBlock(owner: PromptOwner, polarity: PromptPolarity) {
+        val block = _blockClipboard.value ?: return
+        edit { SessionEditor.appendBlockCopy(it, owner, polarity, block) }
     }
 
     fun updateTextRendering(owner: PromptOwner, transform: (TextRenderingState) -> TextRenderingState) = edit { current ->
@@ -754,14 +814,18 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             ),
             textRendering = TextRenderingState(),
         )
-        val restoredCharacters = if (restoreOriginal) source.characters else source.characters.sortedBy { it.order }.mapIndexed { index, character ->
-            character.copy(
-                prompts = PromptPair(
-                    positiveBlocks = resolvedBlocks(character.prompts.positiveBlocks, resolved.characterPositive.getOrElse(index) { "" }),
-                    negativeBlocks = resolvedBlocks(character.prompts.negativeBlocks, resolved.characterNegative.getOrElse(index) { "" }),
-                ),
-                textRendering = TextRenderingState(),
-            )
+        var resolvedCharacterIndex = 0
+        val restoredCharacters = if (restoreOriginal) source.characters else source.characters.sortedBy { it.order }.map { character ->
+            if (!character.enabled) character else {
+                val index = resolvedCharacterIndex++
+                character.copy(
+                    prompts = PromptPair(
+                        positiveBlocks = resolvedBlocks(character.prompts.positiveBlocks, resolved.characterPositive.getOrElse(index) { "" }),
+                        negativeBlocks = resolvedBlocks(character.prompts.negativeBlocks, resolved.characterNegative.getOrElse(index) { "" }),
+                    ),
+                    textRendering = TextRenderingState(),
+                )
+            }
         }
         val baseSelection = BaseSetImportSelection(options.basePositive, options.baseNegative)
         replaceWithStash(current.copy(

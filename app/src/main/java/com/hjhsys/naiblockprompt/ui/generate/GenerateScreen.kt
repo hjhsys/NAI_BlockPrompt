@@ -210,11 +210,13 @@ fun GenerateScreen(
                 pair = session.base.prompts,
                 selectedPolarity = session.base.selectedPolarity,
                 textRendering = session.base.textRendering,
+                collapsed = session.base.collapsed,
                 showFormatter = appSettings.showFormatterActions,
                 quickEditWeightStep = appSettings.quickEditWeightStep,
                 showTextRendering = appSettings.useTextRendering,
                 tokenRange = if (supportsT5Estimate && appSettings.showTokenEstimates) sectionTokenRange(session.base.prompts, session.base.textRendering) else null,
                 viewModel = viewModel,
+                onCollapsedChange = viewModel::setBaseCollapsed,
                 onTagEditorState = { owner, polarity, blockId, focused, cursor ->
                     activeTagTarget = if (focused) TagEditorTarget(owner, polarity, blockId, cursor)
                     else activeTagTarget?.takeUnless { it.blockId == blockId }
@@ -246,7 +248,7 @@ fun GenerateScreen(
                 Text(stringResource(R.string.add_character))
             }
         }
-        if (session.characters.isNotEmpty()) item {
+        if (session.characters.any { it.enabled }) item {
             CharacterPositioningButton(session, viewModel)
         }
         item {
@@ -575,6 +577,7 @@ private fun PromptScrollIndicator(state: androidx.compose.foundation.lazy.LazyLi
 
 @Composable
 private fun CharacterPositioningButton(session: Session, viewModel: MainViewModel) {
+    val enabledCharacters = session.characters.filter { it.enabled }
     var open by rememberSaveable { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         OutlinedButton(onClick = { open = true }, modifier = Modifier.weight(1f)) {
@@ -583,7 +586,7 @@ private fun CharacterPositioningButton(session: Session, viewModel: MainViewMode
             Text(
                 stringResource(
                     R.string.character_positioning_status,
-                    stringResource(if (session.characters.all { it.position != null }) R.string.position_custom else R.string.position_ai_choice),
+                    stringResource(if (enabledCharacters.all { it.position != null }) R.string.position_custom else R.string.position_ai_choice),
                 ),
             )
         }
@@ -594,7 +597,7 @@ private fun CharacterPositioningButton(session: Session, viewModel: MainViewMode
 
 @Composable
 private fun CharacterPositioningDialog(session: Session, viewModel: MainViewModel, onDismiss: () -> Unit) {
-    val characters = session.characters.sortedBy { it.order }
+    val characters = session.characters.filter { it.enabled }.sortedBy { it.order }
     var selectedId by rememberSaveable { mutableStateOf(characters.first().id) }
     val custom = characters.all { it.position != null }
     val continuous = CharacterPositioning.supportsContinuousCoordinates(session.generationSettings.modelId)
@@ -726,7 +729,7 @@ fun GenerationSettingsScreen(session: Session?, viewModel: MainViewModel, onBack
                 contentPadding = PaddingValues(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                item { GenerationSettingsCard(session.generationSettings, viewModel, onMetadataImported = onBack) }
+                item { GenerationSettingsCard(session, viewModel, onMetadataImported = onBack) }
                 item { Text(stringResource(R.string.generation_settings_swipe_hint), style = MaterialTheme.typography.bodySmall) }
             }
         }
@@ -739,6 +742,7 @@ private fun GenerationCard(
     record: com.hjhsys.naiblockprompt.data.generation.GenerationRecord?,
     viewModel: MainViewModel,
     onImportInformation: (() -> Unit)? = null,
+    onCherryPick: (() -> Unit)? = null,
     onExportInpaintDiagnostics: (() -> Unit)? = null,
 ) {
     var showActions by remember { mutableStateOf(false) }
@@ -768,6 +772,8 @@ private fun GenerationCard(
                     onImportInformation = { onImportInformation?.invoke() },
                     seedEnabled = true,
                     onApplySeed = { viewModel.applyHistorySeed(record.seed) },
+                    promptSelectionEnabled = onCherryPick != null,
+                    onImportPromptSelection = onCherryPick,
                 )
                 if (!originalAvailable) {
                     Text(stringResource(R.string.original_missing), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
@@ -828,11 +834,19 @@ fun ResultScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onRestore
         }
     }
     var restore by remember { mutableStateOf<com.hjhsys.naiblockprompt.data.library.HistoryItem?>(null) }
+    var cherryPick by remember { mutableStateOf<PromptCherryPickDraft?>(null) }
     restore?.let { item ->
         RestoreDialog(item, dismiss = { restore = null }) { options ->
             viewModel.restoreHistory(item, options)
             restore = null
             onRestored()
+        }
+    }
+    cherryPick?.let { draft ->
+        session?.let { current ->
+            PromptCherryPickDialog(current, draft, dismiss = { cherryPick = null }) { blocks, selected, destination ->
+                viewModel.appendCherryPickedSelection(blocks, selected, destination)
+            }
         }
     }
     Scaffold(
@@ -857,10 +871,102 @@ fun ResultScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onRestore
                 currentResult,
                 viewModel,
                 onImportInformation = resultHistory?.let { item -> { restore = item } },
+                onCherryPick = resultHistory?.snapshot?.session?.let { source -> { cherryPick = PromptCherryPick.fromSession(source) } },
                 onExportInpaintDiagnostics = if (BuildConfig.DEBUG) {
                     { viewModel.exportLatestInpaintDiagnostics() }
                 } else null,
             )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun PromptCherryPickDialog(
+    current: Session,
+    initialDraft: PromptCherryPickDraft,
+    dismiss: () -> Unit,
+    apply: (List<PromptBlock>, Set<String>, CherryPickDestination) -> Unit,
+) {
+    var draft by remember(initialDraft) { mutableStateOf(initialDraft) }
+    data class SourceField(val key: String, val label: String, val owner: PromptOwner, val polarity: PromptPolarity, val blocks: List<PromptBlock>, val type: CharacterType)
+    val sourceFields = buildList {
+        if (draft.base.positiveBlocks.any { it.content.isNotBlank() }) add(SourceField("base-p", stringResource(R.string.base_prompt) + " · " + stringResource(R.string.positive), PromptOwner.Base, PromptPolarity.POSITIVE, draft.base.positiveBlocks, CharacterType.OTHER))
+        if (draft.base.negativeBlocks.any { it.content.isNotBlank() }) add(SourceField("base-n", stringResource(R.string.base_prompt) + " · " + stringResource(R.string.negative), PromptOwner.Base, PromptPolarity.NEGATIVE, draft.base.negativeBlocks, CharacterType.OTHER))
+        draft.characters.forEachIndexed { index, character ->
+            if (character.prompts.positiveBlocks.any { it.content.isNotBlank() }) add(SourceField("${character.id}-p", stringResource(R.string.character_prompt, index + 1) + " · " + stringResource(R.string.positive), PromptOwner.Character(character.id), PromptPolarity.POSITIVE, character.prompts.positiveBlocks, character.type))
+            if (character.prompts.negativeBlocks.any { it.content.isNotBlank() }) add(SourceField("${character.id}-n", stringResource(R.string.character_prompt, index + 1) + " · " + stringResource(R.string.negative), PromptOwner.Character(character.id), PromptPolarity.NEGATIVE, character.prompts.negativeBlocks, character.type))
+        }
+    }
+    var sourceKey by remember(initialDraft) { mutableStateOf(sourceFields.firstOrNull()?.key.orEmpty()) }
+    val source = sourceFields.firstOrNull { it.key == sourceKey } ?: sourceFields.firstOrNull()
+    var selected by remember(source?.key) { mutableStateOf(emptySet<String>()) }
+    var destination by remember(source?.key) {
+        mutableStateOf<CherryPickDestination>(CherryPickDestination.Base(source?.polarity ?: PromptPolarity.POSITIVE))
+    }
+    var importedNotice by remember { mutableStateOf(false) }
+    val cursors = remember(initialDraft) { mutableStateMapOf<String, Int>() }
+    val splitName = stringResource(R.string.imported_block_name)
+    Dialog(onDismissRequest = dismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            Scaffold(
+                topBar = {
+                    TopAppBar(
+                        title = { Text(stringResource(R.string.cherry_pick_title)) },
+                        actions = { TextButton(onClick = dismiss) { Text(stringResource(R.string.finish)) } },
+                    )
+                },
+                bottomBar = {
+                    Surface(shadowElevation = 8.dp) {
+                        Button(
+                            onClick = { source?.let { apply(it.blocks, selected, destination); selected = emptySet(); importedNotice = true } },
+                            enabled = source != null && selected.isNotEmpty(),
+                            modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(12.dp).heightIn(min = 48.dp),
+                        ) { Text(stringResource(R.string.cherry_pick_apply)) }
+                    }
+                },
+            ) { padding ->
+                Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(stringResource(R.string.cherry_pick_source), style = MaterialTheme.typography.titleMedium)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(sourceFields, key = { it.key }) { field -> FilterChip(selected = source?.key == field.key, onClick = { sourceKey = field.key; importedNotice = false }, label = { Text(field.label) }) }
+                    }
+                    source?.blocks?.sortedBy { it.order }?.forEach { block ->
+                        val cursor = cursors[block.id]?.coerceIn(0, block.content.length) ?: block.content.length
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                            Checkbox(block.id in selected, { checked -> selected = if (checked) selected + block.id else selected - block.id })
+                            OutlinedTextField(
+                                value = TextFieldValue(block.content, TextRange(cursor)),
+                                onValueChange = { value ->
+                                    cursors[block.id] = value.selection.end
+                                    if (value.text != block.content) draft = PromptCherryPick.updateBlockContent(draft, source.owner, source.polarity, block.id, value.text)
+                                },
+                                label = { Text(block.name) },
+                                minLines = 3,
+                                modifier = Modifier.weight(1f),
+                            )
+                            IconButton(
+                                onClick = { draft = PromptCherryPick.splitBlock(draft, source.owner, source.polarity, block.id, cursor, splitName) },
+                                enabled = PromptProcessor.splitAtTopLevelBoundary(block.content, cursor) != null,
+                            ) { Icon(Icons.Default.CallSplit, stringResource(R.string.cherry_pick_split)) }
+                        }
+                    }
+                    HorizontalDivider()
+                    Text(stringResource(R.string.cherry_pick_destination), style = MaterialTheme.typography.titleMedium)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        item { FilterChip(destination == CherryPickDestination.Base(PromptPolarity.POSITIVE), { destination = CherryPickDestination.Base(PromptPolarity.POSITIVE) }, label = { Text(stringResource(R.string.base_prompt) + " · " + stringResource(R.string.positive)) }) }
+                        item { FilterChip(destination == CherryPickDestination.Base(PromptPolarity.NEGATIVE), { destination = CherryPickDestination.Base(PromptPolarity.NEGATIVE) }, label = { Text(stringResource(R.string.base_prompt) + " · " + stringResource(R.string.negative)) }) }
+                        current.characters.sortedBy { it.order }.forEachIndexed { index, character ->
+                            item { FilterChip(destination == CherryPickDestination.Character(character.id, PromptPolarity.POSITIVE), { destination = CherryPickDestination.Character(character.id, PromptPolarity.POSITIVE) }, label = { Text(stringResource(R.string.character_prompt, index + 1) + " · " + stringResource(R.string.positive)) }) }
+                            item { FilterChip(destination == CherryPickDestination.Character(character.id, PromptPolarity.NEGATIVE), { destination = CherryPickDestination.Character(character.id, PromptPolarity.NEGATIVE) }, label = { Text(stringResource(R.string.character_prompt, index + 1) + " · " + stringResource(R.string.negative)) }) }
+                        }
+                        item { FilterChip((destination as? CherryPickDestination.NewCharacter)?.polarity == PromptPolarity.POSITIVE, { destination = CherryPickDestination.NewCharacter(source?.type ?: CharacterType.OTHER, PromptPolarity.POSITIVE) }, label = { Text(stringResource(R.string.cherry_pick_new_character) + " · " + stringResource(R.string.positive)) }) }
+                        item { FilterChip((destination as? CherryPickDestination.NewCharacter)?.polarity == PromptPolarity.NEGATIVE, { destination = CherryPickDestination.NewCharacter(source?.type ?: CharacterType.OTHER, PromptPolarity.NEGATIVE) }, label = { Text(stringResource(R.string.cherry_pick_new_character) + " · " + stringResource(R.string.negative)) }) }
+                    }
+                    if (selected.isEmpty()) Text(stringResource(R.string.cherry_pick_nothing), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (importedNotice) Text(stringResource(R.string.cherry_pick_imported), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
         }
     }
 }
@@ -947,6 +1053,7 @@ private fun CharacterSectionCard(
     viewModel: MainViewModel,
     onTagEditorState: (PromptOwner, PromptPolarity, String, Boolean, Int) -> Unit,
 ) {
+    val enabledDescription = stringResource(R.string.character_generation_enabled)
     var showMore by remember { mutableStateOf(false) }
     var confirmDelete by rememberSaveable(character.id) { mutableStateOf(false) }
     if (confirmDelete) {
@@ -976,6 +1083,13 @@ private fun CharacterSectionCard(
                     Icon(
                         if (character.collapsed) Icons.Default.ChevronRight else Icons.Default.ExpandMore,
                         contentDescription = stringResource(if (character.collapsed) R.string.expand else R.string.collapse),
+                    )
+                }
+                CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 40.dp) {
+                    Switch(
+                        checked = character.enabled,
+                        onCheckedChange = { viewModel.setCharacterEnabled(character.id, it) },
+                        modifier = Modifier.scale(.78f).semantics { contentDescription = enabledDescription },
                     )
                 }
                 SmallIconButton(R.string.move_up, Icons.Default.ArrowUpward, index > 0) {
@@ -1031,11 +1145,13 @@ private fun PromptSectionCard(
     pair: PromptPair,
     selectedPolarity: PromptPolarity,
     textRendering: TextRenderingState,
+    collapsed: Boolean,
     showFormatter: Boolean,
     quickEditWeightStep: String,
     showTextRendering: Boolean,
     tokenRange: TokenRange?,
     viewModel: MainViewModel,
+    onCollapsedChange: (Boolean) -> Unit,
     onTagEditorState: (PromptOwner, PromptPolarity, String, Boolean, Int) -> Unit,
 ) {
     val containerColor = if (owner == PromptOwner.Base) {
@@ -1047,17 +1163,22 @@ private fun PromptSectionCard(
     ElevatedCard(colors = CardDefaults.elevatedCardColors(containerColor = containerColor)) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
+                Column(Modifier.weight(1f).clickable { onCollapsedChange(!collapsed) }) {
                     Text(title, style = MaterialTheme.typography.titleLarge)
                     tokenRange?.let { SectionTokenEstimate(it) }
                 }
+                SmallIconButton(
+                    if (collapsed) R.string.expand else R.string.collapse,
+                    if (collapsed) Icons.Default.ChevronRight else Icons.Default.ExpandMore,
+                    true,
+                ) { onCollapsedChange(!collapsed) }
                 SmallIconButton(R.string.load_set, Icons.Default.FolderOpen, true) { viewModel.beginSetLoad(owner) }
                 SmallIconButton(R.string.save_set, Icons.Default.Save, true) { viewModel.beginSetSave(owner) }
             }
             val promptBlockColor = if (owner == PromptOwner.Base) {
                 lerp(containerColor, Color.Black, if (MaterialTheme.colorScheme.background.luminance() < 0.5f) 0.16f else 0.055f)
             } else containerColor
-            PromptSectionContent(owner, pair, selectedPolarity, textRendering, showFormatter, quickEditWeightStep, showTextRendering, viewModel, onTagEditorState, promptBlockColor)
+            if (!collapsed) PromptSectionContent(owner, pair, selectedPolarity, textRendering, showFormatter, quickEditWeightStep, showTextRendering, viewModel, onTagEditorState, promptBlockColor)
         }
     }
 }
@@ -1075,6 +1196,7 @@ private fun PromptSectionContent(
     onTagEditorState: (PromptOwner, PromptPolarity, String, Boolean, Int) -> Unit,
     blockContainerColor: Color,
 ) {
+    val blockClipboard by viewModel.blockClipboard.collectAsStateWithLifecycle()
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         PromptPolarity.entries.forEach { polarity ->
             FilterChip(
@@ -1118,6 +1240,8 @@ private fun PromptSectionContent(
             onDelete = { viewModel.removeBlock(owner, selectedPolarity, block.id) },
             onLoad = { viewModel.beginBlockLoad(owner, selectedPolarity, block.id) },
             onSave = { viewModel.beginBlockSave(block) },
+            onCopy = { viewModel.copyBlockForPaste(block) },
+            onCut = { viewModel.cutBlockForPaste(owner, selectedPolarity, block.id) },
             onFormat = { formatter, selectionStart, selectionEnd ->
                 viewModel.formatBlock(owner, selectedPolarity, block.id, formatter, selectionStart, selectionEnd)
             },
@@ -1125,13 +1249,17 @@ private fun PromptSectionContent(
             onEditorState = { focused, cursor -> onTagEditorState(owner, selectedPolarity, block.id, focused, cursor) },
         )
     }
-    OutlinedButton(
-        onClick = { viewModel.addBlock(owner, selectedPolarity, newBlockName) },
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Icon(Icons.Default.Add, contentDescription = null)
-        Spacer(Modifier.width(6.dp))
-        Text(stringResource(R.string.add_block))
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = { viewModel.addBlock(owner, selectedPolarity, newBlockName) }, modifier = Modifier.weight(1f)) {
+            Icon(Icons.Default.Add, contentDescription = null)
+            Spacer(Modifier.width(6.dp))
+            Text(stringResource(R.string.add_block))
+        }
+        OutlinedButton(onClick = { viewModel.pasteBlock(owner, selectedPolarity) }, enabled = blockClipboard != null, modifier = Modifier.weight(1f)) {
+            Icon(Icons.Default.ContentPaste, contentDescription = null)
+            Spacer(Modifier.width(6.dp))
+            Text(stringResource(R.string.paste_block))
+        }
     }
     if (showTextRendering && selectedPolarity == PromptPolarity.POSITIVE) {
         TextRenderingSlot(
@@ -1227,6 +1355,8 @@ private fun PromptBlockCard(
     onDelete: () -> Unit,
     onLoad: () -> Unit,
     onSave: () -> Unit,
+    onCopy: () -> Unit,
+    onCut: () -> Unit,
     onFormat: (BlockFormatter, Int, Int) -> Unit,
     viewModel: MainViewModel,
     onEditorState: (Boolean, Int) -> Unit,
@@ -1234,11 +1364,14 @@ private fun PromptBlockCard(
     val validation = remember(block.content) { PromptProcessor.validateWeights(block.content) }
     val randomizerValidation = remember(block.content) { PromptProcessor.validateRandomizers(block.content) }
     var confirmDelete by rememberSaveable(block.id) { mutableStateOf(false) }
+    var confirmClear by rememberSaveable(block.id) { mutableStateOf(false) }
     var renameBlock by rememberSaveable(block.id) { mutableStateOf(false) }
     var renameValue by rememberSaveable(block.id) { mutableStateOf(block.name) }
     var showMore by remember { mutableStateOf(false) }
     var editorFocused by remember { mutableStateOf(false) }
-    var quickEdit by rememberSaveable(block.id) { mutableStateOf(false) }
+    // Quick Edit is transient editor UI. Removing a block card by collapsing its Base or
+    // Character parent must dispose it rather than restore a stale popup/drag state.
+    var quickEdit by remember(block.id) { mutableStateOf(false) }
     var quickSelection by remember(block.id) { mutableStateOf<QuickEditSelection?>(null) }
     var showQuickMore by remember { mutableStateOf(false) }
     var showWeightInput by remember { mutableStateOf(false) }
@@ -1251,6 +1384,7 @@ private fun PromptBlockCard(
     val context = LocalContext.current
     val autocomplete by viewModel.autocomplete.collectAsStateWithLifecycle()
     val undoableBlocks by viewModel.undoablePromptBlocks.collectAsStateWithLifecycle()
+    val redoableBlocks by viewModel.redoablePromptBlocks.collectAsStateWithLifecycle()
     val undoKey = remember(owner, polarity, block.id) { PromptUndoKey(owner, polarity, block.id) }
     var editorValue by remember(block.id) {
         mutableStateOf(TextFieldValue(block.content, TextRange(block.content.length)))
@@ -1258,6 +1392,14 @@ private fun PromptBlockCard(
     var lastEditorSelection by remember(block.id) { mutableStateOf(editorValue.selection) }
     var observedBlockContent by remember(block.id) { mutableStateOf(block.content) }
     var pendingQuickContent by remember(block.id) { mutableStateOf<String?>(null) }
+    LaunchedEffect(block.collapsed) {
+        if (block.collapsed) {
+            quickEdit = false
+            quickSelection = null
+            moveTargets = emptyList()
+            showQuickMore = false
+        }
+    }
     LaunchedEffect(block.content) {
         if (block.content != observedBlockContent) {
             observedBlockContent = block.content
@@ -1310,6 +1452,21 @@ private fun PromptBlockCard(
                 }
             },
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text(stringResource(R.string.cancel)) } },
+        )
+    }
+    if (confirmClear) {
+        AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            title = { Text(stringResource(R.string.clear_block_content_title)) },
+            text = { Text(stringResource(R.string.clear_block_content_message, block.name)) },
+            confirmButton = { TextButton(onClick = {
+                confirmClear = false
+                quickEdit = false
+                quickSelection = null
+                moveTargets = emptyList()
+                viewModel.clearBlockContent(owner, polarity, block.id, editorValue.selection.start, editorValue.selection.end)
+            }) { Text(stringResource(R.string.clear_block_content), color = MaterialTheme.colorScheme.error) } },
+            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text(stringResource(R.string.cancel)) } },
         )
     }
     if (renameBlock) {
@@ -1369,6 +1526,17 @@ private fun PromptBlockCard(
                             leadingIcon = { Icon(Icons.Default.BookmarkAdd, contentDescription = null) },
                             onClick = { showMore = false; onSave() },
                         )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.copy_block)) },
+                            leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                            onClick = { showMore = false; clipboard.setText(AnnotatedString(block.content)); onCopy() },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.cut_block)) },
+                            leadingIcon = { Icon(Icons.Default.ContentCut, contentDescription = null) },
+                            enabled = !block.locked,
+                            onClick = { showMore = false; clipboard.setText(AnnotatedString(block.content)); onCut() },
+                        )
                         HorizontalDivider()
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.split_block_at_cursor)) },
@@ -1417,6 +1585,12 @@ private fun PromptBlockCard(
                             },
                         )
                         HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.clear_block_content)) },
+                            leadingIcon = { Icon(Icons.Default.Backspace, contentDescription = null) },
+                            enabled = !block.locked && block.content.isNotEmpty(),
+                            onClick = { showMore = false; confirmClear = true },
+                        )
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.delete)) },
                             leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
@@ -1600,7 +1774,17 @@ private fun PromptBlockCard(
                         Icons.Default.Undo,
                         !block.locked && undoKey in undoableBlocks,
                     ) {
-                        viewModel.undoBlockContent(owner, polarity, block.id)?.let { restored ->
+                        viewModel.undoBlockContent(owner, polarity, block.id, editorValue.selection.start, editorValue.selection.end)?.let { restored ->
+                            editorValue = TextFieldValue(restored.content, TextRange(restored.selectionStart, restored.selectionEnd))
+                            lastEditorSelection = editorValue.selection
+                        }
+                    }
+                    SmallIconButton(
+                        R.string.redo_prompt_edit,
+                        Icons.Default.Redo,
+                        !block.locked && undoKey in redoableBlocks,
+                    ) {
+                        viewModel.redoBlockContent(owner, polarity, block.id, editorValue.selection.start, editorValue.selection.end)?.let { restored ->
                             editorValue = TextFieldValue(restored.content, TextRange(restored.selectionStart, restored.selectionEnd))
                             lastEditorSelection = editorValue.selection
                         }
@@ -1723,11 +1907,18 @@ private fun QuickEditPromptSurface(
                                     val next = (dragPosition ?: change.position) + amount
                                     dragPosition = next
                                     val result = layout ?: return@detectDragGestures
+                                    val line = result.getLineForVerticalPosition(next.y.coerceIn(0f, result.size.height.toFloat()))
+                                    val lineEnd = result.getLineEnd(line, visibleEnd = true)
+                                    val inRightBlank = next.x >= result.getLineRight(line)
                                     val nearest = moveTargets.indices.minByOrNull { index ->
-                                        val cursor = result.getCursorRect(moveTargets[index].offset.coerceIn(0, text.length))
-                                        val dx = cursor.left - next.x
-                                        val dy = (cursor.top + cursor.bottom) / 2f - next.y
-                                        dx * dx + dy * dy
+                                        val targetOffset = moveTargets[index].offset.coerceIn(0, text.length)
+                                        if (inRightBlank) kotlin.math.abs(targetOffset - lineEnd).toFloat()
+                                        else {
+                                            val cursor = result.getCursorRect(targetOffset)
+                                            val dx = cursor.left - next.x
+                                            val dy = (cursor.top + cursor.bottom) / 2f - next.y
+                                            dx * dx + dy * dy
+                                        }
                                     }
                                     if (nearest != null) { dragTargetIndex = nearest; onMoveTarget(nearest) }
                                 }
@@ -1821,7 +2012,9 @@ private fun SuggestionRow(@StringRes label: Int, suggestions: List<TagSuggestion
 }
 
 @Composable
-private fun GenerationSettingsCard(settings: GenerationSettings, viewModel: MainViewModel, onMetadataImported: () -> Unit) {
+private fun GenerationSettingsCard(session: Session, viewModel: MainViewModel, onMetadataImported: () -> Unit) {
+    val settings = session.generationSettings
+    var cherryDraft by remember { mutableStateOf<PromptCherryPickDraft?>(null) }
     var activeSlider by rememberSaveable { mutableStateOf<Int?>(null) }
     var advancedExpanded by rememberSaveable { mutableStateOf(false) }
     val context = LocalContext.current
@@ -1830,6 +2023,11 @@ private fun GenerationSettingsCard(settings: GenerationSettings, viewModel: Main
         uri?.let {
             runCatching { context.contentResolver.takePersistableUriPermission(it, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) }
             pendingImageUri = it.toString()
+        }
+    }
+    cherryDraft?.let { draft ->
+        PromptCherryPickDialog(session, draft, dismiss = { cherryDraft = null }) { blocks, selected, destination ->
+            viewModel.appendCherryPickedSelection(blocks, selected, destination)
         }
     }
     pendingImageUri?.let { uri ->
@@ -1876,6 +2074,13 @@ private fun GenerationSettingsCard(settings: GenerationSettings, viewModel: Main
                             pendingImageUri = null
                             onMetadataImported()
                         }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.import_metadata)) }
+                        OutlinedButton(
+                            onClick = {
+                                cherryDraft = PromptCherryPick.fromMetadata(metadata!!, importedBlockName)
+                                pendingImageUri = null
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text(stringResource(R.string.cherry_pick_prompts)) }
                     } else {
                         Text(stringResource(R.string.nai_metadata_not_found), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
@@ -1904,6 +2109,11 @@ private fun GenerationSettingsCard(settings: GenerationSettings, viewModel: Main
                 Text(stringResource(R.string.model_id), style = MaterialTheme.typography.titleMedium)
                 CatalogDropdown(R.string.model_id, settings.modelId, NaiGenerationCatalog.models) { value ->
                     viewModel.updateGenerationSettings { it.copy(modelId = value) }
+                }
+                OutlinedButton(onClick = { imagePicker.launch(arrayOf("image/png", "image/jpeg", "image/webp")) }, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.AddPhotoAlternate, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.import_image))
                 }
                 settings.imageInput?.let { input ->
                     AsyncImage(
@@ -1962,10 +2172,6 @@ private fun GenerationSettingsCard(settings: GenerationSettings, viewModel: Main
                             viewModel.updateGenerationSettings { current -> current.copy(imageInput = input.copy(fidelity = value)) }
                         }
                     }
-                } ?: OutlinedButton(onClick = { imagePicker.launch(arrayOf("image/png", "image/jpeg", "image/webp")) }, modifier = Modifier.fillMaxWidth()) {
-                    Icon(Icons.Default.AddPhotoAlternate, null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(stringResource(R.string.import_image))
                 }
             }
         }

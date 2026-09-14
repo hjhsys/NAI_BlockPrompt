@@ -266,6 +266,23 @@ class NaiRequestMapperTest {
         assertEquals(ImageInputMode.VIBE_TRANSFER, prepared.sourceSession.generationSettings.imageInput?.mode)
     }
 
+    @Test fun `disabled characters are omitted with prompt and position alignment preserved`() {
+        val session = Session.empty().copy(
+            characters = listOf(
+                character("c1", 0, "one").copy(position = CharacterPosition(.1f, .2f)),
+                character("c2", 1, "two").copy(position = CharacterPosition(.4f, .5f), enabled = false, textRendering = TextRenderingState(true, "HIDDEN")),
+                character("c3", 2, "three").copy(position = CharacterPosition(.8f, .9f)),
+            ),
+            generationSettings = GenerationSettings("nai-diffusion-4-5-full", samplerId = "k_euler_ancestral", steps = 28, scale = 5f),
+        )
+        val parameters = (NaiRequestMapper { 3L }.prepare(session, false) as PrepareGenerationResult.Ready).generation.request.parameters
+
+        assertEquals(listOf("one,", "three,"), parameters.v4Prompt.caption.characterCaptions.map { it.characterCaption })
+        assertEquals(listOf(NaiCoordinate(.1f, .2f), NaiCoordinate(.8f, .9f)), parameters.characterPrompts.map { it.center })
+        assertTrue(parameters.useCoordinates)
+        assertFalse(parameters.v4Prompt.caption.characterCaptions.any { "HIDDEN" in it.characterCaption })
+    }
+
     private fun character(id: String, order: Int, positive: String) = CharacterPrompt(
         id=id, order=order, prompts=PromptPair(positiveBlocks=listOf(PromptBlock(name="p",content=positive)))
     )

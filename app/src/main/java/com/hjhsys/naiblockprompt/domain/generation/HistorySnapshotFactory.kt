@@ -28,7 +28,7 @@ object HistorySnapshotFactory {
                 dynamicThresholding = parameters.dynamicThresholding,
                 useCoordinates = parameters.v4Prompt.useCoordinates,
                 useOrder = parameters.v4Prompt.useOrder,
-                characterPositions = generation.sourceSession.characters.sortedBy { it.order }.map { it.position },
+                characterPositions = generation.sourceSession.characters.filter { it.enabled }.sortedBy { it.order }.map { it.position },
                 imageInput = generation.sourceSession.generationSettings.imageInput,
             ),
         )

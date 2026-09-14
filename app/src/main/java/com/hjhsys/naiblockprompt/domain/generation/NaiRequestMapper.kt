@@ -81,7 +81,7 @@ class NaiRequestMapper(
         }
         val basePositive = resolved(positive(session.base.prompts.positiveBlocks, session.base.textRendering))
         val baseNegative = resolved(joined(session.base.prompts.negativeBlocks))
-        val characters = session.characters.sortedBy { it.order }
+        val characters = session.characters.filter { it.enabled }.sortedBy { it.order }
         val useCoordinates = characters.isNotEmpty() && characters.all { it.position != null }
         val positiveCharacters = characters.map {
             NaiV4CharacterCaption(

@@ -22,13 +22,14 @@ data class PromptEditorSnapshot(
 
 enum class PromptEditKind { TYPING, DISCRETE }
 
-/** In-memory, block-local undo history. It intentionally has no redo or Session semantics. */
+/** In-memory, block-local, content-only undo/redo history. */
 class PromptUndoHistory(
     private val maxSteps: Int = 30,
     private val typingCoalesceMillis: Long = 900L,
 ) {
     private data class BlockHistory(
-        val snapshots: ArrayDeque<PromptEditorSnapshot> = ArrayDeque(),
+        val undo: ArrayDeque<PromptEditorSnapshot> = ArrayDeque(),
+        val redo: ArrayDeque<PromptEditorSnapshot> = ArrayDeque(),
         var lastTypingAtMillis: Long? = null,
     )
 
@@ -46,22 +47,32 @@ class PromptUndoHistory(
         val beginsTypingGroup = kind == PromptEditKind.TYPING &&
             (lastTyping == null || nowMillis - lastTyping > typingCoalesceMillis)
         val shouldPush = kind == PromptEditKind.DISCRETE || beginsTypingGroup
-        if (shouldPush && history.snapshots.lastOrNull() != normalized) {
-            history.snapshots.addLast(normalized)
-            while (history.snapshots.size > maxSteps) history.snapshots.removeFirst()
+        if (shouldPush && history.undo.lastOrNull() != normalized) {
+            history.undo.addLast(normalized)
+            while (history.undo.size > maxSteps) history.undo.removeFirst()
         }
+        history.redo.clear()
         history.lastTypingAtMillis = if (kind == PromptEditKind.TYPING) nowMillis else null
     }
 
-    fun undo(key: PromptUndoKey): PromptEditorSnapshot? {
+    fun undo(key: PromptUndoKey, current: PromptEditorSnapshot): PromptEditorSnapshot? {
         val history = histories[key] ?: return null
         history.lastTypingAtMillis = null
-        val result = history.snapshots.removeLastOrNull()
-        if (history.snapshots.isEmpty()) histories.remove(key)
+        val result = history.undo.removeLastOrNull() ?: return null
+        history.redo.addLast(current.normalized())
         return result
     }
 
-    fun canUndo(key: PromptUndoKey): Boolean = histories[key]?.snapshots?.isNotEmpty() == true
+    fun redo(key: PromptUndoKey, current: PromptEditorSnapshot): PromptEditorSnapshot? {
+        val history = histories[key] ?: return null
+        history.lastTypingAtMillis = null
+        val result = history.redo.removeLastOrNull() ?: return null
+        history.undo.addLast(current.normalized())
+        return result
+    }
+
+    fun canUndo(key: PromptUndoKey): Boolean = histories[key]?.undo?.isNotEmpty() == true
+    fun canRedo(key: PromptUndoKey): Boolean = histories[key]?.redo?.isNotEmpty() == true
 
     fun clear() = histories.clear()
 }

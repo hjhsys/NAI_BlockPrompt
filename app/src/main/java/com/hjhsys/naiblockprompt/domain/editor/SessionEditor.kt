@@ -61,11 +61,26 @@ object SessionEditor {
         characters = session.characters.map { if (it.id == characterId) it.copy(collapsed = collapsed) else it },
     )
 
-    fun setCharacterPositioningEnabled(session: Session, enabled: Boolean): Session = session.copy(
-        characters = session.characters.mapIndexed { index, character ->
-            character.copy(position = if (enabled) character.position ?: defaultPosition(index, session.characters.size) else null)
-        },
+    fun setBaseCollapsed(session: Session, collapsed: Boolean): Session =
+        session.copy(base = session.base.copy(collapsed = collapsed))
+
+    fun setCharacterEnabled(session: Session, characterId: String, enabled: Boolean): Session = session.copy(
+        characters = session.characters.map { if (it.id == characterId) it.copy(enabled = enabled) else it },
     )
+
+    fun clearBlockContent(session: Session, owner: PromptOwner, polarity: PromptPolarity, blockId: String): Session =
+        updateBlock(session, owner, polarity, blockId) { it.copy(content = "") }
+
+    fun setCharacterPositioningEnabled(session: Session, enabled: Boolean): Session {
+        val enabledCount = session.characters.count { it.enabled }
+        var enabledIndex = 0
+        return session.copy(characters = session.characters.map { character ->
+            if (!character.enabled) character else {
+                val index = enabledIndex++
+                character.copy(position = if (enabled) character.position ?: defaultPosition(index, enabledCount) else null)
+            }
+        })
+    }
 
     fun setCharacterPosition(session: Session, characterId: String, position: CharacterPosition): Session = session.copy(
         characters = session.characters.map { character ->
@@ -79,6 +94,11 @@ object SessionEditor {
 
     fun addBlock(session: Session, owner: PromptOwner, polarity: PromptPolarity, name: String): Session =
         session.updateBlocks(owner, polarity) { blocks -> blocks + PromptBlock(name = name, order = blocks.size) }
+
+    fun appendBlockCopy(session: Session, owner: PromptOwner, polarity: PromptPolarity, source: PromptBlock): Session =
+        session.updateBlocks(owner, polarity) { blocks ->
+            blocks + source.copy(id = UUID.randomUUID().toString(), locked = false, collapsed = false, order = blocks.size)
+        }
 
     fun splitBlockAtCursor(
         session: Session,

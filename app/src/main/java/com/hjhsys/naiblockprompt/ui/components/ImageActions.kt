@@ -3,6 +3,7 @@ package com.hjhsys.naiblockprompt.ui.components
 import android.net.Uri
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.Image
@@ -82,36 +83,61 @@ fun ImageCardActions(
     modifier: Modifier = Modifier,
     seedEnabled: Boolean = false,
     onApplySeed: (() -> Unit)? = null,
+    promptSelectionEnabled: Boolean = false,
+    onImportPromptSelection: (() -> Unit)? = null,
 ) {
-    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-        onApplySeed?.let { applySeed ->
-            IconButton(
-                onClick = applySeed,
-                enabled = seedEnabled,
-                modifier = Modifier.size(40.dp),
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            onApplySeed?.let { applySeed ->
+                IconButton(
+                    onClick = applySeed,
+                    enabled = seedEnabled,
+                    modifier = Modifier.size(40.dp),
+                ) {
+                    Icon(Icons.Default.Eco, stringResource(R.string.apply_history_seed), Modifier.size(18.dp))
+                }
+            }
+            FilledTonalButton(
+                onClick = onImageActions,
+                enabled = imageActionsEnabled,
+                modifier = Modifier.weight(1f).height(40.dp),
+                contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp),
             ) {
-                Icon(Icons.Default.Eco, stringResource(R.string.apply_history_seed), Modifier.size(18.dp))
+                Icon(Icons.Default.MoreHoriz, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(3.dp))
+                Text(stringResource(R.string.image_actions), style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            OutlinedButton(
+                onClick = onImportPromptSelection ?: onImportInformation,
+                enabled = if (onImportPromptSelection != null) promptSelectionEnabled else informationEnabled,
+                modifier = Modifier.weight(1f).height(40.dp),
+                contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp),
+            ) {
+                Icon(
+                    if (onImportPromptSelection != null) Icons.AutoMirrored.Filled.PlaylistAdd else Icons.Default.Restore,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(Modifier.width(3.dp))
+                Text(
+                    stringResource(if (onImportPromptSelection != null) R.string.cherry_pick_prompts else R.string.import_information),
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
-        FilledTonalButton(
-            onClick = onImageActions,
-            enabled = imageActionsEnabled,
-            modifier = Modifier.weight(1f).height(40.dp),
-            contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp),
-        ) {
-            Icon(Icons.Default.MoreHoriz, contentDescription = null, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(3.dp))
-            Text(stringResource(R.string.image_actions), style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-        OutlinedButton(
-            onClick = onImportInformation,
-            enabled = informationEnabled,
-            modifier = Modifier.weight(1f).height(40.dp),
-            contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp),
-        ) {
-            Icon(Icons.Default.Restore, contentDescription = null, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(3.dp))
-            Text(stringResource(R.string.import_information), style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (onImportPromptSelection != null) {
+            OutlinedButton(
+                onClick = onImportInformation,
+                enabled = informationEnabled,
+                modifier = Modifier.fillMaxWidth().height(40.dp),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+            ) {
+                Icon(Icons.Default.Restore, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text(stringResource(R.string.import_information), style = MaterialTheme.typography.labelSmall, maxLines = 1)
+            }
         }
     }
 }
