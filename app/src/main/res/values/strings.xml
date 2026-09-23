@@ -612,6 +612,8 @@
     <string name="settings_quick_edit_weight_step_hint">Default 0.1. Decimal values greater than zero are supported.</string>
     <string name="cut">Cut</string>
     <string name="quick_edit_copy">Copy</string>
+    <string name="quick_edit_paste">Paste here</string>
+    <string name="quick_edit_choose_tags">Choose tags</string>
     <string name="split_block_at_cursor">Split block at cursor</string>
     <string name="merge_with_previous_block">Merge with previous block</string>
     <string name="split_block_selection_error">Clear the text selection and place the cursor where you want to split.</string>

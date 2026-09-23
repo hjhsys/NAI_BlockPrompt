@@ -64,6 +64,29 @@ class PromptQuickEditTest {
         assertEquals(QuickEditUnitType.TAG, selection(multiple, "DEF").type)
     }
 
+    @Test fun `multi selection toggles units and removes group child conflicts`() {
+        val text = "1.2::ABC, DEF ::, GHI"
+        val abc = selection(text, "ABC")
+        val def = selection(text, "DEF")
+        val group = selection(text, "1.2")
+        var selected = PromptQuickEdit.toggleSelection(emptyList(), abc)
+        selected = PromptQuickEdit.toggleSelection(selected, def)
+        assertEquals(listOf("ABC", "DEF"), selected.map { text.substring(it.range.start, it.range.endExclusive) })
+        selected = PromptQuickEdit.toggleSelection(selected, group)
+        assertEquals(listOf(QuickEditUnitType.WEIGHT_GROUP), selected.map { it.type })
+        selected = PromptQuickEdit.toggleSelection(selected, abc)
+        assertEquals(listOf(QuickEditUnitType.TAG), selected.map { it.type })
+        assertTrue(PromptQuickEdit.toggleSelection(selected, abc).isEmpty())
+    }
+
+    @Test fun `multi weight is enabled only for one supported unit`() {
+        val text = "ABC, 1.2::DEF, GHI ::"
+        assertTrue(PromptQuickEdit.canAdjustWeight(listOf(selection(text, "ABC"))))
+        assertTrue(PromptQuickEdit.canAdjustWeight(listOf(selection(text, "1.2"))))
+        assertTrue(!PromptQuickEdit.canAdjustWeight(listOf(selection(text, "DEF"))))
+        assertTrue(!PromptQuickEdit.canAdjustWeight(listOf(selection(text, "ABC"), selection(text, "GHI"))))
+    }
+
     @Test fun `wraps ordinary tags with decimal safe weight`() {
         val plus = changed(PromptQuickEdit.adjustWeight("ABC", selection("ABC", "ABC"), BigDecimal("0.1")))
         val minus = changed(PromptQuickEdit.adjustWeight("ABC", selection("ABC", "ABC"), BigDecimal("-0.1")))
@@ -96,6 +119,18 @@ class PromptQuickEditTest {
         assertEquals("1.2::ABC, ## DEF ## ::", changed(PromptQuickEdit.toggleComment(text, selection(text, "DEF"))))
     }
 
+    @Test fun `mixed multi comment first comments all then unwraps all`() {
+        var text = "ABC, ## DEF ##, GHI"
+        var selected = listOf(selection(text, "ABC"), selection(text, "## DEF"))
+        var result = PromptQuickEdit.toggleComments(text, selected) as QuickEditResult.Changed
+        text = result.text
+        assertEquals("## ABC ##, ## DEF ##, GHI", text)
+        selected = result.preferredSelectionOffsets.map { PromptQuickEdit.selectionAt(text, it)!! }
+        assertEquals(2, selected.size)
+        result = PromptQuickEdit.toggleComments(text, selected) as QuickEditResult.Changed
+        assertEquals("ABC, DEF, GHI", result.text)
+    }
+
     @Test fun `deletes chunks and empty group safely`() {
         var text = "ABC, DEF, GHI"
         assertEquals("ABC, GHI", changed(PromptQuickEdit.delete(text, selection(text, "DEF"))))
@@ -103,6 +138,16 @@ class PromptQuickEditTest {
         assertEquals("1.2::DEF ::", changed(PromptQuickEdit.delete(text, selection(text, "ABC"))))
         text = "1.2::ABC ::, GHI"
         assertEquals("GHI", changed(PromptQuickEdit.delete(text, selection(text, "ABC"))))
+    }
+
+    @Test fun `multi delete removes top level and weight children without empty wrappers`() {
+        var text = "ABC, 1.2::DEF, GHI ::, JKL"
+        var selected = listOf(selection(text, "ABC"), selection(text, "DEF"), selection(text, "JKL"))
+        assertEquals("1.2::GHI ::", changed(PromptQuickEdit.deleteMany(text, selected)))
+
+        text = "1.2::ABC, DEF ::, GHI"
+        selected = listOf(selection(text, "ABC"), selection(text, "DEF"))
+        assertEquals("GHI", changed(PromptQuickEdit.deleteMany(text, selected)))
     }
 
     @Test fun `moves tag outside into and between weights`() {
@@ -121,6 +166,46 @@ class PromptQuickEditTest {
         val second = PromptQuickEdit.parse(text).last().range
         target = PromptQuickEdit.dropTargets(text, source).first { it.parentWeightRange == second && it.itemIndex == 0 }
         assertEquals("1.2::DEF ::, 0.8::ABC, GHI ::", changed(PromptQuickEdit.move(text, source, target)))
+    }
+
+    @Test fun `multi move keeps selected order and bundle`() {
+        var text = "ABC, DEF, GHI, JKL"
+        var selected = listOf(selection(text, "ABC"), selection(text, "GHI"))
+        var target = PromptQuickEdit.dropTargets(text, selected).first { it.parentWeightRange == null && it.itemIndex == 4 }
+        assertEquals("DEF, JKL, ABC, GHI", changed(PromptQuickEdit.moveMany(text, selected, target)))
+
+        text = "ABC, GHI, 1.2::DEF, JKL ::"
+        selected = listOf(selection(text, "ABC"), selection(text, "GHI"))
+        val group = PromptQuickEdit.parse(text).last().range
+        target = PromptQuickEdit.dropTargets(text, selected).first { it.parentWeightRange == group && it.itemIndex == 1 }
+        assertEquals("1.2::DEF, ABC, GHI, JKL ::", changed(PromptQuickEdit.moveMany(text, selected, target)))
+    }
+
+    @Test fun `paste at visual line end repairs only nearby separators`() {
+        var text = "ABC,\nDEF"
+        var result = PromptQuickEdit.pasteAt(text, text.indexOf('\n'), " GHI, ") as QuickEditResult.Changed
+        assertEquals("ABC, GHI,\nDEF", result.text)
+        val pastedOffset = requireNotNull(result.preferredSelectionOffset)
+        assertEquals("GHI", result.text.substring(
+            PromptQuickEdit.selectionAt(result.text, pastedOffset)!!.range.start,
+            PromptQuickEdit.selectionAt(result.text, pastedOffset)!!.range.endExclusive,
+        ))
+
+        text = "ABC\nDEF"
+        result = PromptQuickEdit.pasteAt(text, text.indexOf('\n'), "GHI") as QuickEditResult.Changed
+        assertEquals("ABC, GHI,\nDEF", result.text)
+
+        text = "ABC"
+        assertEquals("ABC, DEF", changed(PromptQuickEdit.pasteAt(text, text.length, "DEF")))
+    }
+
+    @Test fun `paste inside multiline weight inherits its group`() {
+        val text = "1.2::ABC,\nDEF ::"
+        val result = PromptQuickEdit.pasteAt(text, text.indexOf('\n'), "GHI") as QuickEditResult.Changed
+        assertEquals("1.2::ABC, GHI,\nDEF ::", result.text)
+        val selected = result.preferredSelectionOffsets.map { PromptQuickEdit.selectionAt(result.text, it)!! }
+        assertEquals(QuickEditUnitType.TAG, selected.single().type)
+        assertNotNull(selected.single().parentWeightRange)
     }
 
     @Test fun `moving forward inside one weight uses pre-removal boundary correctly`() {

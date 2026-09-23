@@ -34,7 +34,11 @@ data class QuickEditDropTarget(
 
 sealed interface QuickEditResult {
     /** preferredSelectionOffset is resolved against a freshly parsed [text]. */
-    data class Changed(val text: String, val preferredSelectionOffset: Int? = null) : QuickEditResult
+    data class Changed(
+        val text: String,
+        val preferredSelectionOffset: Int? = null,
+        val preferredSelectionOffsets: List<Int> = preferredSelectionOffset?.let(::listOf).orEmpty(),
+    ) : QuickEditResult
     data object Unsupported : QuickEditResult
 }
 
@@ -67,6 +71,64 @@ object PromptQuickEdit {
             return unit.selection()
         }
         return null
+    }
+
+    /** Adds/removes one semantic unit while preventing a group and its child from coexisting. */
+    fun toggleSelection(
+        current: List<QuickEditSelection>,
+        candidate: QuickEditSelection,
+    ): List<QuickEditSelection> {
+        if (current.any { it.range == candidate.range }) {
+            return current.filterNot { it.range == candidate.range }
+        }
+        val withoutConflicts = current.filterNot { selected ->
+            candidate.type == QuickEditUnitType.WEIGHT_GROUP && selected.parentWeightRange == candidate.range ||
+                candidate.parentWeightRange != null && selected.type == QuickEditUnitType.WEIGHT_GROUP && selected.range == candidate.parentWeightRange
+        }
+        return (withoutConflicts + candidate).sortedBy { it.range.start }
+    }
+
+    fun canAdjustWeight(selections: List<QuickEditSelection>): Boolean = selections.singleOrNull()?.let {
+        it.type == QuickEditUnitType.WEIGHT_GROUP || it.type == QuickEditUnitType.TAG && it.parentWeightRange == null
+    } == true
+
+    fun selectedText(text: String, selections: List<QuickEditSelection>): String = selections
+        .sortedBy { it.range.start }
+        .joinToString(", ") { text.substring(it.range.start, it.range.endExclusive) }
+
+    /** Inserts clipboard prompt text at a visual line/gap boundary with minimal separator repair. */
+    fun pasteAt(text: String, offset: Int, clipboardText: String): QuickEditResult {
+        val pasted = clipboardText.trim().trim(',').trim()
+        if (pasted.isEmpty()) return QuickEditResult.Unsupported
+        val at = offset.coerceIn(0, text.length)
+        val immediatePrevious = text.getOrNull(at - 1)
+        val previousMeaningful = (at - 1 downTo 0).firstOrNull { !text[it].isWhitespace() }?.let(text::get)
+        val nextMeaningfulIndex = (at until text.length).firstOrNull { !text[it].isWhitespace() }
+        val prefix = when {
+            at == 0 || immediatePrevious == '\n' || immediatePrevious == '\r' -> ""
+            previousMeaningful == ',' -> " "
+            else -> ", "
+        }
+        val suffix = when {
+            nextMeaningfulIndex == null -> ""
+            pasted.endsWith(',') -> ""
+            else -> ","
+        }
+        val inserted = "$prefix$pasted$suffix"
+        val changed = text.substring(0, at) + inserted + text.substring(at)
+        val contentStart = at + prefix.length
+        val contentEnd = contentStart + pasted.length
+        val offsets = parse(changed)
+            .flatMap { unit ->
+                if (unit.type == QuickEditUnitType.WEIGHT_GROUP &&
+                    !(unit.range.start >= contentStart && unit.range.endExclusive <= contentEnd)
+                ) unit.children.ifEmpty { listOf(unit) }
+                else listOf(unit)
+            }
+            .filter { unit -> unit.range.start < contentEnd && unit.range.endExclusive > contentStart }
+            .map { it.range.start }
+            .distinct()
+        return QuickEditResult.Changed(changed, offsets.firstOrNull() ?: contentStart, offsets.ifEmpty { listOf(contentStart) })
     }
 
     fun adjustWeight(text: String, selection: QuickEditSelection, delta: BigDecimal): QuickEditResult {
@@ -114,6 +176,34 @@ object PromptQuickEdit {
         else -> replace(text, selection.range, "## ${text.slice(selection.range)} ##")
     }
 
+    /** Mixed selections first become comments; only an all-comment selection is unwrapped. */
+    fun toggleComments(text: String, selections: List<QuickEditSelection>): QuickEditResult {
+        val selected = selections.distinctBy { it.range }.sortedBy { it.range.start }
+        if (selected.isEmpty()) return QuickEditResult.Unsupported
+        if (selected.zipWithNext().any { (a, b) -> a.range.endExclusive > b.range.start }) return QuickEditResult.Unsupported
+        val commentAll = selected.any { it.type != QuickEditUnitType.COMMENT }
+        val output = StringBuilder(text.length + selected.size * 6)
+        val offsets = mutableListOf<Int>()
+        var cursor = 0
+        selected.forEach { selection ->
+            output.append(text, cursor, selection.range.start)
+            offsets += output.length
+            val raw = text.slice(selection.range)
+            output.append(
+                when {
+                    commentAll && selection.type == QuickEditUnitType.COMMENT -> raw
+                    commentAll -> "## $raw ##"
+                    else -> raw.removePrefix("##").removeSuffix("##").trim()
+                },
+            )
+            cursor = selection.range.endExclusive
+        }
+        output.append(text, cursor, text.length)
+        val changed = output.toString()
+        return if (changed == text) QuickEditResult.Unsupported
+        else QuickEditResult.Changed(changed, offsets.firstOrNull(), offsets)
+    }
+
     fun delete(text: String, selection: QuickEditSelection): QuickEditResult {
         val parent = selection.parentWeightRange
         if (parent != null) {
@@ -127,6 +217,19 @@ object PromptQuickEdit {
             return replace(text, group.range, replacement)
         }
         return deleteRangeWithSeparator(text, selection.range, parse(text).map { it.range })
+    }
+
+    fun deleteMany(text: String, selections: List<QuickEditSelection>): QuickEditResult {
+        if (selections.isEmpty()) return QuickEditResult.Unsupported
+        var current = text
+        selections.distinctBy { it.range }.sortedByDescending { it.range.start }.forEach { original ->
+            if (current.isEmpty()) return@forEach
+            val offset = original.range.start.coerceIn(0, current.lastIndex)
+            val live = selectionAt(current, offset) ?: return QuickEditResult.Unsupported
+            val changed = delete(current, live) as? QuickEditResult.Changed ?: return QuickEditResult.Unsupported
+            current = changed.text
+        }
+        return if (current == text) QuickEditResult.Unsupported else QuickEditResult.Changed(current)
     }
 
     fun dropTargets(text: String, selection: QuickEditSelection): List<QuickEditDropTarget> {
@@ -158,6 +261,26 @@ object PromptQuickEdit {
         // Keep the source slot visible: dropping back there is an intentional no-op and
         // gives drag gestures a stable cancel destination.
         return targets.distinctBy { Triple(it.parentWeightRange, it.itemIndex, it.offset) }
+    }
+
+    fun dropTargets(text: String, selections: List<QuickEditSelection>): List<QuickEditDropTarget> {
+        val selected = selections.distinctBy { it.range }
+        val representative = selected.firstOrNull() ?: return emptyList()
+        val top = parse(text)
+        val targets = dropTargets(text, representative).filter { target ->
+            target.parentWeightRange == null || selected.none { it.type == QuickEditUnitType.WEIGHT_GROUP }
+        }
+        val selectedTopRanges = selected.filter { it.parentWeightRange == null }.map { it.range }.toSet()
+        val selectedParentRanges = selected.mapNotNull { it.parentWeightRange }.toSet()
+        return targets.filterNot { target ->
+            target.parentWeightRange in selectedTopRanges ||
+                target.parentWeightRange != null && target.parentWeightRange in selectedParentRanges &&
+                top.firstOrNull { it.range == target.parentWeightRange }?.children?.let { children ->
+                    val before = children.getOrNull(target.itemIndex - 1)?.range
+                    val after = children.getOrNull(target.itemIndex)?.range
+                    before in selected.map { it.range }.toSet() && after in selected.map { it.range }.toSet()
+                } == true
+        }.distinctBy { Triple(it.parentWeightRange, it.itemIndex, it.offset) }
     }
 
     fun move(text: String, selection: QuickEditSelection, target: QuickEditDropTarget): QuickEditResult {
@@ -210,6 +333,84 @@ object PromptQuickEdit {
             }
         }
         return QuickEditResult.Changed(output)
+    }
+
+    /** Moves selected units as one ordered bundle. Destination weight, when present, is inherited. */
+    fun moveMany(text: String, selections: List<QuickEditSelection>, target: QuickEditDropTarget): QuickEditResult {
+        val selected = selections.distinctBy { it.range }.sortedBy { it.range.start }
+        if (selected.isEmpty()) return QuickEditResult.Unsupported
+        if (selected.size == 1) return move(text, selected.single(), target)
+        if (selected.any { it.type == QuickEditUnitType.WEIGHT_GROUP } && target.parentWeightRange != null) {
+            return QuickEditResult.Unsupported
+        }
+        val top = parse(text)
+        val allUnits = top.flatMap { listOf(it) + it.children }
+        if (selected.any { selection -> allUnits.none { it.range == selection.range } }) return QuickEditResult.Unsupported
+
+        data class Node(
+            val type: QuickEditUnitType,
+            val weight: BigDecimal?,
+            val raw: String,
+            val originalRange: QuickEditRange,
+            val children: MutableList<Node> = mutableListOf(),
+            var dirty: Boolean = false,
+        )
+        fun node(unit: QuickEditUnit): Node = Node(
+            unit.type,
+            unit.weightValue,
+            text.slice(unit.range),
+            unit.range,
+            unit.children.map { child -> Node(child.type, null, text.slice(child.range), child.range) }.toMutableList(),
+        )
+        val nodes = top.map(::node).toMutableList()
+        val selectedRanges = selected.map { it.range }.toSet()
+        val moved = mutableListOf<Node>()
+        selected.forEach { selection ->
+            if (selection.parentWeightRange == null) {
+                nodes.firstOrNull { it.originalRange == selection.range }?.let(moved::add)
+            } else {
+                nodes.firstOrNull { it.originalRange == selection.parentWeightRange }
+                    ?.children?.firstOrNull { it.originalRange == selection.range }
+                    ?.let(moved::add)
+            }
+        }
+        if (moved.size != selected.size) return QuickEditResult.Unsupported
+        nodes.removeAll { it.originalRange in selectedRanges }
+        nodes.toList().forEach { group ->
+            val removed = group.children.removeAll { it.originalRange in selectedRanges }
+            if (removed) group.dirty = true
+            if (group.type == QuickEditUnitType.WEIGHT_GROUP && group.children.isEmpty()) nodes.remove(group)
+        }
+
+        if (target.parentWeightRange == null) {
+            val targetOriginalIndex = target.itemIndex.coerceIn(0, top.size)
+            val index = nodes.count { node -> top.indexOfFirst { it.range == node.originalRange } in 0 until targetOriginalIndex }
+            nodes.addAll(index.coerceIn(0, nodes.size), moved)
+        } else {
+            val destination = nodes.firstOrNull { it.originalRange == target.parentWeightRange }
+                ?: return QuickEditResult.Unsupported
+            val original = top.firstOrNull { it.range == target.parentWeightRange }
+                ?: return QuickEditResult.Unsupported
+            val targetIndex = target.itemIndex.coerceIn(0, original.children.size)
+            val index = destination.children.count { child ->
+                original.children.indexOfFirst { it.range == child.originalRange } in 0 until targetIndex
+            }
+            destination.children.addAll(index.coerceIn(0, destination.children.size), moved.map { it.copy(type = QuickEditUnitType.TAG, children = mutableListOf()) })
+            destination.dirty = true
+        }
+
+        fun render(node: Node): String = if (node.type == QuickEditUnitType.WEIGHT_GROUP && node.dirty) {
+            "${format(node.weight!!)}::${node.children.joinToString(", ") { it.raw.trim() }} ::"
+        } else node.raw
+        val originalSeparators = top.zipWithNext { a, b -> text.substring(a.range.endExclusive, b.range.start) }
+        val fallbackSeparator = originalSeparators.firstOrNull() ?: ", "
+        val output = buildString {
+            nodes.forEachIndexed { index, node ->
+                if (index > 0) append(originalSeparators.getOrNull(index - 1) ?: fallbackSeparator)
+                append(render(node))
+            }
+        }
+        return if (output == text) QuickEditResult.Unsupported else QuickEditResult.Changed(output)
     }
 
     fun format(value: BigDecimal): String = value.stripTrailingZeros().toPlainString()

@@ -66,4 +66,22 @@ class TagInsertionTest {
     fun `insertion after trailing comma has normalized spacing`() {
         assertEquals("shirt, smile", TagInsertion.insert("shirt,", 6, listOf("smile")))
     }
+
+    @Test
+    fun `exact insertion uses quick edit line boundary and preserves selected order`() {
+        val content = "shirt,\nsolo"
+        assertEquals(
+            "shirt, blue eyes, long hair,\nsolo",
+            TagInsertion.insertAt(content, content.indexOf('\n'), listOf("blue_eyes", "long_hair")),
+        )
+    }
+
+    @Test
+    fun `exact insertion inside a weight inherits the existing group`() {
+        val content = "1.2::shirt,\nsolo ::"
+        assertEquals(
+            "1.2::shirt, blue eyes,\nsolo ::",
+            TagInsertion.insertAt(content, content.indexOf('\n'), listOf("blue_eyes")),
+        )
+    }
 }

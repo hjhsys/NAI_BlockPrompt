@@ -445,6 +445,10 @@ fun GenerateScreen(
                 tokenRange = if (supportsT5Estimate && appSettings.showTokenEstimates) sectionTokenRange(session.base.prompts, session.base.textRendering) else null,
                 viewModel = viewModel,
                 onCollapsedChange = viewModel::setBaseCollapsed,
+                onOpenTagDictionary = { owner, polarity, blockId, cursor ->
+                    viewModel.beginTagInsert(owner, polarity, blockId, cursor, exactOffset = true)
+                    onOpenTagDatabase()
+                },
                 onTagEditorState = { owner, polarity, blockId, focused, cursor ->
                     activeTagTarget = if (focused) TagEditorTarget(owner, polarity, blockId, cursor)
                     else activeTagTarget?.takeUnless { it.blockId == blockId }
@@ -464,6 +468,10 @@ fun GenerateScreen(
                 showTextRendering = appSettings.useTextRendering,
                 tokenRange = if (supportsT5Estimate && appSettings.showTokenEstimates) sectionTokenRange(character.prompts, character.textRendering) else null,
                 viewModel = viewModel,
+                onOpenTagDictionary = { owner, polarity, blockId, cursor ->
+                    viewModel.beginTagInsert(owner, polarity, blockId, cursor, exactOffset = true)
+                    onOpenTagDatabase()
+                },
             ) { owner, polarity, blockId, focused, cursor ->
                 activeTagTarget = if (focused) TagEditorTarget(owner, polarity, blockId, cursor)
                 else activeTagTarget?.takeUnless { it.blockId == blockId }
@@ -1374,6 +1382,7 @@ private fun CharacterSectionCard(
     showTextRendering: Boolean,
     tokenRange: TokenRange?,
     viewModel: MainViewModel,
+    onOpenTagDictionary: (PromptOwner, PromptPolarity, String, Int) -> Unit,
     onTagEditorState: (PromptOwner, PromptPolarity, String, Boolean, Int) -> Unit,
 ) {
     val enabledDescription = stringResource(R.string.character_generation_enabled)
@@ -1464,6 +1473,7 @@ private fun CharacterSectionCard(
                     defaultBlockScale = defaultBlockScale,
                     showTextRendering = showTextRendering,
                     viewModel = viewModel,
+                    onOpenTagDictionary = onOpenTagDictionary,
                     onTagEditorState = onTagEditorState,
                     blockContainerColor = characterContainerColor,
                 )
@@ -1488,6 +1498,7 @@ private fun PromptSectionCard(
     tokenRange: TokenRange?,
     viewModel: MainViewModel,
     onCollapsedChange: (Boolean) -> Unit,
+    onOpenTagDictionary: (PromptOwner, PromptPolarity, String, Int) -> Unit,
     onTagEditorState: (PromptOwner, PromptPolarity, String, Boolean, Int) -> Unit,
 ) {
     val containerColor = if (owner == PromptOwner.Base) {
@@ -1514,7 +1525,7 @@ private fun PromptSectionCard(
             val promptBlockColor = if (owner == PromptOwner.Base) {
                 lerp(containerColor, Color.Black, if (MaterialTheme.colorScheme.background.luminance() < 0.5f) 0.16f else 0.055f)
             } else containerColor
-            if (!collapsed) PromptSectionContent(title, owner, pair, selectedPolarity, textRendering, showFormatter, quickEditWeightStep, blockScaleEnabled, defaultBlockScale, showTextRendering, viewModel, onTagEditorState, promptBlockColor)
+            if (!collapsed) PromptSectionContent(title, owner, pair, selectedPolarity, textRendering, showFormatter, quickEditWeightStep, blockScaleEnabled, defaultBlockScale, showTextRendering, viewModel, onOpenTagDictionary, onTagEditorState, promptBlockColor)
         }
     }
 }
@@ -1532,6 +1543,7 @@ private fun PromptSectionContent(
     defaultBlockScale: String,
     showTextRendering: Boolean,
     viewModel: MainViewModel,
+    onOpenTagDictionary: (PromptOwner, PromptPolarity, String, Int) -> Unit,
     onTagEditorState: (PromptOwner, PromptPolarity, String, Boolean, Int) -> Unit,
     blockContainerColor: Color,
 ) {
@@ -1588,6 +1600,7 @@ private fun PromptSectionContent(
                 viewModel.formatBlock(owner, selectedPolarity, block.id, formatter, selectionStart, selectionEnd)
             },
             viewModel = viewModel,
+            onOpenTagDictionary = { cursor -> onOpenTagDictionary(owner, selectedPolarity, block.id, cursor) },
             onEditorState = { focused, cursor -> onTagEditorState(owner, selectedPolarity, block.id, focused, cursor) },
         )
     }
@@ -1704,6 +1717,7 @@ private fun PromptBlockCard(
     onCut: () -> Unit,
     onFormat: (BlockFormatter, Int, Int) -> Unit,
     viewModel: MainViewModel,
+    onOpenTagDictionary: (Int) -> Unit,
     onEditorState: (Boolean, Int) -> Unit,
 ) {
     val validation = remember(block.content) { PromptProcessor.validateWeights(block.content) }
@@ -1717,7 +1731,9 @@ private fun PromptBlockCard(
     // Quick Edit is transient editor UI. Removing a block card by collapsing its Base or
     // Character parent must dispose it rather than restore a stale popup/drag state.
     var quickEdit by remember(block.id) { mutableStateOf(false) }
-    var quickSelection by remember(block.id) { mutableStateOf<QuickEditSelection?>(null) }
+    var quickSelections by remember(block.id) { mutableStateOf<List<QuickEditSelection>>(emptyList()) }
+    var quickPasteOffset by remember(block.id) { mutableStateOf<Int?>(null) }
+    var quickPasteText by remember(block.id) { mutableStateOf<String?>(null) }
     var showQuickMore by remember { mutableStateOf(false) }
     var showWeightInput by remember { mutableStateOf(false) }
     var weightInput by remember { mutableStateOf("") }
@@ -1748,7 +1764,9 @@ private fun PromptBlockCard(
     LaunchedEffect(quickEditExitSignal) {
         if (quickEditExitSignal > 0) {
             quickEdit = false
-            quickSelection = null
+            quickSelections = emptyList()
+            quickPasteOffset = null
+            quickPasteText = null
             moveTargets = emptyList()
             showQuickMore = false
             showWeightInput = false
@@ -1757,7 +1775,9 @@ private fun PromptBlockCard(
     LaunchedEffect(block.collapsed) {
         if (block.collapsed) {
             quickEdit = false
-            quickSelection = null
+            quickSelections = emptyList()
+            quickPasteOffset = null
+            quickPasteText = null
             moveTargets = emptyList()
             showQuickMore = false
         }
@@ -1773,7 +1793,9 @@ private fun PromptBlockCard(
                 editorValue = synchronizePromptEditorValue(editorValue, block.content).also {
                     lastEditorSelection = it.selection
                 }
-                quickSelection = null
+                quickSelections = emptyList()
+                quickPasteOffset = null
+                quickPasteText = null
                 moveTargets = emptyList()
             }
         }
@@ -1789,12 +1811,17 @@ private fun PromptBlockCard(
         if (changed.text == editorValue.text) return
         if (!weightAdjustment) finishWeightAdjustment()
         val previous = editorValue
-        val resolvedSelection = changed.preferredSelectionOffset?.let { PromptQuickEdit.selectionAt(changed.text, it) }
+        val selectionOffsets = changed.preferredSelectionOffsets.ifEmpty {
+            changed.preferredSelectionOffset?.let(::listOf).orEmpty()
+        }
+        val resolvedSelections = selectionOffsets.mapNotNull { PromptQuickEdit.selectionAt(changed.text, it) }.distinctBy { it.range }
         // Publish the text and its replacement semantic selection together. Remember the
         // pending value so the subsequent Session echo cannot briefly clear UI state.
         pendingQuickContent = changed.text
         editorValue = TextFieldValue(changed.text, TextRange(changed.text.length.coerceAtMost(previous.selection.end)))
-        quickSelection = resolvedSelection
+        quickSelections = resolvedSelections
+        quickPasteOffset = null
+        quickPasteText = null
         moveTargets = emptyList()
         val coalesceKey = if (weightAdjustment) weightAdjustmentKey ?: "${block.id}:${System.nanoTime()}".also { weightAdjustmentKey = it } else null
         viewModel.updateBlockContent(owner, polarity, block.id, changed.text, previous.selection.start, previous.selection.end, if (weightAdjustment) PromptEditKind.WEIGHT_ADJUSTMENT else PromptEditKind.DISCRETE, coalesceKey)
@@ -1816,7 +1843,9 @@ private fun PromptBlockCard(
     fun toggleQuickEdit() {
         finishWeightAdjustment()
         quickEdit = !quickEdit
-        quickSelection = null
+        quickSelections = emptyList()
+        quickPasteOffset = null
+        quickPasteText = null
         moveTargets = emptyList()
         if (quickEdit) {
             keyboardController?.hide()
@@ -1929,7 +1958,7 @@ private fun PromptBlockCard(
             title = { Text(stringResource(R.string.quick_edit_set_weight)) },
             text = { OutlinedTextField(weightInput, { weightInput = it }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text)) },
             confirmButton = { TextButton(onClick = {
-                quickSelection?.let { selection -> weightInput.toBigDecimalOrNull()?.let { applyQuick(PromptQuickEdit.setWeight(editorValue.text, selection, it)) } }
+                quickSelections.singleOrNull()?.let { selection -> weightInput.toBigDecimalOrNull()?.let { applyQuick(PromptQuickEdit.setWeight(editorValue.text, selection, it)) } }
                 showWeightInput = false
             }, enabled = weightInput.toBigDecimalOrNull()?.compareTo(java.math.BigDecimal.ZERO)?.let { it != 0 } == true) { Text(stringResource(R.string.confirm)) } },
             dismissButton = { TextButton(onClick = { showWeightInput = false }) { Text(stringResource(R.string.cancel)) } },
@@ -1956,7 +1985,9 @@ private fun PromptBlockCard(
             confirmButton = { TextButton(onClick = {
                 confirmClear = false
                 quickEdit = false
-                quickSelection = null
+                quickSelections = emptyList()
+                quickPasteOffset = null
+                quickPasteText = null
                 moveTargets = emptyList()
                 viewModel.clearBlockContent(owner, polarity, block.id, editorValue.selection.start, editorValue.selection.end)
             }) { Text(stringResource(R.string.clear_block_content), color = MaterialTheme.colorScheme.error) } },
@@ -2146,35 +2177,74 @@ private fun PromptBlockCard(
                 } else {
                     Color(0xFF9A6700)
                 }
-                val activeSelection = quickSelection
+                val activeSelection = quickSelections.lastOrNull()
                 val quickStep = quickEditWeightStep.toBigDecimalOrNull() ?: java.math.BigDecimal("0.1")
-                val canQuickWeight = !block.locked && activeSelection != null &&
-                    (activeSelection.type == QuickEditUnitType.WEIGHT_GROUP || activeSelection.type == QuickEditUnitType.TAG && activeSelection.parentWeightRange == null)
+                val canQuickWeight = !block.locked && PromptQuickEdit.canAdjustWeight(quickSelections)
                 val quickCommentDescription = stringResource(R.string.quick_edit_comment)
                 if (quickEdit) {
                     QuickEditPromptSurface(
                         text = editorValue.text,
-                        selection = quickSelection,
+                        selections = quickSelections,
+                        pasteOffset = quickPasteOffset,
                         insertionOffset = moveTargets.getOrNull(moveTargetIndex)?.offset,
                         highColor = highColor,
                         lowColor = lowColor,
                         neutralWeightColor = neutralWeightColor,
                         commentColor = commentColor,
                         randomizerColor = randomizerColor,
-                        onTapOffset = { offset ->
+                        onTapOffset = { offset, insertionIntent ->
                             finishWeightAdjustment()
-                            quickSelection = offset?.let { PromptQuickEdit.selectionAt(editorValue.text, it) }
-                            moveTargets = emptyList()
-                            if (offset == null) {
-                                viewModel.clearAutocomplete()
-                                viewModel.cancelTagInsert()
+                            val candidate = if (insertionIntent) null else PromptQuickEdit.selectionAt(editorValue.text, offset)
+                            if (candidate != null) {
+                                quickSelections = PromptQuickEdit.toggleSelection(quickSelections, candidate)
+                                quickPasteOffset = null
+                                quickPasteText = null
+                            } else {
+                                quickSelections = emptyList()
+                                val insertionOffset = offset.coerceIn(0, editorValue.text.length)
+                                if (quickPasteOffset == insertionOffset) {
+                                    quickPasteOffset = null
+                                    quickPasteText = null
+                                } else {
+                                    quickPasteOffset = insertionOffset
+                                    quickPasteText = clipboard.getText()?.text?.takeIf { it.isNotBlank() }
+                                }
                             }
+                            moveTargets = emptyList()
+                            viewModel.clearAutocomplete()
+                            viewModel.cancelTagInsert()
                         },
                         moveTargets = moveTargets,
                         activeMoveTarget = moveTargetIndex,
                         onMoveTarget = { moveTargetIndex = it },
-                        onDrop = { target -> quickSelection?.let { applyQuick(PromptQuickEdit.move(editorValue.text, it, target)) } },
-                        dragPreview = activeSelection?.let { editorValue.text.substring(it.range.start, it.range.endExclusive) }.orEmpty(),
+                        onDrop = { target -> applyQuick(PromptQuickEdit.moveMany(editorValue.text, quickSelections, target)) },
+                        dragPreview = PromptQuickEdit.selectedText(editorValue.text, quickSelections),
+                        pasteToolbar = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                TextButton(
+                                    onClick = { quickPasteOffset?.let(onOpenTagDictionary) },
+                                    enabled = !block.locked && quickPasteOffset != null,
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                ) {
+                                    Icon(Icons.Default.Storage, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(5.dp))
+                                    Text(stringResource(R.string.quick_edit_choose_tags), style = MaterialTheme.typography.labelMedium)
+                                }
+                                TextButton(
+                                    onClick = {
+                                        val offset = quickPasteOffset
+                                        val value = quickPasteText
+                                        if (offset != null && value != null) applyQuick(PromptQuickEdit.pasteAt(editorValue.text, offset, value))
+                                    },
+                                    enabled = !block.locked && !quickPasteText.isNullOrBlank(),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                ) {
+                                    Icon(Icons.Default.ContentPaste, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(5.dp))
+                                    Text(stringResource(R.string.quick_edit_paste), style = MaterialTheme.typography.labelMedium)
+                                }
+                            }
+                        },
                         toolbar = {
                             if (activeSelection != null) {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(1.dp)) {
@@ -2182,27 +2252,27 @@ private fun PromptBlockCard(
                                         R.string.quick_edit_decrease,
                                         Icons.Default.Remove,
                                         canQuickWeight,
-                                        onStep = { quickSelection?.let { applyQuick(PromptQuickEdit.adjustWeight(editorValue.text, it, quickStep.negate()), weightAdjustment = true) } },
+                                        onStep = { quickSelections.singleOrNull()?.let { applyQuick(PromptQuickEdit.adjustWeight(editorValue.text, it, quickStep.negate()), weightAdjustment = true) } },
                                         onRelease = ::finishWeightAdjustment,
                                     )
                                     RepeatingIconButton(
                                         R.string.quick_edit_increase,
                                         Icons.Default.Add,
                                         canQuickWeight,
-                                        onStep = { quickSelection?.let { applyQuick(PromptQuickEdit.adjustWeight(editorValue.text, it, quickStep), weightAdjustment = true) } },
+                                        onStep = { quickSelections.singleOrNull()?.let { applyQuick(PromptQuickEdit.adjustWeight(editorValue.text, it, quickStep), weightAdjustment = true) } },
                                         onRelease = ::finishWeightAdjustment,
                                     )
                                     TextButton(
-                                        onClick = { applyQuick(PromptQuickEdit.toggleComment(editorValue.text, activeSelection)) },
+                                        onClick = { applyQuick(PromptQuickEdit.toggleComments(editorValue.text, quickSelections)) },
                                         enabled = !block.locked,
                                         contentPadding = PaddingValues(0.dp),
                                         modifier = Modifier.size(36.dp).semantics { contentDescription = "# · $quickCommentDescription" },
                                     ) { Text("##", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Black) }
-                                    SmallIconButton(R.string.delete, Icons.Default.Delete, !block.locked) { applyQuick(PromptQuickEdit.delete(editorValue.text, activeSelection)) }
+                                    SmallIconButton(R.string.delete, Icons.Default.Delete, !block.locked) { applyQuick(PromptQuickEdit.deleteMany(editorValue.text, quickSelections)) }
                                     IconButton(
                                         onClick = {
                                             if (moveTargets.isEmpty()) {
-                                                moveTargets = PromptQuickEdit.dropTargets(editorValue.text, activeSelection)
+                                                moveTargets = PromptQuickEdit.dropTargets(editorValue.text, quickSelections)
                                                 moveTargetIndex = 0
                                             } else moveTargets = emptyList()
                                         },
@@ -2216,8 +2286,8 @@ private fun PromptBlockCard(
                                     Box {
                                         SmallIconButton(R.string.more_actions, Icons.Default.MoreVert, true) { showQuickMore = true }
                                         DropdownMenu(showQuickMore, { showQuickMore = false }) {
-                                            DropdownMenuItem(text = { Text(stringResource(R.string.quick_edit_copy)) }, onClick = { clipboard.setText(AnnotatedString(editorValue.text.substring(activeSelection.range.start, activeSelection.range.endExclusive))); showQuickMore = false })
-                                            DropdownMenuItem(text = { Text(stringResource(R.string.cut)) }, enabled = !block.locked, onClick = { clipboard.setText(AnnotatedString(editorValue.text.substring(activeSelection.range.start, activeSelection.range.endExclusive))); applyQuick(PromptQuickEdit.delete(editorValue.text, activeSelection)); showQuickMore = false })
+                                            DropdownMenuItem(text = { Text(stringResource(R.string.quick_edit_copy)) }, onClick = { clipboard.setText(AnnotatedString(PromptQuickEdit.selectedText(editorValue.text, quickSelections))); showQuickMore = false })
+                                            DropdownMenuItem(text = { Text(stringResource(R.string.cut)) }, enabled = !block.locked, onClick = { clipboard.setText(AnnotatedString(PromptQuickEdit.selectedText(editorValue.text, quickSelections))); applyQuick(PromptQuickEdit.deleteMany(editorValue.text, quickSelections)); showQuickMore = false })
                                             DropdownMenuItem(text = { Text(stringResource(R.string.quick_edit_set_weight)) }, enabled = canQuickWeight, onClick = { weightInput = activeSelection.weightValue?.let(PromptQuickEdit::format) ?: "1.0"; showWeightInput = true; showQuickMore = false })
                                         }
                                     }
@@ -2331,25 +2401,26 @@ private fun PromptBlockCard(
 @Composable
 private fun QuickEditPromptSurface(
     text: String,
-    selection: QuickEditSelection?,
+    selections: List<QuickEditSelection>,
+    pasteOffset: Int?,
     insertionOffset: Int?,
     highColor: Color,
     lowColor: Color,
     neutralWeightColor: Color,
     commentColor: Color,
     randomizerColor: Color,
-    onTapOffset: (Int?) -> Unit,
+    onTapOffset: (Int, Boolean) -> Unit,
     moveTargets: List<QuickEditDropTarget>,
     activeMoveTarget: Int,
     onMoveTarget: (Int) -> Unit,
     onDrop: (QuickEditDropTarget) -> Unit,
     dragPreview: String,
+    pasteToolbar: @Composable () -> Unit,
     toolbar: @Composable () -> Unit,
 ) {
     // Keep the previous layout until Text publishes the replacement one. Resetting this
     // on every text mutation makes the anchored popup disappear for one composition.
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
-    var windowOrigin by remember { mutableStateOf(Offset.Zero) }
     var dragPosition by remember { mutableStateOf<Offset?>(null) }
     var validDrag by remember { mutableStateOf(false) }
     var dragTargetIndex by remember(moveTargets) { mutableStateOf(if (moveTargets.isEmpty()) 0 else activeMoveTarget.coerceIn(moveTargets.indices)) }
@@ -2361,10 +2432,11 @@ private fun QuickEditPromptSurface(
         MaterialTheme.colorScheme.primaryContainer.copy(alpha = .78f)
     } else MaterialTheme.colorScheme.secondaryContainer.copy(alpha = .58f)
     val insertionColor = MaterialTheme.colorScheme.primary
-    val annotated = remember(base, selection, selectedBackground) {
+    val annotated = remember(base, selections, selectedBackground) {
         buildAnnotatedString {
             append(base)
-            selection?.range?.let { range ->
+            selections.forEach { selection ->
+                val range = selection.range
                 if (range.start in 0..length && range.endExclusive in 0..length) {
                     addStyle(SpanStyle(background = selectedBackground, fontWeight = FontWeight.SemiBold), range.start, range.endExclusive)
                 }
@@ -2377,7 +2449,7 @@ private fun QuickEditPromptSurface(
         color = Color.Transparent,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Box(Modifier.fillMaxWidth().onGloballyPositioned { windowOrigin = it.positionInWindow() }) {
+        Box(Modifier.fillMaxWidth()) {
             Text(
                 text = annotated,
                 minLines = 3,
@@ -2388,28 +2460,31 @@ private fun QuickEditPromptSurface(
                     .padding(horizontal = 16.dp, vertical = 14.dp)
                     .drawBehind {
                         val result = layout
-                        val offset = insertionOffset?.coerceIn(0, text.length)
-                        if (result != null && offset != null && moveTargets.isNotEmpty()) {
+                        val offset = (if (moveTargets.isNotEmpty()) insertionOffset else pasteOffset)?.coerceIn(0, text.length)
+                        if (result != null && offset != null) {
                             val rect = result.getCursorRect(offset)
                             drawLine(insertionColor, Offset(rect.left, rect.top), Offset(rect.left, rect.bottom), strokeWidth = 2.dp.toPx())
                         }
                     }
                     .pointerInput(text, moveTargets) {
                         if (moveTargets.isEmpty()) detectTapGestures { position -> layout?.let { result ->
-                            if (position.y < 0f || position.y > result.size.height || position.x < 0f) onTapOffset(null)
+                            if (position.y < 0f || position.y > result.size.height || position.x < 0f) {
+                                onTapOffset(text.length, true)
+                            }
                             else {
                                 val line = result.getLineForVerticalPosition(position.y)
                                 val outsideText = position.x > result.getLineRight(line) + 8.dp.toPx()
-                                onTapOffset(if (outsideText) null else result.getOffsetForPosition(position))
+                                val offset = if (outsideText) result.getLineEnd(line, visibleEnd = true) else result.getOffsetForPosition(position)
+                                onTapOffset(offset.coerceIn(0, text.length), outsideText)
                             }
                         } }
                     }
-                    .pointerInput(text, moveTargets, selection) {
-                        if (moveTargets.isNotEmpty() && selection != null) {
+                    .pointerInput(text, moveTargets, selections) {
+                        if (moveTargets.isNotEmpty() && selections.isNotEmpty()) {
                             detectDragGestures(
                                 onDragStart = { start ->
                                     val offset = layout?.getOffsetForPosition(start)
-                                    validDrag = offset != null && selection.range.contains(offset)
+                                    validDrag = offset != null && selections.any { it.range.contains(offset) }
                                     if (validDrag) { dragPosition = start; dragTargetIndex = activeMoveTarget.coerceIn(moveTargets.indices) }
                                 },
                                 onDragCancel = { validDrag = false; dragPosition = null },
@@ -2443,7 +2518,7 @@ private fun QuickEditPromptSurface(
                     },
             )
             val result = layout
-            val selected = selection
+            val selected = selections.lastOrNull()
             if (result != null && selected != null && dragPosition == null) {
                 val layoutTextLength = result.layoutInput.text.length
                 val startRect = result.getBoundingBox(selected.range.start.coerceIn(0, (layoutTextLength - 1).coerceAtLeast(0)))
@@ -2456,8 +2531,19 @@ private fun QuickEditPromptSurface(
                     Surface(shape = MaterialTheme.shapes.small, tonalElevation = 5.dp, shadowElevation = 6.dp) { toolbar() }
                 }
             }
+            if (result != null && selected == null && pasteOffset != null && dragPosition == null) {
+                val cursor = result.getCursorRect(pasteOffset.coerceIn(0, result.layoutInput.text.length))
+                val insetX = with(density) { 16.dp.toPx() }
+                val insetY = with(density) { 14.dp.toPx() }
+                Popup(
+                    popupPositionProvider = QuickEditPopupPositionProvider(cursor.translate(insetX, insetY), with(density) { 6.dp.roundToPx() }),
+                    properties = androidx.compose.ui.window.PopupProperties(focusable = false, clippingEnabled = false),
+                ) {
+                    Surface(shape = MaterialTheme.shapes.small, tonalElevation = 5.dp, shadowElevation = 6.dp) { pasteToolbar() }
+                }
+            }
             dragPosition?.takeIf { validDrag }?.let { local ->
-                Popup(alignment = Alignment.TopStart, offset = IntOffset((windowOrigin.x + local.x + 12).toInt(), (windowOrigin.y + local.y - 28).toInt())) {
+                Popup(alignment = Alignment.TopStart, offset = IntOffset((local.x + 12).toInt(), (local.y - 28).toInt())) {
                     Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.secondaryContainer, shadowElevation = 8.dp) {
                         Text(dragPreview, Modifier.padding(horizontal = 10.dp, vertical = 6.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }

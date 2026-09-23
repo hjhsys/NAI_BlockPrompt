@@ -16,4 +16,10 @@ object TagInsertion {
             appendSeparatorAtEnd = false,
         ).text
     }
+
+    fun insertAt(content: String, offset: Int, tags: List<String>): String {
+        if (tags.isEmpty()) return content
+        val inserted = tags.joinToString(", ") { it.replace('_', ' ') }
+        return (PromptQuickEdit.pasteAt(content, offset, inserted) as? QuickEditResult.Changed)?.text ?: content
+    }
 }

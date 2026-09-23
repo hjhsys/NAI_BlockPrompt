@@ -687,9 +687,15 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         }
         }
     }
-    fun beginTagInsert(owner: PromptOwner, polarity: PromptPolarity, blockId: String, cursor: Int) {
+    fun beginTagInsert(
+        owner: PromptOwner,
+        polarity: PromptPolarity,
+        blockId: String,
+        cursor: Int,
+        exactOffset: Boolean = false,
+    ) {
         clearAutocomplete()
-        tagInsertTarget = TagInsertTarget(owner, polarity, blockId, cursor)
+        tagInsertTarget = TagInsertTarget(owner, polarity, blockId, cursor, exactOffset)
         _tagInsertAvailable.value = true
     }
     fun insertDictionaryTags(tags: List<String>) {
@@ -700,7 +706,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             target.owner,
             target.polarity,
             target.blockId,
-            TagInsertion.insert(block.content, target.cursor, tags),
+            if (target.exactOffset) TagInsertion.insertAt(block.content, target.cursor, tags)
+            else TagInsertion.insert(block.content, target.cursor, tags),
             target.cursor,
             target.cursor,
             PromptEditKind.DISCRETE,
@@ -1253,6 +1260,7 @@ private data class TagInsertTarget(
     val polarity: PromptPolarity,
     val blockId: String,
     val cursor: Int,
+    val exactOffset: Boolean,
 )
 
 data class TagInsertReturnTarget(
