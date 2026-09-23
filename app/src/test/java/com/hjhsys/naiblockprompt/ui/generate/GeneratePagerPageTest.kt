@@ -6,6 +6,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class GeneratePagerPageTest {
+    @Test fun `sticky prompt toolbar only appears for active toolbar below viewport`() {
+        assertFalse(shouldShowStickyPromptToolbar(false, 900f, 800f, 4f))
+        assertFalse(shouldShowStickyPromptToolbar(true, 700f, 800f, 4f))
+        assertTrue(shouldShowStickyPromptToolbar(true, 796f, 800f, 4f))
+        assertTrue(shouldShowStickyPromptToolbar(true, 900f, 800f, 4f))
+        assertFalse(shouldShowStickyPromptToolbar(true, Float.NaN, 800f, 4f))
+    }
     @Test fun `generation workspace uses four stable pages`() {
         assertEquals(0, GenerateNavigationPolicy.SETTINGS_PAGE)
         assertEquals(1, GenerateNavigationPolicy.GENERATE_PAGE)

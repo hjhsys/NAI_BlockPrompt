@@ -43,6 +43,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.window.DialogProperties
 import kotlin.math.atan2
 import kotlin.math.PI
@@ -118,6 +119,138 @@ import com.hjhsys.naiblockprompt.ui.library.RestoreDialog
 
 internal val LocalQuickEditExitSignal = staticCompositionLocalOf { 0 }
 
+private class StickyPromptToolbarState(
+    val blockId: String,
+    val label: String,
+    val quickEdit: Boolean,
+    val canUndo: Boolean,
+    val canRedo: Boolean,
+    val showFormatter: Boolean,
+    val autocomplete: StickyAutocompleteState?,
+    val onUndo: () -> Unit,
+    val onRedo: () -> Unit,
+    val onToggleQuickEdit: () -> Unit,
+    val onFormatMultiline: () -> Unit,
+    val onFormatSingleLine: () -> Unit,
+)
+
+private class StickyAutocompleteState(
+    val local: List<TagSuggestion>,
+    val novelAi: List<TagSuggestion>,
+    val danbooru: List<TagSuggestion>,
+    val wildcards: List<TagSuggestion>,
+    val loading: Boolean,
+    val novelAiFailed: Boolean,
+    val danbooruFailed: Boolean,
+    val requestStartedAtNanos: Long,
+    val onSelect: (TagSuggestion) -> Unit,
+)
+
+private class PromptToolbarHost(
+    val viewportBottomInWindow: Float,
+    val update: (String, StickyPromptToolbarState?) -> Unit,
+)
+
+private val LocalPromptToolbarHost = staticCompositionLocalOf<PromptToolbarHost?> { null }
+
+internal fun shouldShowStickyPromptToolbar(
+    active: Boolean,
+    inlineToolbarTopInWindow: Float,
+    viewportBottomInWindow: Float,
+    thresholdPx: Float,
+): Boolean = active &&
+    inlineToolbarTopInWindow.isFinite() &&
+    viewportBottomInWindow.isFinite() &&
+    inlineToolbarTopInWindow >= viewportBottomInWindow - thresholdPx
+
+@Composable
+private fun StickyPromptToolbar(state: StickyPromptToolbarState, modifier: Modifier = Modifier) {
+    var showFormatterMenu by remember { mutableStateOf(false) }
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        shadowElevation = 8.dp,
+        tonalElevation = 3.dp,
+    ) {
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 46.dp).padding(horizontal = 7.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(1.dp),
+        ) {
+            Text(
+                state.label,
+                modifier = Modifier.weight(1f).padding(horizontal = 5.dp),
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            IconButton(state.onUndo, enabled = state.canUndo, modifier = Modifier.size(36.dp)) {
+                Icon(Icons.Default.Undo, stringResource(R.string.undo_prompt_edit), Modifier.size(20.dp))
+            }
+            IconButton(state.onRedo, enabled = state.canRedo, modifier = Modifier.size(36.dp)) {
+                Icon(Icons.Default.Redo, stringResource(R.string.redo_prompt_edit), Modifier.size(20.dp))
+            }
+            CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 36.dp) {
+                FilterChip(
+                    selected = state.quickEdit,
+                    onClick = state.onToggleQuickEdit,
+                    label = { Text(stringResource(R.string.quick_edit), fontSize = 11.sp, maxLines = 1) },
+                    leadingIcon = { Icon(Icons.Default.TouchApp, null, Modifier.size(15.dp)) },
+                )
+            }
+            if (state.showFormatter) Box {
+                IconButton(onClick = { showFormatterMenu = true }, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Default.MoreVert, stringResource(R.string.more_actions), Modifier.size(20.dp))
+                }
+                DropdownMenu(showFormatterMenu, { showFormatterMenu = false }) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.format_multiline)) },
+                        onClick = { showFormatterMenu = false; state.onFormatMultiline() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.format_single_line)) },
+                        onClick = { showFormatterMenu = false; state.onFormatSingleLine() },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StickyPromptEditorControls(state: StickyPromptToolbarState, modifier: Modifier = Modifier) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        state.autocomplete?.let { suggestions ->
+            Surface(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 260.dp),
+                shape = MaterialTheme.shapes.large,
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                tonalElevation = 4.dp,
+                shadowElevation = 6.dp,
+            ) {
+                Column(
+                    Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 5.dp),
+                ) {
+                    AutocompleteSuggestions(
+                        local = suggestions.local,
+                        novelAi = suggestions.novelAi,
+                        danbooru = suggestions.danbooru,
+                        wildcards = suggestions.wildcards,
+                        loading = suggestions.loading,
+                        novelAiFailed = suggestions.novelAiFailed,
+                        danbooruFailed = suggestions.danbooruFailed,
+                        requestStartedAtNanos = suggestions.requestStartedAtNanos,
+                        onSelect = suggestions.onSelect,
+                    )
+                }
+            }
+        }
+        StickyPromptToolbar(state)
+    }
+}
+
 @Composable
 fun GenerateScreen(
     session: Session?,
@@ -188,6 +321,8 @@ fun GenerateScreen(
         viewModel.consumeTagInsertReturnTarget(target.revision)
     }
     var shortcutArea by remember { mutableStateOf(IntSize.Zero) }
+    var promptViewportBottomInWindow by remember { mutableFloatStateOf(Float.POSITIVE_INFINITY) }
+    var stickyPromptToolbar by remember { mutableStateOf<StickyPromptToolbarState?>(null) }
     var databasePosition by rememberSaveable { mutableStateOf(floatArrayOf(-1f, -1f)) }
     var colorPosition by rememberSaveable { mutableStateOf(floatArrayOf(-1f, -1f)) }
     if (duplicateWarning) AlertDialog(
@@ -251,7 +386,19 @@ fun GenerateScreen(
                 ),
             )
         },
-    ) { innerPadding -> Box(Modifier.fillMaxSize().padding(innerPadding).onSizeChanged { shortcutArea = it }) {
+    ) { innerPadding -> Box(
+        Modifier.fillMaxSize().padding(innerPadding)
+            .onSizeChanged { shortcutArea = it }
+            .onGloballyPositioned { coordinates ->
+                promptViewportBottomInWindow = coordinates.positionInWindow().y + coordinates.size.height
+            },
+    ) {
+      CompositionLocalProvider(
+          LocalPromptToolbarHost provides PromptToolbarHost(promptViewportBottomInWindow) { blockId, state ->
+              if (state != null) stickyPromptToolbar = state
+              else if (stickyPromptToolbar?.blockId == blockId) stickyPromptToolbar = null
+          },
+      ) {
       LazyColumn(
         state = promptListState,
         modifier = Modifier.fillMaxSize().pointerInput(Unit) {
@@ -261,7 +408,12 @@ fun GenerateScreen(
                 viewModel.cancelTagInsert()
             }
         },
-        contentPadding = PaddingValues(12.dp),
+        contentPadding = PaddingValues(
+            start = 12.dp,
+            top = 12.dp,
+            end = 12.dp,
+            bottom = 76.dp,
+        ),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         if (session.blockScaleEnabled) item {
@@ -344,6 +496,7 @@ fun GenerateScreen(
             }
         }
       }
+      }
       PromptScrollIndicator(promptListState, Modifier.align(Alignment.CenterEnd))
       activeTagTarget?.let { target ->
           DraggablePromptShortcut(
@@ -378,6 +531,12 @@ fun GenerateScreen(
                   colorTarget?.let { viewModel.insertColor(it.owner, it.polarity, it.blockId, it.cursor, hex) }
                   showColorHelper = false
               },
+          )
+      }
+      stickyPromptToolbar?.let { toolbar ->
+          StickyPromptEditorControls(
+              state = toolbar,
+              modifier = Modifier.align(Alignment.BottomCenter).padding(horizontal = 12.dp, vertical = 6.dp),
           )
       }
     } }
@@ -1294,6 +1453,7 @@ private fun CharacterSectionCard(
             }
             if (!character.collapsed) {
                 PromptSectionContent(
+                    ownerLabel = stringResource(R.string.character_prompt, index + 1),
                     owner = PromptOwner.Character(character.id),
                     pair = character.prompts,
                     selectedPolarity = character.selectedPolarity,
@@ -1354,13 +1514,14 @@ private fun PromptSectionCard(
             val promptBlockColor = if (owner == PromptOwner.Base) {
                 lerp(containerColor, Color.Black, if (MaterialTheme.colorScheme.background.luminance() < 0.5f) 0.16f else 0.055f)
             } else containerColor
-            if (!collapsed) PromptSectionContent(owner, pair, selectedPolarity, textRendering, showFormatter, quickEditWeightStep, blockScaleEnabled, defaultBlockScale, showTextRendering, viewModel, onTagEditorState, promptBlockColor)
+            if (!collapsed) PromptSectionContent(title, owner, pair, selectedPolarity, textRendering, showFormatter, quickEditWeightStep, blockScaleEnabled, defaultBlockScale, showTextRendering, viewModel, onTagEditorState, promptBlockColor)
         }
     }
 }
 
 @Composable
 private fun PromptSectionContent(
+    ownerLabel: String,
     owner: PromptOwner,
     pair: PromptPair,
     selectedPolarity: PromptPolarity,
@@ -1400,6 +1561,7 @@ private fun PromptSectionContent(
     val newBlockName = stringResource(R.string.default_block_name, blocks.size + 1)
     blocks.forEachIndexed { index, block ->
         PromptBlockCard(
+            ownerLabel = ownerLabel,
             owner = owner,
             polarity = selectedPolarity,
             block = block,
@@ -1517,6 +1679,7 @@ private fun TextRenderingSlot(
 
 @Composable
 private fun PromptBlockCard(
+    ownerLabel: String,
     owner: PromptOwner,
     polarity: PromptPolarity,
     block: PromptBlock,
@@ -1572,6 +1735,9 @@ private fun PromptBlockCard(
     val undoableBlocks by viewModel.undoablePromptBlocks.collectAsStateWithLifecycle()
     val redoableBlocks by viewModel.redoablePromptBlocks.collectAsStateWithLifecycle()
     val undoKey = remember(owner, polarity, block.id) { PromptUndoKey(owner, polarity, block.id) }
+    val toolbarHost = LocalPromptToolbarHost.current
+    val density = LocalDensity.current
+    var inlineToolbarTopInWindow by remember(block.id) { mutableFloatStateOf(Float.NaN) }
     var editorValue by remember(block.id) {
         mutableStateOf(TextFieldValue(block.content, TextRange(block.content.length)))
     }
@@ -1632,6 +1798,108 @@ private fun PromptBlockCard(
         moveTargets = emptyList()
         val coalesceKey = if (weightAdjustment) weightAdjustmentKey ?: "${block.id}:${System.nanoTime()}".also { weightAdjustmentKey = it } else null
         viewModel.updateBlockContent(owner, polarity, block.id, changed.text, previous.selection.start, previous.selection.end, if (weightAdjustment) PromptEditKind.WEIGHT_ADJUSTMENT else PromptEditKind.DISCRETE, coalesceKey)
+    }
+    fun performUndo() {
+        finishWeightAdjustment()
+        viewModel.undoBlockContent(owner, polarity, block.id, editorValue.selection.start, editorValue.selection.end)?.let { restored ->
+            editorValue = TextFieldValue(restored.content, TextRange(restored.selectionStart, restored.selectionEnd))
+            lastEditorSelection = editorValue.selection
+        }
+    }
+    fun performRedo() {
+        finishWeightAdjustment()
+        viewModel.redoBlockContent(owner, polarity, block.id, editorValue.selection.start, editorValue.selection.end)?.let { restored ->
+            editorValue = TextFieldValue(restored.content, TextRange(restored.selectionStart, restored.selectionEnd))
+            lastEditorSelection = editorValue.selection
+        }
+    }
+    fun toggleQuickEdit() {
+        finishWeightAdjustment()
+        quickEdit = !quickEdit
+        quickSelection = null
+        moveTargets = emptyList()
+        if (quickEdit) {
+            keyboardController?.hide()
+            focusManager.clearFocus()
+            viewModel.clearAutocomplete()
+        }
+    }
+    fun formatMultiline() {
+        finishWeightAdjustment()
+        onFormat(BlockFormatter.MULTILINE, editorValue.selection.start, editorValue.selection.end)
+    }
+    fun formatSingleLine() {
+        finishWeightAdjustment()
+        onFormat(BlockFormatter.SINGLE_LINE, editorValue.selection.start, editorValue.selection.end)
+    }
+    fun selectAutocompleteSuggestion(suggestion: TagSuggestion) {
+        val fragment = autocomplete.fragment ?: return
+        if (!isCurrentAutocompleteFragment(editorValue, fragment)) {
+            viewModel.clearAutocomplete()
+            return
+        }
+        val replacement = PromptAutocomplete.replace(editorValue.text, fragment, suggestion.tag)
+        val previous = editorValue
+        editorValue = TextFieldValue(replacement.text, TextRange(replacement.cursor))
+        lastEditorSelection = editorValue.selection
+        viewModel.updateBlockContent(
+            owner,
+            polarity,
+            block.id,
+            replacement.text,
+            previous.selection.start,
+            previous.selection.end,
+            PromptEditKind.DISCRETE,
+        )
+        viewModel.recordAutocompleteUse(suggestion)
+        viewModel.clearAutocomplete()
+    }
+    val canUndo = !block.locked && undoKey in undoableBlocks
+    val canRedo = !block.locked && undoKey in redoableBlocks
+    val stickyToolbarLabel = "$ownerLabel · ${block.name}"
+    val stickyAutocomplete = if (!quickEdit && autocomplete.blockId == block.id) {
+        StickyAutocompleteState(
+            local = autocomplete.local,
+            novelAi = autocomplete.novelAi,
+            danbooru = autocomplete.danbooru,
+            wildcards = autocomplete.wildcards,
+            loading = autocomplete.loading,
+            novelAiFailed = autocomplete.novelAiFailed,
+            danbooruFailed = autocomplete.danbooruFailed,
+            requestStartedAtNanos = autocomplete.requestStartedAtNanos,
+            onSelect = ::selectAutocompleteSuggestion,
+        )
+    } else null
+    val stickyToolbarState = remember(block.id, stickyToolbarLabel, quickEdit, canUndo, canRedo, showFormatter, autocomplete) {
+        StickyPromptToolbarState(
+            blockId = block.id,
+            label = stickyToolbarLabel,
+            quickEdit = quickEdit,
+            canUndo = canUndo,
+            canRedo = canRedo,
+            showFormatter = showFormatter,
+            autocomplete = stickyAutocomplete,
+            onUndo = ::performUndo,
+            onRedo = ::performRedo,
+            onToggleQuickEdit = ::toggleQuickEdit,
+            onFormatMultiline = ::formatMultiline,
+            onFormatSingleLine = ::formatSingleLine,
+        )
+    }
+    val stickyThresholdPx = with(density) { 4.dp.toPx() }
+    val showStickyToolbar = toolbarHost?.let { host ->
+        shouldShowStickyPromptToolbar(
+            active = editorFocused || quickEdit,
+            inlineToolbarTopInWindow = inlineToolbarTopInWindow,
+            viewportBottomInWindow = host.viewportBottomInWindow,
+            thresholdPx = stickyThresholdPx,
+        )
+    } == true
+    LaunchedEffect(toolbarHost, showStickyToolbar, stickyToolbarState) {
+        toolbarHost?.update(block.id, stickyToolbarState.takeIf { showStickyToolbar })
+    }
+    DisposableEffect(toolbarHost, block.id) {
+        onDispose { toolbarHost?.update(block.id, null) }
     }
     if (showBlockScale) AlertDialog(
         onDismissRequest = { showBlockScale = false },
@@ -2001,7 +2269,9 @@ private fun PromptBlockCard(
                     )
                 }
                 Row(
-                    Modifier.fillMaxWidth(),
+                    Modifier.fillMaxWidth().onGloballyPositioned { coordinates ->
+                        inlineToolbarTopInWindow = coordinates.positionInWindow().y
+                    },
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
@@ -2013,46 +2283,28 @@ private fun PromptBlockCard(
                     SmallIconButton(
                         R.string.undo_prompt_edit,
                         Icons.Default.Undo,
-                        !block.locked && undoKey in undoableBlocks,
-                    ) {
-                        finishWeightAdjustment()
-                        viewModel.undoBlockContent(owner, polarity, block.id, editorValue.selection.start, editorValue.selection.end)?.let { restored ->
-                            editorValue = TextFieldValue(restored.content, TextRange(restored.selectionStart, restored.selectionEnd))
-                            lastEditorSelection = editorValue.selection
-                        }
-                    }
+                        canUndo,
+                    ) { performUndo() }
                     SmallIconButton(
                         R.string.redo_prompt_edit,
                         Icons.Default.Redo,
-                        !block.locked && undoKey in redoableBlocks,
-                    ) {
-                        finishWeightAdjustment()
-                        viewModel.redoBlockContent(owner, polarity, block.id, editorValue.selection.start, editorValue.selection.end)?.let { restored ->
-                            editorValue = TextFieldValue(restored.content, TextRange(restored.selectionStart, restored.selectionEnd))
-                            lastEditorSelection = editorValue.selection
-                        }
-                    }
+                        canRedo,
+                    ) { performRedo() }
                     FilterChip(
                         selected = quickEdit,
-                        onClick = {
-                            finishWeightAdjustment()
-                            quickEdit = !quickEdit
-                            quickSelection = null
-                            moveTargets = emptyList()
-                            if (quickEdit) { keyboardController?.hide(); focusManager.clearFocus(); viewModel.clearAutocomplete() }
-                        },
+                        onClick = ::toggleQuickEdit,
                         label = { Text(stringResource(R.string.quick_edit), style = MaterialTheme.typography.labelSmall) },
                         leadingIcon = { Icon(Icons.Default.TouchApp, null, Modifier.size(16.dp)) },
                     )
                     Spacer(Modifier.weight(1f))
                     if (showFormatter) {
                         TextButton(
-                            onClick = { finishWeightAdjustment(); onFormat(BlockFormatter.MULTILINE, editorValue.selection.start, editorValue.selection.end) },
+                            onClick = ::formatMultiline,
                             enabled = !block.locked,
                             contentPadding = PaddingValues(horizontal = 7.dp),
                         ) { Text(stringResource(R.string.format_multiline), style = MaterialTheme.typography.labelSmall, maxLines = 1) }
                         TextButton(
-                            onClick = { finishWeightAdjustment(); onFormat(BlockFormatter.SINGLE_LINE, editorValue.selection.start, editorValue.selection.end) },
+                            onClick = ::formatSingleLine,
                             enabled = !block.locked,
                             contentPadding = PaddingValues(horizontal = 7.dp),
                         ) { Text(stringResource(R.string.format_single_line), style = MaterialTheme.typography.labelSmall, maxLines = 1) }
@@ -2068,28 +2320,7 @@ private fun PromptBlockCard(
                         novelAiFailed = autocomplete.novelAiFailed,
                         danbooruFailed = autocomplete.danbooruFailed,
                         requestStartedAtNanos = autocomplete.requestStartedAtNanos,
-                        onSelect = { suggestion ->
-                            val fragment = autocomplete.fragment ?: return@AutocompleteSuggestions
-                            if (!isCurrentAutocompleteFragment(editorValue, fragment)) {
-                                viewModel.clearAutocomplete()
-                                return@AutocompleteSuggestions
-                            }
-                            val replacement = PromptAutocomplete.replace(editorValue.text, fragment, suggestion.tag)
-                            val previous = editorValue
-                            editorValue = TextFieldValue(replacement.text, TextRange(replacement.cursor))
-                            lastEditorSelection = editorValue.selection
-                            viewModel.updateBlockContent(
-                                owner,
-                                polarity,
-                                block.id,
-                                replacement.text,
-                                previous.selection.start,
-                                previous.selection.end,
-                                PromptEditKind.DISCRETE,
-                            )
-                            viewModel.recordAutocompleteUse(suggestion)
-                            viewModel.clearAutocomplete()
-                        },
+                        onSelect = ::selectAutocompleteSuggestion,
                     )
                 }
             }
@@ -2269,13 +2500,15 @@ private fun AutocompleteSuggestions(
             )
         }
     }
-    if (wildcards.isNotEmpty()) SuggestionRow(R.string.autocomplete_wildcard_row, wildcards, onSelect)
-    if (local.isNotEmpty()) SuggestionRow(R.string.autocomplete_local_row, local, onSelect)
-    if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-    if (novelAi.isNotEmpty()) SuggestionRow(R.string.autocomplete_nai_row, novelAi, onSelect)
-    if (danbooru.isNotEmpty()) SuggestionRow(R.string.autocomplete_danbooru_row, danbooru, onSelect)
-    if (novelAiFailed) Text(stringResource(R.string.autocomplete_nai_failed), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-    if (danbooruFailed) Text(stringResource(R.string.autocomplete_danbooru_failed), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+    Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+        if (wildcards.isNotEmpty()) SuggestionRow(R.string.autocomplete_wildcard_row, wildcards, onSelect)
+        if (local.isNotEmpty()) SuggestionRow(R.string.autocomplete_local_row, local, onSelect)
+        if (loading) LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp))
+        if (novelAi.isNotEmpty()) SuggestionRow(R.string.autocomplete_nai_row, novelAi, onSelect)
+        if (danbooru.isNotEmpty()) SuggestionRow(R.string.autocomplete_danbooru_row, danbooru, onSelect)
+        if (novelAiFailed) Text(stringResource(R.string.autocomplete_nai_failed), color = MaterialTheme.colorScheme.error, fontSize = 11.sp, lineHeight = 13.sp)
+        if (danbooruFailed) Text(stringResource(R.string.autocomplete_danbooru_failed), color = MaterialTheme.colorScheme.error, fontSize = 11.sp, lineHeight = 13.sp)
+    }
 }
 
 @Composable
@@ -2283,14 +2516,19 @@ private fun SuggestionRow(@StringRes label: Int, suggestions: List<TagSuggestion
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(
             text = stringResource(label),
-            fontSize = 9.sp,
+            fontSize = 8.sp,
             maxLines = 1,
             softWrap = false,
-            modifier = Modifier.width(40.dp),
+            modifier = Modifier.width(34.dp),
         )
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            items(suggestions, key = { "${it.source}:${it.tag}" }) { suggestion ->
-                SuggestionChip(onClick = { onSelect(suggestion) }, label = { Text(suggestion.tag.replace('_', ' '), maxLines = 1) })
+        CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 32.dp) {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                items(suggestions, key = { "${it.source}:${it.tag}" }) { suggestion ->
+                    SuggestionChip(
+                        onClick = { onSelect(suggestion) },
+                        label = { Text(suggestion.tag.replace('_', ' '), fontSize = 12.sp, maxLines = 1) },
+                    )
+                }
             }
         }
     }
