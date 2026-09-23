@@ -1,7 +1,9 @@
 package com.hjhsys.naiblockprompt.domain.prompt
 
 import com.hjhsys.naiblockprompt.domain.model.PromptBlock
+import com.hjhsys.naiblockprompt.domain.model.BlockScaleMode
 import com.hjhsys.naiblockprompt.domain.model.TextRenderingState
+import java.math.BigDecimal
 
 data class WeightValidation(
     val delimiterCount: Int,
@@ -215,14 +217,57 @@ object PromptProcessor {
     fun joinEnabledBlocks(
         blocks: List<PromptBlock>,
         normalizeWeightClosings: Boolean,
+        blockScaleEnabled: Boolean = false,
+        defaultBlockScale: BigDecimal = BigDecimal.ONE,
     ): String = blocks
         .asSequence()
         .filter { it.enabled }
         .sortedBy { it.order }
-        .map { stripComments(it.content).trim() }
+        .map { block ->
+            val content = stripComments(block.content).trim()
+            val scale = when (block.scaleMode) {
+                BlockScaleMode.DEFAULT -> defaultBlockScale
+                BlockScaleMode.CUSTOM -> block.customScale.toBigDecimalOrNull() ?: BigDecimal.ONE
+            }
+            if (blockScaleEnabled) scalePrompt(content, scale) else content
+        }
         .filter { it.isNotEmpty() }
         .map { if (normalizeWeightClosings) normalizeWeightClosings(it) else it }
         .joinToString("\n\n") { if (it.endsWith(',')) it else "$it," }
+
+    /** Applies a block-only generation scale without changing the editor source string. */
+    fun scalePrompt(input: String, scale: BigDecimal): String {
+        if (input.isBlank() || scale.compareTo(BigDecimal.ONE) == 0) return input
+        if (validateWeights(input).hasUnclosedWeight) return input
+        val items = splitEditableItems(input).map(String::trim).filter(String::isNotEmpty)
+        if (items.isEmpty()) return input
+        val output = mutableListOf<String>()
+        val plain = mutableListOf<String>()
+        fun flushPlain() {
+            if (plain.isNotEmpty()) {
+                output += "${decimalText(scale)}::${plain.joinToString(", ")} ::"
+                plain.clear()
+            }
+        }
+        val explicit = Regex("^(-?(?:\\d+(?:\\.\\d*)?|\\.\\d+))::([\\s\\S]*)::$")
+        items.forEach { item ->
+            val match = explicit.matchEntire(item)
+            if (match == null) {
+                plain += item
+            } else {
+                flushPlain()
+                val weight = match.groupValues[1].toBigDecimalOrNull()
+                if (weight == null) output += item else {
+                    val content = match.groupValues[2].trim()
+                    output += "${decimalText(weight.multiply(scale))}::$content ::"
+                }
+            }
+        }
+        flushPlain()
+        return output.joinToString(", ")
+    }
+
+    private fun decimalText(value: BigDecimal): String = value.stripTrailingZeros().toPlainString()
 
     /** Appends the dedicated literal Text Rendering clause after all regular blocks. */
     fun appendTextRendering(prompt: String, textRendering: TextRenderingState): String {

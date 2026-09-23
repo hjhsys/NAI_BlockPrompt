@@ -11,6 +11,7 @@ import androidx.compose.material.icons.filled.Waves
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Eco
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -85,6 +86,8 @@ fun ImageCardActions(
     onApplySeed: (() -> Unit)? = null,
     promptSelectionEnabled: Boolean = false,
     onImportPromptSelection: (() -> Unit)? = null,
+    promptViewEnabled: Boolean = false,
+    onViewPrompt: (() -> Unit)? = null,
 ) {
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
@@ -95,6 +98,15 @@ fun ImageCardActions(
                     modifier = Modifier.size(40.dp),
                 ) {
                     Icon(Icons.Default.Eco, stringResource(R.string.apply_history_seed), Modifier.size(18.dp))
+                }
+            }
+            onViewPrompt?.let { viewPrompt ->
+                IconButton(
+                    onClick = viewPrompt,
+                    enabled = promptViewEnabled,
+                    modifier = Modifier.size(40.dp),
+                ) {
+                    Icon(Icons.Default.Description, stringResource(R.string.view_prompt), Modifier.size(18.dp))
                 }
             }
             FilledTonalButton(

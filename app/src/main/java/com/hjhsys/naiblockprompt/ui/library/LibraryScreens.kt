@@ -1,5 +1,7 @@
 package com.hjhsys.naiblockprompt.ui.library
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.StringRes
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -22,17 +24,25 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
+import android.widget.Toast
 import coil3.compose.AsyncImage
 import com.hjhsys.naiblockprompt.R
 import com.hjhsys.naiblockprompt.data.library.*
 import com.hjhsys.naiblockprompt.data.local.entity.SavedBlockEntity
 import com.hjhsys.naiblockprompt.data.local.entity.SavedFolderEntity
+import com.hjhsys.naiblockprompt.data.local.entity.SavedFolderKind
 import com.hjhsys.naiblockprompt.ui.MainViewModel
 import com.hjhsys.naiblockprompt.ui.RestoreOptions
 import com.hjhsys.naiblockprompt.ui.components.AppTitleBar
@@ -41,11 +51,14 @@ import com.hjhsys.naiblockprompt.ui.components.quotaStatusText
 import com.hjhsys.naiblockprompt.ui.generate.compactModelName
 import com.hjhsys.naiblockprompt.ui.components.ImageCardActions
 import com.hjhsys.naiblockprompt.ui.components.ImageViewer
+import com.hjhsys.naiblockprompt.ui.components.ImageCompareCandidate
 import com.hjhsys.naiblockprompt.domain.editor.BaseSetImportSelection
 import com.hjhsys.naiblockprompt.domain.editor.PromptOwner
 import com.hjhsys.naiblockprompt.domain.editor.PromptCherryPick
 import com.hjhsys.naiblockprompt.domain.editor.PromptCherryPickDraft
+import com.hjhsys.naiblockprompt.domain.editor.CharacterImportMode
 import com.hjhsys.naiblockprompt.ui.generate.PromptCherryPickDialog
+import com.hjhsys.naiblockprompt.ui.generate.ProcessedPromptDialog
 import com.hjhsys.naiblockprompt.domain.generation.SeedSelection
 import com.hjhsys.naiblockprompt.domain.model.SavedSetKind
 import java.io.File
@@ -70,8 +83,12 @@ fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, isActive
     }
     var restore by remember { mutableStateOf<HistoryItem?>(null) }
     var cherryPick by remember { mutableStateOf<PromptCherryPickDraft?>(null) }
+    var promptToView by remember { mutableStateOf<com.hjhsys.naiblockprompt.domain.model.SessionSnapshot?>(null) }
     var viewerReference by remember { mutableStateOf<String?>(null) }
     var actionImage by remember { mutableStateOf<HistoryItem?>(null) }
+    var deleteCandidate by remember { mutableStateOf<HistoryItem?>(null) }
+    var deleteOriginal by remember { mutableStateOf(false) }
+    var deleteFailed by remember { mutableStateOf(false) }
     actionImage?.let { item -> com.hjhsys.naiblockprompt.ui.components.ImageActionsDialog(item.entity.imagePath, viewModel) { actionImage = null } }
     restore?.let { item -> RestoreDialog(item, { restore = null }) { options -> viewModel.restoreHistory(item, options); restore = null; onRestored() } }
     cherryPick?.let { draft -> session?.let { current ->
@@ -79,7 +96,53 @@ fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, isActive
             viewModel.appendCherryPickedSelection(blocks, selected, destination)
         }
     } }
-    viewerReference?.let { reference -> ImageViewer(reference) { viewerReference = null } }
+    promptToView?.let { snapshot ->
+        snapshot.generation?.let { prompt -> ProcessedPromptDialog(prompt) { promptToView = null } }
+            ?: SessionPromptDialog(snapshot.session) { promptToView = null }
+    }
+    viewerReference?.let { reference ->
+        ImageViewer(
+            reference = reference,
+            comparisonCandidates = history.filter { item ->
+                item.originalExists && item.entity.imagePath != reference
+            }.map { item ->
+                ImageCompareCandidate(
+                    reference = item.entity.imagePath,
+                    thumbnailReference = item.entity.thumbnailPath,
+                    dateLabel = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(item.entity.createdAt)),
+                    modelLabel = item.entity.model,
+                    promptPreview = item.snapshot?.generation?.let { generation ->
+                        (listOf(generation.basePositive) + generation.characterPositive)
+                            .filter(String::isNotBlank)
+                            .joinToString(", ")
+                    } ?: item.snapshot?.session?.base?.prompts?.positiveBlocks
+                        ?.filter { it.enabled && it.content.isNotBlank() }
+                        ?.joinToString(", ") { it.content }
+                        .orEmpty(),
+                )
+            },
+        ) { viewerReference = null }
+    }
+    deleteCandidate?.let { item ->
+        AlertDialog(
+            onDismissRequest = { deleteCandidate = null },
+            title = { Text(stringResource(R.string.delete_history_title)) },
+            text = { CheckRow(R.string.delete_history_original, deleteOriginal) { deleteOriginal = it } },
+            confirmButton = { TextButton(onClick = {
+                viewModel.deleteHistory(item.entity, deleteOriginal) { result ->
+                    if (result == HistoryDeleteResult.OriginalDeleteFailed) deleteFailed = true
+                }
+                deleteCandidate = null
+            }) { Text(stringResource(R.string.delete), color = MaterialTheme.colorScheme.error) } },
+            dismissButton = { TextButton(onClick = { deleteCandidate = null }) { Text(stringResource(R.string.cancel)) } },
+        )
+    }
+    if (deleteFailed) AlertDialog(
+        onDismissRequest = { deleteFailed = false },
+        title = { Text(stringResource(R.string.delete_history_image_failed_title)) },
+        text = { Text(stringResource(R.string.delete_history_image_failed)) },
+        confirmButton = { TextButton(onClick = { deleteFailed = false }) { Text(stringResource(R.string.confirm)) } },
+    )
     Scaffold(contentWindowInsets = WindowInsets(0, 0, 0, 0), topBar = { AppTitleBar(
         R.string.history_title,
         menuItems = listOf(AppTitleMenuItem(R.string.nav_settings, Icons.Default.Settings, onClick = onOpenSettings)),
@@ -131,7 +194,7 @@ fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, isActive
                                 item.snapshot?.generation?.let {
                                     Text(stringResource(R.string.used_seed, it.usedSeed), Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
                                 }
-                                IconButton(onClick = { viewModel.deleteHistory(item.entity) }) {
+                                IconButton(onClick = { deleteOriginal = false; deleteCandidate = item }) {
                                     Icon(Icons.Default.Delete, stringResource(R.string.delete), tint = MaterialTheme.colorScheme.error)
                                 }
                             }
@@ -152,11 +215,42 @@ fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, isActive
                         onImportPromptSelection = item.snapshot?.session?.let { source ->
                             { cherryPick = PromptCherryPick.fromSession(source) }
                         },
+                        promptViewEnabled = item.snapshot != null,
+                        onViewPrompt = item.snapshot?.let { snapshot -> { promptToView = snapshot } },
                     )
                 }
             }
         }
     } }
+}
+
+@Composable
+private fun SessionPromptDialog(session: com.hjhsys.naiblockprompt.domain.model.Session, dismiss: () -> Unit) {
+    fun com.hjhsys.naiblockprompt.domain.model.PromptPair.text(positive: Boolean): String =
+        (if (positive) positiveBlocks else negativeBlocks).joinToString("\n") { it.content }.ifEmpty { "—" }
+    AlertDialog(
+        onDismissRequest = dismiss,
+        title = { Text(stringResource(R.string.prompt_view_title)) },
+        text = { SelectionContainer { Column(Modifier.fillMaxWidth().heightIn(max = 620.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            PromptViewSection(stringResource(R.string.restore_base_positive), session.base.prompts.text(true))
+            PromptViewSection(stringResource(R.string.restore_base_negative), session.base.prompts.text(false))
+            session.characters.sortedBy { it.order }.forEachIndexed { index, character ->
+                PromptViewSection("${stringResource(R.string.character_prompt, index + 1)} · ${stringResource(R.string.positive)}", character.prompts.text(true))
+                PromptViewSection("${stringResource(R.string.character_prompt, index + 1)} · ${stringResource(R.string.negative)}", character.prompts.text(false))
+            }
+        } } },
+        confirmButton = { TextButton(onClick = dismiss) { Text(stringResource(R.string.confirm)) } },
+    )
+}
+
+@Composable
+private fun PromptViewSection(title: String, value: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text(title, style = MaterialTheme.typography.titleSmall)
+        Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = MaterialTheme.shapes.small) {
+            Text(value, Modifier.fillMaxWidth().padding(10.dp), style = MaterialTheme.typography.bodySmall)
+        }
+    }
 }
 
 @Composable
@@ -167,6 +261,7 @@ internal fun RestoreDialog(item: HistoryItem, dismiss: () -> Unit, confirm: (Res
     var characters by rememberSaveable { mutableStateOf(true) }; var seed by rememberSaveable { mutableStateOf(true) }
     var inputImage by rememberSaveable { mutableStateOf(false) }
     var wildcardOriginal by rememberSaveable { mutableStateOf(true) }
+    var characterMode by rememberSaveable { mutableStateOf(CharacterImportMode.REPLACE) }
     val hasWildcard = item.snapshot?.session?.let { snapshot ->
         (snapshot.base.prompts.positiveBlocks + snapshot.base.prompts.negativeBlocks + snapshot.characters.flatMap { it.prompts.positiveBlocks + it.prompts.negativeBlocks }).any { "__" in it.content }
     } == true
@@ -179,7 +274,9 @@ internal fun RestoreDialog(item: HistoryItem, dismiss: () -> Unit, confirm: (Res
                 CheckRow(R.string.restore_base_positive, basePositive) { basePositive = it }
                 CheckRow(R.string.restore_base_negative, baseNegative) { baseNegative = it }
             }
-            CheckRow(R.string.restore_characters, characters) { characters = it }; CheckRow(R.string.restore_seed, seed) { seed = it }
+            CheckRow(R.string.restore_characters, characters) { characters = it }
+            if (characters) CharacterImportModePicker(characterMode) { characterMode = it }
+            CheckRow(R.string.restore_seed, seed) { seed = it }
             if (hasWildcard) CheckRow(R.string.restore_wildcard_original, wildcardOriginal) { wildcardOriginal = it }
             if (item.snapshot?.session?.generationSettings?.imageInput != null) {
                 val input = item.snapshot.session.generationSettings.imageInput
@@ -201,7 +298,22 @@ internal fun RestoreDialog(item: HistoryItem, dismiss: () -> Unit, confirm: (Res
         seed = seed,
         inputImage = inputImage,
         wildcardOriginal = wildcardOriginal,
+        characterMode = characterMode,
     )) }, enabled = item.snapshot != null) { Text(stringResource(R.string.load)) } }, dismissButton = { TextButton(onClick = dismiss) { Text(stringResource(R.string.cancel)) } })
+}
+
+@Composable
+internal fun CharacterImportModePicker(mode: CharacterImportMode, onChange: (CharacterImportMode) -> Unit) {
+    Column(Modifier.padding(start = 16.dp)) {
+        Row(Modifier.fillMaxWidth().clickable { onChange(CharacterImportMode.REPLACE) }, verticalAlignment = Alignment.CenterVertically) {
+            RadioButton(mode == CharacterImportMode.REPLACE, { onChange(CharacterImportMode.REPLACE) })
+            Text(stringResource(R.string.character_import_replace))
+        }
+        Row(Modifier.fillMaxWidth().clickable { onChange(CharacterImportMode.APPEND) }, verticalAlignment = Alignment.CenterVertically) {
+            RadioButton(mode == CharacterImportMode.APPEND, { onChange(CharacterImportMode.APPEND) })
+            Text(stringResource(R.string.character_import_append))
+        }
+    }
 }
 
 @Composable private fun CheckRow(label: Int, checked: Boolean, change: (Boolean) -> Unit) = CheckRow(stringResource(label), checked, change)
@@ -214,15 +326,17 @@ internal fun RestoreDialog(item: HistoryItem, dismiss: () -> Unit, confirm: (Res
 @Composable
 fun SavedScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onWorkflowFinished: () -> Unit) {
     val blocks by viewModel.savedBlocks.collectAsState(); val folders by viewModel.savedFolders.collectAsState(); val presets by viewModel.presets.collectAsState(); val sets by viewModel.savedSets.collectAsState()
+    val history by viewModel.history.collectAsState()
     val workflow by viewModel.savedWorkflow.collectAsState()
     val pagerState = rememberPagerState { 3 }
     val scope = rememberCoroutineScope()
     val tab = pagerState.currentPage
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
     var search by rememberSaveable { mutableStateOf("") }
     var searchScope by rememberSaveable { mutableStateOf(SavedSearchScope.TITLE_ONLY) }
     var searchMenuExpanded by remember { mutableStateOf(false) }
     var workflowName by rememberSaveable(workflow) { mutableStateOf(when (val active = workflow) { is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveBlock -> active.block.name; is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SavePreset -> "Preset"; else -> "" }) }
-    var workflowFolderId by rememberSaveable(workflow) { mutableStateOf<String?>(null) }
     var folderFilter by rememberSaveable { mutableStateOf("ALL") }
     var overwriteWorkflow by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(workflow) { if (workflow != null) pagerState.scrollToPage(when (workflow) { is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveSet, is com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadSet -> 1; is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SavePreset, com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadPreset -> 2; else -> 0 }) }
@@ -232,9 +346,23 @@ fun SavedScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onWorkflow
     var movingPreset by remember { mutableStateOf<com.hjhsys.naiblockprompt.data.local.entity.PresetEntity?>(null) }
     var movingSet by remember { mutableStateOf<com.hjhsys.naiblockprompt.data.local.entity.SavedSetEntity?>(null) }
     var deletingFolder by remember { mutableStateOf<SavedFolderEntity?>(null) }
+    var selectionMode by remember { mutableStateOf(false) }
+    var selectedIds by remember { mutableStateOf(emptySet<String>()) }
+    var bulkMove by remember { mutableStateOf(false) }
     var baseSetToLoad by remember { mutableStateOf<SavedSetItem?>(null) }
     var loadBasePositive by rememberSaveable { mutableStateOf(true) }
     var loadBaseNegative by rememberSaveable { mutableStateOf(true) }
+    var thumbnailTarget by remember { mutableStateOf<LibraryThumbnailTarget?>(null) }
+    thumbnailTarget?.let { target ->
+        LibraryThumbnailDialog(
+            target = target,
+            generatedImages = history.filter { it.originalExists }.map { it.entity.thumbnailPath to it.entity.imagePath },
+            onDismiss = { thumbnailTarget = null },
+            onChooseThumbnail = { viewModel.setLibraryThumbnail(target.kind, target.id, target.thumbnailPath, it) },
+            onUseGeneratedThumbnail = { viewModel.setLibraryThumbnailFromFile(target.kind, target.id, target.thumbnailPath, it) },
+            onRemoveThumbnail = { viewModel.removeLibraryThumbnail(target.kind, target.id, target.thumbnailPath) },
+        )
+    }
     baseSetToLoad?.let { item ->
         AlertDialog(
             onDismissRequest = { baseSetToLoad = null },
@@ -263,13 +391,29 @@ fun SavedScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onWorkflow
             },
         )
     }
-    if (folderDialog) NameDialog(R.string.new_folder, { folderDialog = false }) { viewModel.createFolder(it); folderDialog = false }
+    val folderKind = when (workflow) {
+        is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveBlock, is com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadBlock -> SavedFolderKind.BLOCK
+        is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveSet, is com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadSet -> SavedFolderKind.SET
+        is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SavePreset, com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadPreset -> SavedFolderKind.PRESET
+        else -> when (tab) { 0 -> SavedFolderKind.BLOCK; 1 -> SavedFolderKind.SET; else -> SavedFolderKind.PRESET }
+    }
+    val visibleFolders = folders.filter { it.kind == folderKind.name }
+    val isSaveWorkflow = workflow is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveBlock ||
+        workflow is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveSet ||
+        workflow is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SavePreset
+    val selectedSaveFolderId = folderFilter.takeUnless { it == "ALL" || it == "NONE" }
+    LaunchedEffect(folderKind, workflow) {
+        folderFilter = if (isSaveWorkflow) "NONE" else "ALL"
+        selectionMode = false
+        selectedIds = emptySet()
+    }
+    if (folderDialog) NameDialog(R.string.new_folder, { folderDialog = false }) { viewModel.createFolder(it, folderKind); folderDialog = false }
     if (folderSelector) AlertDialog(
         onDismissRequest = { folderSelector = false },
         title = { Text(stringResource(R.string.select_folder_filter)) },
         text = {
             LazyColumn(Modifier.heightIn(max = 420.dp)) {
-                item {
+                if (!isSaveWorkflow) item {
                     ListItem(
                         headlineContent = { Text(stringResource(R.string.all_folders)) },
                         leadingContent = { Icon(Icons.Default.Home, null) },
@@ -278,7 +422,7 @@ fun SavedScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onWorkflow
                         modifier = Modifier.clickable { folderFilter = "ALL"; folderSelector = false },
                     )
                 }
-                item {
+                if (!isSaveWorkflow) item {
                     ListItem(
                         headlineContent = { Text(stringResource(when (tab) { 0 -> R.string.library_root_blocks; 1 -> R.string.library_root_sets; else -> R.string.library_root_presets })) },
                         leadingContent = { Icon(Icons.Default.Folder, null) },
@@ -295,7 +439,7 @@ fun SavedScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onWorkflow
                         modifier = Modifier.padding(start = 24.dp).clickable { folderFilter = "NONE"; folderSelector = false },
                     )
                 }
-                items(folders, key = { it.id }) { folder ->
+                items(visibleFolders, key = { it.id }) { folder ->
                     Row(Modifier.fillMaxWidth().padding(start = 24.dp), verticalAlignment = Alignment.CenterVertically) {
                         ListItem(
                             headlineContent = { Text(folder.name) },
@@ -312,34 +456,67 @@ fun SavedScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onWorkflow
         confirmButton = {},
         dismissButton = { TextButton(onClick = { folderSelector = false }) { Text(stringResource(R.string.cancel)) } },
     )
-    if (overwriteWorkflow) AlertDialog(onDismissRequest = { overwriteWorkflow = false }, title = { Text(stringResource(R.string.overwrite_title)) }, text = { Text(stringResource(R.string.overwrite_message, workflowName.trim())) }, confirmButton = { Button(onClick = { overwriteWorkflow = false; when (workflow) { is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SavePreset -> viewModel.finishPresetSave(workflowName, workflowFolderId); is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveSet -> viewModel.finishSetSave(workflowName, workflowFolderId); else -> viewModel.finishBlockSave(workflowName, workflowFolderId) }; onWorkflowFinished() }) { Text(stringResource(R.string.overwrite)) } }, dismissButton = { TextButton(onClick = { overwriteWorkflow = false }) { Text(stringResource(R.string.cancel)) } })
+    if (overwriteWorkflow) AlertDialog(onDismissRequest = { overwriteWorkflow = false }, title = { Text(stringResource(R.string.overwrite_title)) }, text = { Text(stringResource(R.string.overwrite_message, workflowName.trim())) }, confirmButton = { Button(onClick = { overwriteWorkflow = false; when (workflow) { is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SavePreset -> viewModel.finishPresetSave(workflowName, selectedSaveFolderId); is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveSet -> viewModel.finishSetSave(workflowName, selectedSaveFolderId); else -> viewModel.finishBlockSave(workflowName, selectedSaveFolderId) }; onWorkflowFinished() }) { Text(stringResource(R.string.overwrite)) } }, dismissButton = { TextButton(onClick = { overwriteWorkflow = false }) { Text(stringResource(R.string.cancel)) } })
     deletingFolder?.let { folder -> AlertDialog(onDismissRequest = { deletingFolder = null }, title = { Text(stringResource(R.string.delete_folder_title)) }, text = { Text(stringResource(R.string.delete_folder_message, folder.name)) }, confirmButton = { TextButton(onClick = { viewModel.deleteFolder(folder); if (folderFilter == folder.id) folderFilter = "ALL"; deletingFolder = null }) { Text(stringResource(R.string.delete), color = MaterialTheme.colorScheme.error) } }, dismissButton = { TextButton(onClick = { deletingFolder = null }) { Text(stringResource(R.string.cancel)) } }) }
-    movingBlock?.let { block -> AlertDialog(onDismissRequest = { movingBlock = null }, title = { Text(stringResource(R.string.choose_folder)) }, text = { Column { TextButton(onClick = { viewModel.moveSavedBlock(block, null); movingBlock = null }) { Text(stringResource(R.string.no_folder)) }; folders.forEach { folder -> TextButton(onClick = { viewModel.moveSavedBlock(block, folder.id); movingBlock = null }) { Text(folder.name) } } } }, confirmButton = {}) }
-    movingPreset?.let { preset -> AlertDialog(onDismissRequest = { movingPreset = null }, title = { Text(stringResource(R.string.choose_folder)) }, text = { Column { TextButton(onClick = { viewModel.movePreset(preset, null); movingPreset = null }) { Text(stringResource(R.string.no_folder)) }; folders.forEach { folder -> TextButton(onClick = { viewModel.movePreset(preset, folder.id); movingPreset = null }) { Text(folder.name) } } } }, confirmButton = {}) }
-    movingSet?.let { set -> AlertDialog(onDismissRequest = { movingSet = null }, title = { Text(stringResource(R.string.choose_folder)) }, text = { Column { TextButton(onClick = { viewModel.moveSavedSet(set, null); movingSet = null }) { Text(stringResource(R.string.no_folder)) }; folders.forEach { folder -> TextButton(onClick = { viewModel.moveSavedSet(set, folder.id); movingSet = null }) { Text(folder.name) } } } }, confirmButton = {}) }
+    movingBlock?.let { block -> AlertDialog(onDismissRequest = { movingBlock = null }, title = { Text(stringResource(R.string.choose_folder)) }, text = { Column { TextButton(onClick = { viewModel.moveSavedBlock(block, null); movingBlock = null }) { Text(stringResource(R.string.no_folder)) }; visibleFolders.forEach { folder -> TextButton(onClick = { viewModel.moveSavedBlock(block, folder.id); movingBlock = null }) { Text(folder.name) } } } }, confirmButton = {}) }
+    movingPreset?.let { preset -> AlertDialog(onDismissRequest = { movingPreset = null }, title = { Text(stringResource(R.string.choose_folder)) }, text = { Column { TextButton(onClick = { viewModel.movePreset(preset, null); movingPreset = null }) { Text(stringResource(R.string.no_folder)) }; visibleFolders.forEach { folder -> TextButton(onClick = { viewModel.movePreset(preset, folder.id); movingPreset = null }) { Text(folder.name) } } } }, confirmButton = {}) }
+    movingSet?.let { set -> AlertDialog(onDismissRequest = { movingSet = null }, title = { Text(stringResource(R.string.choose_folder)) }, text = { Column { TextButton(onClick = { viewModel.moveSavedSet(set, null); movingSet = null }) { Text(stringResource(R.string.no_folder)) }; visibleFolders.forEach { folder -> TextButton(onClick = { viewModel.moveSavedSet(set, folder.id); movingSet = null }) { Text(folder.name) } } } }, confirmButton = {}) }
+    if (bulkMove) AlertDialog(
+        onDismissRequest = { bulkMove = false },
+        title = { Text(stringResource(R.string.choose_folder)) },
+        text = { Column {
+            fun move(folderId: String?) {
+                when (tab) {
+                    0 -> viewModel.moveSavedBlocks(blocks.filter { it.id in selectedIds }, folderId)
+                    1 -> viewModel.moveSavedSets(sets.map { it.entity }.filter { it.id in selectedIds }, folderId)
+                    else -> viewModel.movePresets(presets.map { it.entity }.filter { it.id in selectedIds }, folderId)
+                }
+                bulkMove = false; selectionMode = false; selectedIds = emptySet()
+            }
+            TextButton(onClick = { move(null) }) { Text(stringResource(R.string.no_folder)) }
+            visibleFolders.forEach { folder -> TextButton(onClick = { move(folder.id) }) { Text(folder.name) } }
+        } },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = { bulkMove = false }) { Text(stringResource(R.string.cancel)) } },
+    )
+    val submitSave = {
+        when (val active = workflow) {
+            is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveBlock -> {
+                if (blocks.any { it.name.equals(workflowName.trim(), true) }) overwriteWorkflow = true
+                else { viewModel.finishBlockSave(workflowName, selectedSaveFolderId); onWorkflowFinished() }
+            }
+            is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SavePreset -> {
+                if (presets.any { it.entity.name.equals(workflowName.trim(), true) }) overwriteWorkflow = true
+                else { viewModel.finishPresetSave(workflowName, selectedSaveFolderId); onWorkflowFinished() }
+            }
+            is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveSet -> {
+                if (sets.any { it.entity.name.equals(workflowName.trim(), true) && it.entity.kind == active.set.kind.name }) overwriteWorkflow = true
+                else { viewModel.finishSetSave(workflowName, selectedSaveFolderId); onWorkflowFinished() }
+            }
+            else -> Unit
+        }
+    }
     Scaffold(
         topBar = {
             if (workflow == null) AppTitleBar(R.string.saved_title, menuItems = listOf(AppTitleMenuItem(R.string.nav_settings, Icons.Default.Settings, onClick = onOpenSettings)))
+            else if (isSaveWorkflow) AppTitleBar(
+                when (workflow) {
+                    is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveBlock -> R.string.save_block_mode
+                    is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SavePreset -> R.string.save_preset_mode
+                    else -> R.string.save_set
+                },
+                directAction = AppTitleMenuItem(R.string.cancel, Icons.Default.Close, onClick = { viewModel.cancelSavedWorkflow(); onWorkflowFinished() }, showLabel = true),
+            )
         },
     ) { screenPadding ->
     Column(
         Modifier.fillMaxSize().padding(screenPadding).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        workflow?.let {
+        workflow?.takeUnless { isSaveWorkflow }?.let {
             ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) { Text(stringResource(when (it) { is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveBlock -> R.string.save_block_mode; is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SavePreset -> R.string.save_preset_mode; is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveSet -> R.string.save_set; is com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadSet -> R.string.load_set; com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadPreset -> R.string.load_preset; else -> R.string.load_block_mode }), style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f)); TextButton(onClick = { viewModel.cancelSavedWorkflow(); onWorkflowFinished() }) { Text(stringResource(R.string.cancel)) } }
-                if (it is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveBlock) {
-                    Text(stringResource(R.string.save_location), style = MaterialTheme.typography.labelLarge)
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) { item { FilterChip(workflowFolderId == null, { workflowFolderId = null }, { Text(stringResource(R.string.no_folder)) }) }; items(folders, key = { folder -> folder.id }) { folder -> FilterChip(workflowFolderId == folder.id, { workflowFolderId = folder.id }, { Text(folder.name) }) } }
-                    OutlinedTextField(workflowName, { workflowName = it }, Modifier.fillMaxWidth(), label = { Text(stringResource(R.string.name)) }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Done))
-                    Button(onClick = { if (blocks.any { block -> block.name.equals(workflowName.trim(), true) }) overwriteWorkflow = true else { viewModel.finishBlockSave(workflowName, workflowFolderId); onWorkflowFinished() } }, enabled = workflowName.isNotBlank(), modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.save)) }
-                } else if (it is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SavePreset || it is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveSet) {
-                    Text(stringResource(R.string.save_location), style = MaterialTheme.typography.labelLarge)
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) { item { FilterChip(workflowFolderId == null, { workflowFolderId = null }, { Text(stringResource(R.string.no_folder)) }) }; items(folders, key = { folder -> folder.id }) { folder -> FilterChip(workflowFolderId == folder.id, { workflowFolderId = folder.id }, { Text(folder.name) }) } }
-                    OutlinedTextField(workflowName, { workflowName = it }, Modifier.fillMaxWidth(), label = { Text(stringResource(R.string.name)) }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Done))
-                    Button(onClick = { val exists = if (it is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SavePreset) presets.any { p -> p.entity.name.equals(workflowName.trim(), true) } else sets.any { s -> s.entity.name.equals(workflowName.trim(), true) && s.entity.kind == (it as com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveSet).set.kind.name }; if (exists) overwriteWorkflow = true else { if (it is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SavePreset) viewModel.finishPresetSave(workflowName, workflowFolderId) else viewModel.finishSetSave(workflowName, workflowFolderId); onWorkflowFinished() } }, enabled = workflowName.isNotBlank(), modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.save)) }
-                } else Text(stringResource(R.string.choose_block_to_load), style = MaterialTheme.typography.bodySmall)
+                Text(stringResource(R.string.choose_block_to_load), style = MaterialTheme.typography.bodySmall)
             } }
         }
         if (workflow == null) PrimaryTabRow(selectedTabIndex = tab) { Tab(tab == 0, { scope.launch { pagerState.animateScrollToPage(0) } }, text = { Text(stringResource(R.string.saved_blocks)) }); Tab(tab == 1, { scope.launch { pagerState.animateScrollToPage(1) } }, text = { Text(stringResource(R.string.saved_sets)) }); Tab(tab == 2, { scope.launch { pagerState.animateScrollToPage(2) } }, text = { Text(stringResource(R.string.presets)) }) }
@@ -370,37 +547,103 @@ fun SavedScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onWorkflow
             OutlinedButton(onClick = { folderSelector = true }, modifier = Modifier.weight(1f)) {
                 Icon(Icons.Default.FolderOpen, null)
                 Spacer(Modifier.width(6.dp))
-                Text(when (folderFilter) { "ALL" -> stringResource(R.string.all_folders); "NONE" -> stringResource(R.string.no_folder); else -> folders.firstOrNull { it.id == folderFilter }?.name ?: stringResource(R.string.all_folders) }, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(when (folderFilter) { "ALL" -> stringResource(R.string.all_folders); "NONE" -> stringResource(R.string.no_folder); else -> visibleFolders.firstOrNull { it.id == folderFilter }?.name ?: stringResource(R.string.all_folders) }, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.weight(1f))
                 Icon(Icons.Default.ArrowDropDown, null)
             }
             IconButton(onClick = { folderDialog = true }) { Icon(Icons.Default.CreateNewFolder, stringResource(R.string.new_folder)) }
+            if (workflow == null) IconButton(onClick = { selectionMode = !selectionMode; selectedIds = emptySet() }) { Icon(if (selectionMode) Icons.Default.Close else Icons.Default.Checklist, stringResource(if (selectionMode) R.string.cancel else R.string.select_items)) }
+        }
+        if (isSaveWorkflow) {
+            OutlinedTextField(
+                workflowName,
+                { workflowName = it },
+                Modifier.fillMaxWidth(),
+                label = { Text(stringResource(R.string.name)) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { if (workflowName.isNotBlank()) submitSave() }),
+            )
+            Button(onClick = submitSave, enabled = workflowName.isNotBlank(), modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.save)) }
+        }
+        if (selectionMode && workflow == null) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(stringResource(R.string.selected_count, selectedIds.size), Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+            Button(onClick = { bulkMove = true }, enabled = selectedIds.isNotEmpty()) { Icon(Icons.Default.DriveFileMove, null); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.move_selected)) }
         }
         HorizontalPager(state = pagerState, modifier = Modifier.weight(1f), userScrollEnabled = workflow == null) { page ->
         if (page == 0) {
             LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 val filtered = blocks.filter { (search.isBlank() || it.name.contains(search, true) || (searchScope == SavedSearchScope.INCLUDE_CONTENT && it.content.contains(search, true))) && (folderFilter == "ALL" || (folderFilter == "NONE" && it.folderId == null) || it.folderId == folderFilter) }
                 if (filtered.isEmpty()) item { Text(stringResource(R.string.saved_empty)) }
-                items(filtered, key = { it.id }) { block -> ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp)) { Text(block.name, style = MaterialTheme.typography.titleMedium); Text(block.content.ifBlank { stringResource(R.string.empty_prompt) }, maxLines = 3, overflow = TextOverflow.Ellipsis); Row { if (workflow is com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadBlock) Button(onClick = { viewModel.finishBlockLoad(block); onWorkflowFinished() }) { Text(stringResource(R.string.load)) } else TextButton(onClick = { viewModel.addSavedBlockToBase(block) }) { Text(stringResource(R.string.add_to_base)) }; TextButton(onClick = { movingBlock = block }) { Text(folders.firstOrNull { it.id == block.folderId }?.name ?: stringResource(R.string.no_folder)) }; IconButton(onClick = { viewModel.deleteSavedBlock(block) }) { Icon(Icons.Default.Delete, stringResource(R.string.delete)) } } } } }
+                items(filtered, key = { it.id }) { block ->
+                    ElevatedCard(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(12.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                if (selectionMode) Checkbox(block.id in selectedIds, { checked -> selectedIds = if (checked) selectedIds + block.id else selectedIds - block.id })
+                                LibraryItemThumbnail(block.thumbnailPath) { thumbnailTarget = LibraryThumbnailTarget(SavedFolderKind.BLOCK, block.id, block.name, block.thumbnailPath) }
+                                Column(Modifier.weight(1f)) {
+                                    Text(block.name, style = MaterialTheme.typography.titleMedium)
+                                    Text(block.content.ifBlank { stringResource(R.string.empty_prompt) }, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                                }
+                            }
+                            Row {
+                                if (workflow is com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadBlock) Button(onClick = { viewModel.finishBlockLoad(block); onWorkflowFinished() }) { Text(stringResource(R.string.load)) }
+                                else TextButton(onClick = { clipboard.setText(AnnotatedString(block.content)); Toast.makeText(context, context.getString(R.string.copied), Toast.LENGTH_SHORT).show() }) { Text(stringResource(R.string.copy)) }
+                                TextButton(onClick = { movingBlock = block }) { Text(visibleFolders.firstOrNull { it.id == block.folderId }?.name ?: stringResource(R.string.no_folder)) }
+                                IconButton(onClick = { viewModel.deleteSavedBlock(block) }) { Icon(Icons.Default.Delete, stringResource(R.string.delete)) }
+                            }
+                        }
+                    }
+                }
             }
         } else if (page == 1) LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             val activeLoad = workflow as? com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadSet
             val kind = activeLoad?.owner?.let { if (it is PromptOwner.Base) SavedSetKind.BASE else SavedSetKind.CHARACTER }
             val filtered = sets.filter { item -> (kind == null || item.set?.kind == kind) && (search.isBlank() || item.entity.name.contains(search, true) || (searchScope == SavedSearchScope.INCLUDE_CONTENT && (item.set?.prompts?.allBlocks()?.any { it.name.contains(search, true) || it.content.contains(search, true) } == true || item.set?.textRendering?.content?.contains(search, true) == true))) && (folderFilter == "ALL" || (folderFilter == "NONE" && item.entity.folderId == null) || item.entity.folderId == folderFilter) }
             if (filtered.isEmpty()) item { Text(stringResource(R.string.saved_empty)) }
-            items(filtered, key = { it.entity.id }) { set -> ElevatedCard(Modifier.fillMaxWidth()) { Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(set.entity.name); Text(set.entity.kind, style = MaterialTheme.typography.bodySmall) }; if (activeLoad != null) Button(onClick = {
-                if (activeLoad.owner is PromptOwner.Base) {
-                    loadBasePositive = true
-                    loadBaseNegative = true
-                    baseSetToLoad = set
-                } else {
-                    viewModel.finishSetLoad(set)
-                    onWorkflowFinished()
+            items(filtered, key = { it.entity.id }) { set ->
+                ElevatedCard(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            if (selectionMode) Checkbox(set.entity.id in selectedIds, { checked -> selectedIds = if (checked) selectedIds + set.entity.id else selectedIds - set.entity.id })
+                            LibraryItemThumbnail(set.entity.thumbnailPath) { thumbnailTarget = LibraryThumbnailTarget(SavedFolderKind.SET, set.entity.id, set.entity.name, set.entity.thumbnailPath) }
+                            Column(Modifier.weight(1f)) { Text(set.entity.name); Text(set.entity.kind, style = MaterialTheme.typography.bodySmall) }
+                        }
+                        Row {
+                            if (activeLoad != null) Button(onClick = {
+                                if (activeLoad.owner is PromptOwner.Base) {
+                                    loadBasePositive = true
+                                    loadBaseNegative = true
+                                    baseSetToLoad = set
+                                } else {
+                                    viewModel.finishSetLoad(set)
+                                    onWorkflowFinished()
+                                }
+                            }) { Text(stringResource(R.string.load)) }
+                            TextButton(onClick = { movingSet = set.entity }) { Text(visibleFolders.firstOrNull { it.id == set.entity.folderId }?.name ?: stringResource(R.string.no_folder)) }
+                            IconButton(onClick = { viewModel.deleteSavedSet(set.entity) }) { Icon(Icons.Default.Delete, stringResource(R.string.delete)) }
+                        }
+                    }
                 }
-            }) { Text(stringResource(R.string.load)) }; TextButton(onClick = { movingSet = set.entity }) { Text(folders.firstOrNull { it.id == set.entity.folderId }?.name ?: stringResource(R.string.no_folder)) }; IconButton(onClick = { viewModel.deleteSavedSet(set.entity) }) { Icon(Icons.Default.Delete, stringResource(R.string.delete)) } } } }
+            }
         } else LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (presets.isEmpty()) item { Text(stringResource(R.string.saved_empty)) }
-            items(presets.filter { item -> (search.isBlank() || item.entity.name.contains(search, true) || (searchScope == SavedSearchScope.INCLUDE_CONTENT && item.session?.containsPromptText(search) == true)) && (folderFilter == "ALL" || (folderFilter == "NONE" && item.entity.folderId == null) || item.entity.folderId == folderFilter) }, key = { it.entity.id }) { preset -> ElevatedCard(Modifier.fillMaxWidth()) { Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(preset.entity.name, style = MaterialTheme.typography.titleMedium); Text(preset.session?.generationSettings?.modelId ?: "-", style = MaterialTheme.typography.bodySmall) }; if (workflow == com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadPreset) Button(onClick = { viewModel.restorePreset(preset); viewModel.cancelSavedWorkflow(); onWorkflowFinished() }, enabled = preset.session != null) { Text(stringResource(R.string.load)) }; TextButton(onClick = { movingPreset = preset.entity }) { Text(folders.firstOrNull { it.id == preset.entity.folderId }?.name ?: stringResource(R.string.no_folder)) }; IconButton(onClick = { viewModel.deletePreset(preset.entity) }) { Icon(Icons.Default.Delete, stringResource(R.string.delete)) } } } }
+            items(presets.filter { item -> (search.isBlank() || item.entity.name.contains(search, true) || (searchScope == SavedSearchScope.INCLUDE_CONTENT && item.session?.containsPromptText(search) == true)) && (folderFilter == "ALL" || (folderFilter == "NONE" && item.entity.folderId == null) || item.entity.folderId == folderFilter) }, key = { it.entity.id }) { preset ->
+                ElevatedCard(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            if (selectionMode) Checkbox(preset.entity.id in selectedIds, { checked -> selectedIds = if (checked) selectedIds + preset.entity.id else selectedIds - preset.entity.id })
+                            LibraryItemThumbnail(preset.entity.thumbnailPath) { thumbnailTarget = LibraryThumbnailTarget(SavedFolderKind.PRESET, preset.entity.id, preset.entity.name, preset.entity.thumbnailPath) }
+                            Column(Modifier.weight(1f)) { Text(preset.entity.name, style = MaterialTheme.typography.titleMedium); Text(preset.session?.generationSettings?.modelId ?: "-", style = MaterialTheme.typography.bodySmall) }
+                        }
+                        Row {
+                            if (workflow == com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadPreset) Button(onClick = { viewModel.restorePreset(preset); viewModel.cancelSavedWorkflow(); onWorkflowFinished() }, enabled = preset.session != null) { Text(stringResource(R.string.load)) }
+                            TextButton(onClick = { movingPreset = preset.entity }) { Text(visibleFolders.firstOrNull { it.id == preset.entity.folderId }?.name ?: stringResource(R.string.no_folder)) }
+                            IconButton(onClick = { viewModel.deletePreset(preset.entity) }) { Icon(Icons.Default.Delete, stringResource(R.string.delete)) }
+                        }
+                    }
+                }
+            }
         }
         }
     } }
@@ -409,6 +652,94 @@ fun SavedScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onWorkflow
 private enum class SavedSearchScope(@param:StringRes val label: Int) {
     TITLE_ONLY(R.string.search_titles_only),
     INCLUDE_CONTENT(R.string.search_include_content),
+}
+
+private data class LibraryThumbnailTarget(
+    val kind: SavedFolderKind,
+    val id: String,
+    val name: String,
+    val thumbnailPath: String?,
+)
+
+@Composable
+private fun LibraryItemThumbnail(path: String?, onClick: () -> Unit) {
+    val image = path?.let(::File)?.takeIf(File::isFile)
+    Surface(
+        modifier = Modifier.size(72.dp).clickable(onClick = onClick),
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+    ) {
+        if (image != null) {
+            AsyncImage(image, stringResource(R.string.library_preview_image), Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        } else {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.AddPhotoAlternate, stringResource(R.string.set_preview_image), tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun LibraryThumbnailDialog(
+    target: LibraryThumbnailTarget,
+    generatedImages: List<Pair<String, String>>,
+    onDismiss: () -> Unit,
+    onChooseThumbnail: (android.net.Uri) -> Unit,
+    onUseGeneratedThumbnail: (String) -> Unit,
+    onRemoveThumbnail: () -> Unit,
+) {
+    var previewModel by remember(target.id, target.thumbnailPath) { mutableStateOf<Any?>(target.thumbnailPath?.let(::File)?.takeIf(File::isFile)) }
+    var showGeneratedImages by rememberSaveable(target.id) { mutableStateOf(false) }
+    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri?.let {
+            previewModel = it
+            onChooseThumbnail(it)
+        }
+    }
+    if (showGeneratedImages) AlertDialog(
+        onDismissRequest = { showGeneratedImages = false },
+        title = { Text(stringResource(R.string.choose_generated_image)) },
+        text = {
+            LazyColumn(Modifier.heightIn(max = 420.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(generatedImages) { (thumbnail, original) ->
+                    AsyncImage(
+                        model = File(thumbnail),
+                        contentDescription = stringResource(R.string.generated_image),
+                        modifier = Modifier.fillMaxWidth().height(150.dp).clickable {
+                            previewModel = File(thumbnail)
+                            onUseGeneratedThumbnail(original)
+                            showGeneratedImages = false
+                        },
+                        contentScale = ContentScale.Crop,
+                    )
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = { showGeneratedImages = false }) { Text(stringResource(R.string.cancel)) } },
+    )
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.preview_image_for, target.name)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (previewModel != null) AsyncImage(previewModel, stringResource(R.string.library_preview_image), Modifier.fillMaxWidth().height(180.dp), contentScale = ContentScale.Crop)
+                else Surface(Modifier.fillMaxWidth().height(180.dp), color = MaterialTheme.colorScheme.surfaceContainerHighest, shape = MaterialTheme.shapes.medium) {
+                    Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.Image, stringResource(R.string.no_preview_image), Modifier.size(40.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)) }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilledTonalButton(onClick = { imagePicker.launch("image/*") }, modifier = Modifier.weight(1f)) {
+                        Icon(Icons.Default.PhotoLibrary, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text(stringResource(R.string.image_source_file))
+                    }
+                    if (generatedImages.isNotEmpty()) FilledTonalButton(onClick = { showGeneratedImages = true }, modifier = Modifier.weight(1f)) {
+                        Icon(Icons.Default.History, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text(stringResource(R.string.image_source_history))
+                    }
+                }
+                if (previewModel != null) TextButton(onClick = { previewModel = null; onRemoveThumbnail() }) { Text(stringResource(R.string.remove_image)) }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.close)) } },
+    )
 }
 
 private fun com.hjhsys.naiblockprompt.domain.model.PromptPair.allBlocks() = positiveBlocks + negativeBlocks

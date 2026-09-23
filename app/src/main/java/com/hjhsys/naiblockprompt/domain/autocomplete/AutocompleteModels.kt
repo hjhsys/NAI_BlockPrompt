@@ -45,6 +45,10 @@ object PromptTokenEditing {
         val rawSuffix = text.substring(safeEnd)
         val suffix = when {
             rawSuffix.startsWith(',') -> ", " + rawSuffix.substring(1).trimStart(' ', '\t')
+            rawSuffix.startsWith("\r\n") || rawSuffix.startsWith('\n') || rawSuffix.startsWith('\r') -> {
+                val nextLine = rawSuffix.trimStart('\r', '\n', ' ', '\t')
+                if (nextLine.startsWith(',')) rawSuffix else ",$rawSuffix"
+            }
             rawSuffix.isEmpty() && appendSeparatorAtEnd -> ", "
             else -> rawSuffix
         }
@@ -98,9 +102,14 @@ object PromptAutocomplete {
 
     fun currentFragment(text: String, cursor: Int): PromptFragment? {
         val safeCursor = cursor.coerceIn(0, text.length)
+        // A tap can briefly place the cursor between the two characters of a
+        // weight delimiter. Treat that transient position as syntax, not as an
+        // autocomplete fragment; otherwise the delimiter start can end up one
+        // character beyond the cursor.
+        if (safeCursor in 1 until text.length && text[safeCursor - 1] == ':' && text[safeCursor] == ':') return null
         val boundary = text.lastIndexOfAny(charArrayOf(',', '\n', '\r'), safeCursor - 1)
         var start = boundary + 1
-        val weightDelimiter = text.lastIndexOf("::", safeCursor - 1)
+        val weightDelimiter = text.lastIndexOf("::", safeCursor - 2)
         if (weightDelimiter >= start) start = weightDelimiter + 2
         while (start < safeCursor && text[start].isWhitespace()) start++
         val fragment = text.substring(start, safeCursor)
@@ -119,21 +128,12 @@ object PromptAutocomplete {
         val inserted = if (tag.startsWith("__") && tag.endsWith("__")) tag else tag.replace('_', ' ')
         val tokenRange = PromptTokenEditing.rangeAt(text, fragment.endExclusive)
         val safeFragmentStart = fragment.start.coerceIn(tokenRange.start, tokenRange.endExclusive)
-        val safeFragmentEnd = fragment.endExclusive.coerceIn(safeFragmentStart, tokenRange.endExclusive)
-        val currentToken = text.substring(tokenRange.start, tokenRange.endExclusive).trim()
-        val trailingText = text.substring(safeFragmentEnd, tokenRange.endExclusive)
-        val normalizedFragment = text.substring(safeFragmentStart, safeFragmentEnd).trim().lowercase()
-        val normalizedInsertion = inserted.trim().lowercase()
-        val completesFragment = normalizedFragment.isNotEmpty() &&
-            normalizedInsertion.startsWith(normalizedFragment)
-        val containsOtherContext = trailingText.any(Char::isWhitespace) ||
-            (currentToken.any(Char::isWhitespace) && !completesFragment)
-
-        if (containsOtherContext) {
-            return PromptTokenEditing.insertAfter(text, tokenRange, inserted)
-        }
-
-        val preservedPrefix = text.substring(tokenRange.start, safeFragmentStart)
+        val rawPrefix = text.substring(tokenRange.start, safeFragmentStart)
+        // Autocomplete represents a replacement for the complete comma/newline-delimited
+        // tag, even when the suggested canonical tag differs from what was typed. Keep
+        // only a weight opener that belongs to the surrounding syntax; ordinary words in
+        // front of the fragment must not survive as a second tag.
+        val preservedPrefix = rawPrefix.takeIf { it.contains("::") }.orEmpty()
         return PromptTokenEditing.replace(text, tokenRange, inserted, preservedPrefix)
     }
 }

@@ -118,6 +118,8 @@ object SessionEditor {
             content = split.right,
             enabled = block.enabled,
             order = index + 1,
+            scaleMode = block.scaleMode,
+            customScale = block.customScale,
         )
         blocks.toMutableList().apply {
             this[index] = block.copy(content = split.left)

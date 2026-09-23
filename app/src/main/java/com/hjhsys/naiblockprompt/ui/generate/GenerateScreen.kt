@@ -38,6 +38,7 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalFocusManager
@@ -70,6 +71,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import com.hjhsys.naiblockprompt.R
 import com.hjhsys.naiblockprompt.BuildConfig
 import com.hjhsys.naiblockprompt.domain.editor.*
+import com.hjhsys.naiblockprompt.ui.library.CharacterImportModePicker
 import com.hjhsys.naiblockprompt.domain.model.*
 import com.hjhsys.naiblockprompt.domain.prompt.PromptProcessor
 import com.hjhsys.naiblockprompt.domain.prompt.PromptTokenEstimator
@@ -85,6 +87,7 @@ import com.hjhsys.naiblockprompt.ui.components.HelpAffordance
 import com.hjhsys.naiblockprompt.ui.components.quotaStatusText
 import com.hjhsys.naiblockprompt.ui.components.ImageCardActions
 import com.hjhsys.naiblockprompt.ui.components.ImageViewer
+import com.hjhsys.naiblockprompt.ui.components.ImageCompareCandidate
 import com.hjhsys.naiblockprompt.data.network.nai.NaiApiFailure
 import com.hjhsys.naiblockprompt.domain.generation.MissingGenerationField
 import com.hjhsys.naiblockprompt.domain.generation.NaiCatalogOption
@@ -105,10 +108,15 @@ import androidx.compose.ui.platform.LocalContext
 import com.hjhsys.naiblockprompt.domain.image.NaiPngMetadataParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import com.hjhsys.naiblockprompt.domain.autocomplete.PromptAutocomplete
 import com.hjhsys.naiblockprompt.domain.autocomplete.PromptFragment
 import com.hjhsys.naiblockprompt.domain.autocomplete.TagSuggestion
 import com.hjhsys.naiblockprompt.ui.library.RestoreDialog
+
+internal val LocalQuickEditExitSignal = staticCompositionLocalOf { 0 }
 
 @Composable
 fun GenerateScreen(
@@ -134,9 +142,14 @@ fun GenerateScreen(
     val firstBlockName = stringResource(R.string.default_block_name, 1)
     val generationState by viewModel.generationState.collectAsStateWithLifecycle()
     val duplicateWarning by viewModel.duplicateWarning.collectAsStateWithLifecycle()
+    val lastSentPrompt by viewModel.lastSentPrompt.collectAsStateWithLifecycle()
     var showCharacterTypeDialog by rememberSaveable { mutableStateOf(false) }
+    var showLastSentPrompt by rememberSaveable { mutableStateOf(false) }
+    var showDefaultBlockScale by rememberSaveable { mutableStateOf(false) }
+    var defaultBlockScaleInput by remember(session.id) { mutableStateOf(session.defaultBlockScale) }
     val hasStash by viewModel.hasStash.collectAsStateWithLifecycle()
     val loadUiRevision by viewModel.loadUiRevision.collectAsStateWithLifecycle()
+    val tagInsertReturnTarget by viewModel.tagInsertReturnTarget.collectAsStateWithLifecycle()
     val subscriptionStatus by viewModel.subscriptionStatus.collectAsStateWithLifecycle()
     val wildcardItems by viewModel.wildcards.collectAsStateWithLifecycle()
     val modelSummary = compactModelName(session.generationSettings.modelId)
@@ -160,6 +173,20 @@ fun GenerateScreen(
     LaunchedEffect(loadUiRevision) {
         if (loadUiRevision > 0) promptListState.scrollToItem(0)
     }
+    LaunchedEffect(tagInsertReturnTarget?.revision) {
+        val target = tagInsertReturnTarget ?: return@LaunchedEffect
+        val scaleOffset = if (session.blockScaleEnabled) 1 else 0
+        val sectionIndex = when (val owner = target.owner) {
+            PromptOwner.Base -> scaleOffset
+            is PromptOwner.Character -> {
+                val characterIndex = session.characters.sortedBy { it.order }.indexOfFirst { it.id == owner.id }
+                if (characterIndex < 0) scaleOffset else scaleOffset + 1 + characterIndex
+            }
+        }
+        promptListState.scrollToItem(sectionIndex.coerceAtLeast(0))
+        activeTagTarget = TagEditorTarget(target.owner, target.polarity, target.blockId, target.cursor)
+        viewModel.consumeTagInsertReturnTarget(target.revision)
+    }
     var shortcutArea by remember { mutableStateOf(IntSize.Zero) }
     var databasePosition by rememberSaveable { mutableStateOf(floatArrayOf(-1f, -1f)) }
     var colorPosition by rememberSaveable { mutableStateOf(floatArrayOf(-1f, -1f)) }
@@ -179,6 +206,34 @@ fun GenerateScreen(
             },
         )
     }
+    if (showLastSentPrompt && lastSentPrompt != null) {
+        ProcessedPromptDialog(lastSentPrompt!!) { showLastSentPrompt = false }
+    }
+    if (showDefaultBlockScale) AlertDialog(
+        onDismissRequest = { showDefaultBlockScale = false },
+        title = { Text(stringResource(R.string.default_block_scale)) },
+        text = {
+            OutlinedTextField(
+                value = defaultBlockScaleInput,
+                onValueChange = { defaultBlockScaleInput = it },
+                label = { Text(stringResource(R.string.default_block_scale)) },
+                supportingText = { Text(stringResource(R.string.default_block_scale_hint)) },
+                isError = defaultBlockScaleInput.toBigDecimalOrNull() == null,
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            )
+        },
+        confirmButton = {
+            TextButton(
+                enabled = defaultBlockScaleInput.toBigDecimalOrNull() != null,
+                onClick = {
+                    viewModel.updateBlockScale(true, defaultBlockScaleInput)
+                    showDefaultBlockScale = false
+                },
+            ) { Text(stringResource(R.string.confirm)) }
+        },
+        dismissButton = { TextButton(onClick = { showDefaultBlockScale = false }) { Text(stringResource(R.string.cancel)) } },
+    )
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
@@ -199,10 +254,29 @@ fun GenerateScreen(
     ) { innerPadding -> Box(Modifier.fillMaxSize().padding(innerPadding).onSizeChanged { shortcutArea = it }) {
       LazyColumn(
         state = promptListState,
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().pointerInput(Unit) {
+            detectTapGestures {
+                activeTagTarget = null
+                viewModel.clearAutocomplete()
+                viewModel.cancelTagInsert()
+            }
+        },
         contentPadding = PaddingValues(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        if (session.blockScaleEnabled) item {
+            FilledTonalButton(
+                onClick = {
+                    defaultBlockScaleInput = session.defaultBlockScale
+                    showDefaultBlockScale = true
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Default.Tune, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.base_scale_value, session.defaultBlockScale))
+            }
+        }
         item {
             PromptSectionCard(
                 title = stringResource(R.string.base_prompt),
@@ -213,6 +287,8 @@ fun GenerateScreen(
                 collapsed = session.base.collapsed,
                 showFormatter = appSettings.showFormatterActions,
                 quickEditWeightStep = appSettings.quickEditWeightStep,
+                blockScaleEnabled = session.blockScaleEnabled,
+                defaultBlockScale = session.defaultBlockScale,
                 showTextRendering = appSettings.useTextRendering,
                 tokenRange = if (supportsT5Estimate && appSettings.showTokenEstimates) sectionTokenRange(session.base.prompts, session.base.textRendering) else null,
                 viewModel = viewModel,
@@ -228,8 +304,11 @@ fun GenerateScreen(
                 index = index,
                 character = character,
                 count = session.characters.size,
+                alternateColors = appSettings.alternateCharacterColors,
                 showFormatter = appSettings.showFormatterActions,
                 quickEditWeightStep = appSettings.quickEditWeightStep,
+                blockScaleEnabled = session.blockScaleEnabled,
+                defaultBlockScale = session.defaultBlockScale,
                 showTextRendering = appSettings.useTextRendering,
                 tokenRange = if (supportsT5Estimate && appSettings.showTokenEstimates) sectionTokenRange(character.prompts, character.textRendering) else null,
                 viewModel = viewModel,
@@ -253,6 +332,16 @@ fun GenerateScreen(
         }
         item {
             Text(stringResource(R.string.not_official_notice), style = MaterialTheme.typography.bodySmall)
+        }
+        if (BuildConfig.DEBUG && lastSentPrompt != null) item {
+            OutlinedButton(
+                onClick = { showLastSentPrompt = true },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Default.Code, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.prompt_preview_debug_full))
+            }
         }
       }
       PromptScrollIndicator(promptListState, Modifier.align(Alignment.CenterEnd))
@@ -744,14 +833,18 @@ private fun GenerationCard(
     onImportInformation: (() -> Unit)? = null,
     onCherryPick: (() -> Unit)? = null,
     onExportInpaintDiagnostics: (() -> Unit)? = null,
+    debugPrompt: GeneratedPromptSnapshot? = null,
+    comparisonCandidates: List<ImageCompareCandidate> = emptyList(),
 ) {
     var showActions by remember { mutableStateOf(false) }
     var showOriginal by rememberSaveable { mutableStateOf(false) }
+    var showDebugPrompt by rememberSaveable { mutableStateOf(false) }
     val originalAvailable = record?.let { com.hjhsys.naiblockprompt.ui.components.rememberOriginalImageAvailable(it.imagePath) } == true
     if (showActions && record != null) com.hjhsys.naiblockprompt.ui.components.ImageActionsDialog(record.imagePath, viewModel) { showActions = false }
     if (showOriginal && record != null) {
-        ImageViewer(record.imagePath) { showOriginal = false }
+        ImageViewer(record.imagePath, comparisonCandidates) { showOriginal = false }
     }
+    if (showDebugPrompt && debugPrompt != null) ProcessedPromptDialog(debugPrompt) { showDebugPrompt = false }
     ElevatedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             if (record != null) {
@@ -774,6 +867,8 @@ private fun GenerationCard(
                     onApplySeed = { viewModel.applyHistorySeed(record.seed) },
                     promptSelectionEnabled = onCherryPick != null,
                     onImportPromptSelection = onCherryPick,
+                    promptViewEnabled = debugPrompt != null,
+                    onViewPrompt = if (debugPrompt != null) {{ showDebugPrompt = true }} else null,
                 )
                 if (!originalAvailable) {
                     Text(stringResource(R.string.original_missing), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
@@ -875,7 +970,73 @@ fun ResultScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onRestore
                 onExportInpaintDiagnostics = if (BuildConfig.DEBUG) {
                     { viewModel.exportLatestInpaintDiagnostics() }
                 } else null,
+                debugPrompt = resultHistory?.snapshot?.generation,
+                comparisonCandidates = history.filter { item ->
+                    item.originalExists && item.entity.imagePath != currentResult?.imagePath
+                }.map { item ->
+                    ImageCompareCandidate(
+                        reference = item.entity.imagePath,
+                        thumbnailReference = item.entity.thumbnailPath,
+                        dateLabel = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(item.entity.createdAt)),
+                        modelLabel = item.entity.model,
+                        promptPreview = item.snapshot?.generation?.let { generation ->
+                            (listOf(generation.basePositive) + generation.characterPositive)
+                                .filter(String::isNotBlank)
+                                .joinToString(", ")
+                        } ?: item.snapshot?.session?.base?.prompts?.positiveBlocks
+                            ?.filter { it.enabled && it.content.isNotBlank() }
+                            ?.joinToString(", ") { it.content }
+                            .orEmpty(),
+                    )
+                },
             )
+        }
+    }
+}
+
+@Composable
+internal fun ProcessedPromptDialog(prompt: GeneratedPromptSnapshot, dismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = dismiss,
+        title = { Text(stringResource(R.string.prompt_view_title)) },
+        text = {
+            SelectionContainer {
+                Column(
+                    Modifier.fillMaxWidth().heightIn(max = 620.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    val generationDetails = listOf(
+                        stringResource(R.string.model_id) to prompt.modelId,
+                        stringResource(R.string.sampler) to prompt.samplerId,
+                        stringResource(R.string.resolution) to "${prompt.width} × ${prompt.height}",
+                        stringResource(R.string.steps) to prompt.steps.toString(),
+                        stringResource(R.string.prompt_guidance) to prompt.scale.toString(),
+                        stringResource(R.string.guidance_rescale) to (prompt.guidanceRescale?.toString() ?: "—"),
+                        stringResource(R.string.noise_schedule) to prompt.noiseSchedule,
+                        stringResource(R.string.seed) to prompt.usedSeed.toString(),
+                    ).joinToString("\n") { (label, value) -> "$label: $value" }
+                    DebugPromptSection(stringResource(R.string.generation_details), generationDetails)
+                    DebugPromptSection(stringResource(R.string.restore_base_positive), prompt.basePositive)
+                    DebugPromptSection(stringResource(R.string.restore_base_negative), prompt.baseNegative)
+                    prompt.characterPositive.forEachIndexed { index, value ->
+                        DebugPromptSection("${stringResource(R.string.character_prompt, index + 1)} · ${stringResource(R.string.positive)}", value)
+                    }
+                    prompt.characterNegative.forEachIndexed { index, value ->
+                        DebugPromptSection("${stringResource(R.string.character_prompt, index + 1)} · ${stringResource(R.string.negative)}", value)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = dismiss) { Text(stringResource(R.string.confirm)) } },
+    )
+}
+
+@Composable
+private fun DebugPromptSection(title: String, value: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text(title, style = MaterialTheme.typography.titleSmall)
+        Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = MaterialTheme.shapes.small) {
+            Text(value.ifEmpty { "—" }, Modifier.fillMaxWidth().padding(10.dp), style = MaterialTheme.typography.bodySmall)
         }
     }
 }
@@ -1046,8 +1207,11 @@ private fun CharacterSectionCard(
     index: Int,
     character: CharacterPrompt,
     count: Int,
+    alternateColors: Boolean,
     showFormatter: Boolean,
     quickEditWeightStep: String,
+    blockScaleEnabled: Boolean,
+    defaultBlockScale: String,
     showTextRendering: Boolean,
     tokenRange: TokenRange?,
     viewModel: MainViewModel,
@@ -1069,7 +1233,15 @@ private fun CharacterSectionCard(
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text(stringResource(R.string.cancel)) } },
         )
     }
-    ElevatedCard {
+    val darkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val characterContainerColor = when {
+        !alternateColors -> MaterialTheme.colorScheme.surfaceContainerHigh
+        !darkTheme && index % 2 == 0 -> MaterialTheme.colorScheme.surface
+        !darkTheme -> MaterialTheme.colorScheme.surfaceContainerHigh
+        index % 2 == 0 -> MaterialTheme.colorScheme.surfaceContainer
+        else -> MaterialTheme.colorScheme.surfaceContainerHigh
+    }
+    ElevatedCard(colors = CardDefaults.elevatedCardColors(containerColor = characterContainerColor)) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Row(
@@ -1128,10 +1300,12 @@ private fun CharacterSectionCard(
                     textRendering = character.textRendering,
                     showFormatter = showFormatter,
                     quickEditWeightStep = quickEditWeightStep,
+                    blockScaleEnabled = blockScaleEnabled,
+                    defaultBlockScale = defaultBlockScale,
                     showTextRendering = showTextRendering,
                     viewModel = viewModel,
                     onTagEditorState = onTagEditorState,
-                    blockContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    blockContainerColor = characterContainerColor,
                 )
             }
         }
@@ -1148,6 +1322,8 @@ private fun PromptSectionCard(
     collapsed: Boolean,
     showFormatter: Boolean,
     quickEditWeightStep: String,
+    blockScaleEnabled: Boolean,
+    defaultBlockScale: String,
     showTextRendering: Boolean,
     tokenRange: TokenRange?,
     viewModel: MainViewModel,
@@ -1178,7 +1354,7 @@ private fun PromptSectionCard(
             val promptBlockColor = if (owner == PromptOwner.Base) {
                 lerp(containerColor, Color.Black, if (MaterialTheme.colorScheme.background.luminance() < 0.5f) 0.16f else 0.055f)
             } else containerColor
-            if (!collapsed) PromptSectionContent(owner, pair, selectedPolarity, textRendering, showFormatter, quickEditWeightStep, showTextRendering, viewModel, onTagEditorState, promptBlockColor)
+            if (!collapsed) PromptSectionContent(owner, pair, selectedPolarity, textRendering, showFormatter, quickEditWeightStep, blockScaleEnabled, defaultBlockScale, showTextRendering, viewModel, onTagEditorState, promptBlockColor)
         }
     }
 }
@@ -1191,6 +1367,8 @@ private fun PromptSectionContent(
     textRendering: TextRenderingState,
     showFormatter: Boolean,
     quickEditWeightStep: String,
+    blockScaleEnabled: Boolean,
+    defaultBlockScale: String,
     showTextRendering: Boolean,
     viewModel: MainViewModel,
     onTagEditorState: (PromptOwner, PromptPolarity, String, Boolean, Int) -> Unit,
@@ -1232,6 +1410,8 @@ private fun PromptSectionContent(
             canMoveDown = index < blocks.lastIndex,
             showFormatter = showFormatter,
             quickEditWeightStep = quickEditWeightStep,
+            blockScaleEnabled = blockScaleEnabled,
+            defaultBlockScale = defaultBlockScale,
             onUpdate = { transform -> viewModel.updateBlock(owner, selectedPolarity, block.id, transform) },
             onEnabledChange = { viewModel.setBlockEnabled(owner, selectedPolarity, block.id, it) },
             onCollapsedChange = { viewModel.setBlockCollapsed(owner, selectedPolarity, block.id, it) },
@@ -1347,6 +1527,8 @@ private fun PromptBlockCard(
     canMoveDown: Boolean,
     showFormatter: Boolean,
     quickEditWeightStep: String,
+    blockScaleEnabled: Boolean,
+    defaultBlockScale: String,
     onUpdate: ((PromptBlock) -> PromptBlock) -> Unit,
     onEnabledChange: (Boolean) -> Unit,
     onCollapsedChange: (Boolean) -> Unit,
@@ -1378,6 +1560,10 @@ private fun PromptBlockCard(
     var weightInput by remember { mutableStateOf("") }
     var moveTargets by remember { mutableStateOf<List<QuickEditDropTarget>>(emptyList()) }
     var moveTargetIndex by remember { mutableStateOf(0) }
+    var weightAdjustmentKey by remember(block.id) { mutableStateOf<String?>(null) }
+    var showBlockScale by remember { mutableStateOf(false) }
+    var customScaleInput by remember(block.id) { mutableStateOf(block.customScale) }
+    var scaleModeInput by remember(block.id) { mutableStateOf(block.scaleMode) }
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
     val clipboard = LocalClipboardManager.current
@@ -1392,6 +1578,16 @@ private fun PromptBlockCard(
     var lastEditorSelection by remember(block.id) { mutableStateOf(editorValue.selection) }
     var observedBlockContent by remember(block.id) { mutableStateOf(block.content) }
     var pendingQuickContent by remember(block.id) { mutableStateOf<String?>(null) }
+    val quickEditExitSignal = LocalQuickEditExitSignal.current
+    LaunchedEffect(quickEditExitSignal) {
+        if (quickEditExitSignal > 0) {
+            quickEdit = false
+            quickSelection = null
+            moveTargets = emptyList()
+            showQuickMore = false
+            showWeightInput = false
+        }
+    }
     LaunchedEffect(block.collapsed) {
         if (block.collapsed) {
             quickEdit = false
@@ -1416,9 +1612,16 @@ private fun PromptBlockCard(
             }
         }
     }
-    fun applyQuick(result: QuickEditResult) {
+    fun finishWeightAdjustment() {
+        if (weightAdjustmentKey != null) {
+            viewModel.finishWeightAdjustment(owner, polarity, block.id, editorValue.text, editorValue.selection.start, editorValue.selection.end)
+            weightAdjustmentKey = null
+        }
+    }
+    fun applyQuick(result: QuickEditResult, weightAdjustment: Boolean = false) {
         val changed = result as? QuickEditResult.Changed ?: return
         if (changed.text == editorValue.text) return
+        if (!weightAdjustment) finishWeightAdjustment()
         val previous = editorValue
         val resolvedSelection = changed.preferredSelectionOffset?.let { PromptQuickEdit.selectionAt(changed.text, it) }
         // Publish the text and its replacement semantic selection together. Remember the
@@ -1427,8 +1630,31 @@ private fun PromptBlockCard(
         editorValue = TextFieldValue(changed.text, TextRange(changed.text.length.coerceAtMost(previous.selection.end)))
         quickSelection = resolvedSelection
         moveTargets = emptyList()
-        viewModel.updateBlockContent(owner, polarity, block.id, changed.text, previous.selection.start, previous.selection.end, PromptEditKind.DISCRETE)
+        val coalesceKey = if (weightAdjustment) weightAdjustmentKey ?: "${block.id}:${System.nanoTime()}".also { weightAdjustmentKey = it } else null
+        viewModel.updateBlockContent(owner, polarity, block.id, changed.text, previous.selection.start, previous.selection.end, if (weightAdjustment) PromptEditKind.WEIGHT_ADJUSTMENT else PromptEditKind.DISCRETE, coalesceKey)
     }
+    if (showBlockScale) AlertDialog(
+        onDismissRequest = { showBlockScale = false },
+        title = { Text(stringResource(R.string.block_scale)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(Modifier.fillMaxWidth().clickable { scaleModeInput = BlockScaleMode.DEFAULT }, verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(scaleModeInput == BlockScaleMode.DEFAULT, { scaleModeInput = BlockScaleMode.DEFAULT })
+                    Text(stringResource(R.string.block_scale_default_value, defaultBlockScale))
+                }
+                Row(Modifier.fillMaxWidth().clickable { scaleModeInput = BlockScaleMode.CUSTOM }, verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(scaleModeInput == BlockScaleMode.CUSTOM, { scaleModeInput = BlockScaleMode.CUSTOM })
+                    Text(stringResource(R.string.block_scale_custom))
+                }
+                OutlinedTextField(customScaleInput, { customScaleInput = it }, label = { Text(stringResource(R.string.block_scale_custom)) }, singleLine = true)
+            }
+        },
+        confirmButton = { TextButton(
+            enabled = customScaleInput.toBigDecimalOrNull() != null,
+            onClick = { onUpdate { it.copy(scaleMode = scaleModeInput, customScale = customScaleInput) }; showBlockScale = false },
+        ) { Text(stringResource(R.string.confirm)) } },
+        dismissButton = { TextButton(onClick = { showBlockScale = false }) { Text(stringResource(R.string.cancel)) } },
+    )
     if (showWeightInput) {
         AlertDialog(
             onDismissRequest = { showWeightInput = false },
@@ -1497,7 +1723,26 @@ private fun PromptBlockCard(
                     CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 36.dp) {
                         Checkbox(checked = block.enabled, onCheckedChange = onEnabledChange, modifier = Modifier.scale(.82f))
                     }
-                    Text(block.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    Column(Modifier.weight(1f)) {
+                        Text(block.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (blockScaleEnabled) {
+                            val customScale = block.customScale.toBigDecimalOrNull()
+                            val baseScale = defaultBlockScale.toBigDecimalOrNull()
+                            val customMatchesBase = customScale != null && baseScale != null && customScale.compareTo(baseScale) == 0
+                            val scaleLabel = when {
+                                block.scaleMode == BlockScaleMode.DEFAULT -> stringResource(R.string.block_scale_uses_base, defaultBlockScale)
+                                customMatchesBase -> stringResource(R.string.block_scale_custom_matches_base, block.customScale)
+                                else -> stringResource(R.string.block_scale_uses_custom, block.customScale)
+                            }
+                            Text(
+                                scaleLabel,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (block.scaleMode == BlockScaleMode.DEFAULT) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
                     SmallIconButton(
                         if (block.collapsed) R.string.expand else R.string.collapse,
                         if (block.collapsed) Icons.Default.ChevronRight else Icons.Default.ExpandMore,
@@ -1525,6 +1770,16 @@ private fun PromptBlockCard(
                             text = { Text(stringResource(R.string.save_block)) },
                             leadingIcon = { Icon(Icons.Default.BookmarkAdd, contentDescription = null) },
                             onClick = { showMore = false; onSave() },
+                        )
+                        if (blockScaleEnabled) DropdownMenuItem(
+                            text = { Text(if (block.scaleMode == BlockScaleMode.DEFAULT) stringResource(R.string.block_scale_default_value, defaultBlockScale) else stringResource(R.string.block_scale_custom_value, block.customScale)) },
+                            leadingIcon = { Icon(Icons.Default.Tune, contentDescription = null) },
+                            onClick = {
+                                showMore = false
+                                customScaleInput = block.customScale
+                                scaleModeInput = block.scaleMode
+                                showBlockScale = true
+                            },
                         )
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.copy_block)) },
@@ -1638,7 +1893,15 @@ private fun PromptBlockCard(
                         neutralWeightColor = neutralWeightColor,
                         commentColor = commentColor,
                         randomizerColor = randomizerColor,
-                        onTapOffset = { quickSelection = PromptQuickEdit.selectionAt(editorValue.text, it); moveTargets = emptyList() },
+                        onTapOffset = { offset ->
+                            finishWeightAdjustment()
+                            quickSelection = offset?.let { PromptQuickEdit.selectionAt(editorValue.text, it) }
+                            moveTargets = emptyList()
+                            if (offset == null) {
+                                viewModel.clearAutocomplete()
+                                viewModel.cancelTagInsert()
+                            }
+                        },
                         moveTargets = moveTargets,
                         activeMoveTarget = moveTargetIndex,
                         onMoveTarget = { moveTargetIndex = it },
@@ -1647,8 +1910,20 @@ private fun PromptBlockCard(
                         toolbar = {
                             if (activeSelection != null) {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(1.dp)) {
-                                    SmallIconButton(R.string.quick_edit_decrease, Icons.Default.Remove, canQuickWeight) { applyQuick(PromptQuickEdit.adjustWeight(editorValue.text, activeSelection, quickStep.negate())) }
-                                    SmallIconButton(R.string.quick_edit_increase, Icons.Default.Add, canQuickWeight) { applyQuick(PromptQuickEdit.adjustWeight(editorValue.text, activeSelection, quickStep)) }
+                                    RepeatingIconButton(
+                                        R.string.quick_edit_decrease,
+                                        Icons.Default.Remove,
+                                        canQuickWeight,
+                                        onStep = { quickSelection?.let { applyQuick(PromptQuickEdit.adjustWeight(editorValue.text, it, quickStep.negate()), weightAdjustment = true) } },
+                                        onRelease = ::finishWeightAdjustment,
+                                    )
+                                    RepeatingIconButton(
+                                        R.string.quick_edit_increase,
+                                        Icons.Default.Add,
+                                        canQuickWeight,
+                                        onStep = { quickSelection?.let { applyQuick(PromptQuickEdit.adjustWeight(editorValue.text, it, quickStep), weightAdjustment = true) } },
+                                        onRelease = ::finishWeightAdjustment,
+                                    )
                                     TextButton(
                                         onClick = { applyQuick(PromptQuickEdit.toggleComment(editorValue.text, activeSelection)) },
                                         enabled = !block.locked,
@@ -1711,6 +1986,78 @@ private fun PromptBlockCard(
                         PromptVisualTransformation(highColor, lowColor, neutralWeightColor, commentColor, randomizerColor)
                     },
                 )
+                if (validation.hasUnclosedWeight) {
+                    Text(
+                        stringResource(R.string.weight_warning, validation.delimiterCount),
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                if (randomizerValidation.hasUnclosedRandomizer) {
+                    Text(
+                        stringResource(R.string.randomizer_warning, randomizerValidation.delimiterCount),
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    SmallIconButton(
+                        if (block.locked) R.string.unlock_block else R.string.lock_block,
+                        if (block.locked) Icons.Default.Lock else Icons.Default.LockOpen,
+                        true,
+                    ) { onLockedChange(!block.locked) }
+                    SmallIconButton(
+                        R.string.undo_prompt_edit,
+                        Icons.Default.Undo,
+                        !block.locked && undoKey in undoableBlocks,
+                    ) {
+                        finishWeightAdjustment()
+                        viewModel.undoBlockContent(owner, polarity, block.id, editorValue.selection.start, editorValue.selection.end)?.let { restored ->
+                            editorValue = TextFieldValue(restored.content, TextRange(restored.selectionStart, restored.selectionEnd))
+                            lastEditorSelection = editorValue.selection
+                        }
+                    }
+                    SmallIconButton(
+                        R.string.redo_prompt_edit,
+                        Icons.Default.Redo,
+                        !block.locked && undoKey in redoableBlocks,
+                    ) {
+                        finishWeightAdjustment()
+                        viewModel.redoBlockContent(owner, polarity, block.id, editorValue.selection.start, editorValue.selection.end)?.let { restored ->
+                            editorValue = TextFieldValue(restored.content, TextRange(restored.selectionStart, restored.selectionEnd))
+                            lastEditorSelection = editorValue.selection
+                        }
+                    }
+                    FilterChip(
+                        selected = quickEdit,
+                        onClick = {
+                            finishWeightAdjustment()
+                            quickEdit = !quickEdit
+                            quickSelection = null
+                            moveTargets = emptyList()
+                            if (quickEdit) { keyboardController?.hide(); focusManager.clearFocus(); viewModel.clearAutocomplete() }
+                        },
+                        label = { Text(stringResource(R.string.quick_edit), style = MaterialTheme.typography.labelSmall) },
+                        leadingIcon = { Icon(Icons.Default.TouchApp, null, Modifier.size(16.dp)) },
+                    )
+                    Spacer(Modifier.weight(1f))
+                    if (showFormatter) {
+                        TextButton(
+                            onClick = { finishWeightAdjustment(); onFormat(BlockFormatter.MULTILINE, editorValue.selection.start, editorValue.selection.end) },
+                            enabled = !block.locked,
+                            contentPadding = PaddingValues(horizontal = 7.dp),
+                        ) { Text(stringResource(R.string.format_multiline), style = MaterialTheme.typography.labelSmall, maxLines = 1) }
+                        TextButton(
+                            onClick = { finishWeightAdjustment(); onFormat(BlockFormatter.SINGLE_LINE, editorValue.selection.start, editorValue.selection.end) },
+                            enabled = !block.locked,
+                            contentPadding = PaddingValues(horizontal = 7.dp),
+                        ) { Text(stringResource(R.string.format_single_line), style = MaterialTheme.typography.labelSmall, maxLines = 1) }
+                    }
+                }
                 if (!quickEdit && autocomplete.blockId == block.id) {
                     AutocompleteSuggestions(
                         local = autocomplete.local,
@@ -1745,75 +2092,6 @@ private fun PromptBlockCard(
                         },
                     )
                 }
-                if (validation.hasUnclosedWeight) {
-                    Text(
-                        stringResource(R.string.weight_warning, validation.delimiterCount),
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-                if (randomizerValidation.hasUnclosedRandomizer) {
-                    Text(
-                        stringResource(R.string.randomizer_warning, randomizerValidation.delimiterCount),
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
-                    SmallIconButton(
-                        if (block.locked) R.string.unlock_block else R.string.lock_block,
-                        if (block.locked) Icons.Default.Lock else Icons.Default.LockOpen,
-                        true,
-                    ) { onLockedChange(!block.locked) }
-                    SmallIconButton(
-                        R.string.undo_prompt_edit,
-                        Icons.Default.Undo,
-                        !block.locked && undoKey in undoableBlocks,
-                    ) {
-                        viewModel.undoBlockContent(owner, polarity, block.id, editorValue.selection.start, editorValue.selection.end)?.let { restored ->
-                            editorValue = TextFieldValue(restored.content, TextRange(restored.selectionStart, restored.selectionEnd))
-                            lastEditorSelection = editorValue.selection
-                        }
-                    }
-                    SmallIconButton(
-                        R.string.redo_prompt_edit,
-                        Icons.Default.Redo,
-                        !block.locked && undoKey in redoableBlocks,
-                    ) {
-                        viewModel.redoBlockContent(owner, polarity, block.id, editorValue.selection.start, editorValue.selection.end)?.let { restored ->
-                            editorValue = TextFieldValue(restored.content, TextRange(restored.selectionStart, restored.selectionEnd))
-                            lastEditorSelection = editorValue.selection
-                        }
-                    }
-                    FilterChip(
-                        selected = quickEdit,
-                        onClick = {
-                            quickEdit = !quickEdit
-                            quickSelection = null
-                            moveTargets = emptyList()
-                            if (quickEdit) { keyboardController?.hide(); focusManager.clearFocus(); viewModel.clearAutocomplete() }
-                        },
-                        label = { Text(stringResource(R.string.quick_edit), style = MaterialTheme.typography.labelSmall) },
-                        leadingIcon = { Icon(Icons.Default.TouchApp, null, Modifier.size(16.dp)) },
-                    )
-                    Spacer(Modifier.weight(1f))
-                    if (showFormatter) {
-                        TextButton(
-                            onClick = { onFormat(BlockFormatter.MULTILINE, editorValue.selection.start, editorValue.selection.end) },
-                            enabled = !block.locked,
-                            contentPadding = PaddingValues(horizontal = 7.dp),
-                        ) { Text(stringResource(R.string.format_multiline), style = MaterialTheme.typography.labelSmall, maxLines = 1) }
-                        TextButton(
-                            onClick = { onFormat(BlockFormatter.SINGLE_LINE, editorValue.selection.start, editorValue.selection.end) },
-                            enabled = !block.locked,
-                            contentPadding = PaddingValues(horizontal = 7.dp),
-                        ) { Text(stringResource(R.string.format_single_line), style = MaterialTheme.typography.labelSmall, maxLines = 1) }
-                    }
-                }
             }
         }
     }
@@ -1829,7 +2107,7 @@ private fun QuickEditPromptSurface(
     neutralWeightColor: Color,
     commentColor: Color,
     randomizerColor: Color,
-    onTapOffset: (Int) -> Unit,
+    onTapOffset: (Int?) -> Unit,
     moveTargets: List<QuickEditDropTarget>,
     activeMoveTarget: Int,
     onMoveTarget: (Int) -> Unit,
@@ -1886,7 +2164,14 @@ private fun QuickEditPromptSurface(
                         }
                     }
                     .pointerInput(text, moveTargets) {
-                        if (moveTargets.isEmpty()) detectTapGestures { position -> layout?.let { onTapOffset(it.getOffsetForPosition(position)) } }
+                        if (moveTargets.isEmpty()) detectTapGestures { position -> layout?.let { result ->
+                            if (position.y < 0f || position.y > result.size.height || position.x < 0f) onTapOffset(null)
+                            else {
+                                val line = result.getLineForVerticalPosition(position.y)
+                                val outsideText = position.x > result.getLineRight(line) + 8.dp.toPx()
+                                onTapOffset(if (outsideText) null else result.getOffsetForPosition(position))
+                            }
+                        } }
                     }
                     .pointerInput(text, moveTargets, selection) {
                         if (moveTargets.isNotEmpty() && selection != null) {
@@ -2039,6 +2324,7 @@ private fun GenerationSettingsCard(session: Session, viewModel: MainViewModel, o
         var includePrompt by rememberSaveable(uri) { mutableStateOf(true) }
         var includeNegative by rememberSaveable(uri) { mutableStateOf(true) }
         var includeCharacters by rememberSaveable(uri) { mutableStateOf(true) }
+        var characterImportMode by rememberSaveable(uri) { mutableStateOf(CharacterImportMode.REPLACE) }
         var includeSettings by rememberSaveable(uri) { mutableStateOf(true) }
         var includeSeed by rememberSaveable(uri) { mutableStateOf(true) }
         val importedBlockName = stringResource(R.string.imported_block_name)
@@ -2063,14 +2349,18 @@ private fun GenerationSettingsCard(session: Session, viewModel: MainViewModel, o
                             )
                         }
                         Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
-                            MetadataChoice(R.string.import_prompt, includePrompt) { includePrompt = it }
-                            MetadataChoice(R.string.import_negative, includeNegative) { includeNegative = it }
+                            Text(stringResource(R.string.restore_base), style = MaterialTheme.typography.titleSmall)
+                            Column(Modifier.padding(start = 16.dp)) {
+                                MetadataChoice(R.string.restore_base_positive, includePrompt) { includePrompt = it }
+                                MetadataChoice(R.string.restore_base_negative, includeNegative) { includeNegative = it }
+                            }
                             MetadataChoice(R.string.import_characters, includeCharacters) { includeCharacters = it }
+                            if (includeCharacters) CharacterImportModePicker(characterImportMode) { characterImportMode = it }
                             MetadataChoice(R.string.import_settings, includeSettings) { includeSettings = it }
                             MetadataChoice(R.string.import_seed, includeSeed) { includeSeed = it }
                         }
                         Button(onClick = {
-                            viewModel.importImageMetadata(metadata!!, importedBlockName, includePrompt, includeNegative, includeCharacters, includeSettings, includeSeed)
+                            viewModel.importImageMetadata(metadata!!, importedBlockName, includePrompt, includeNegative, includeCharacters, includeSettings, includeSeed, characterImportMode)
                             pendingImageUri = null
                             onMetadataImported()
                         }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.import_metadata)) }
@@ -2416,6 +2706,56 @@ internal fun synchronizePromptEditorValue(current: TextFieldValue, text: String)
         // An IME composition belongs to the old text and cannot safely survive an external replacement.
         composition = if (current.text == text) composition else null,
     )
+}
+
+@Composable
+private fun RepeatingIconButton(
+    @StringRes label: Int,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    enabled: Boolean,
+    onStep: () -> Unit,
+    onRelease: () -> Unit,
+) {
+    val description = stringResource(label)
+    val currentStep by rememberUpdatedState(onStep)
+    val currentRelease by rememberUpdatedState(onRelease)
+    Surface(
+        color = Color.Transparent,
+        shape = androidx.compose.foundation.shape.CircleShape,
+        modifier = Modifier
+            .size(48.dp)
+            .alpha(if (enabled) 1f else 0.38f)
+            .semantics {
+                contentDescription = description
+                if (enabled) onClick { currentStep(); currentRelease(); true }
+            }
+            .pointerInput(enabled) {
+                if (enabled) detectTapGestures(
+                    onPress = {
+                        currentStep()
+                        coroutineScope {
+                            val repeatJob = launch {
+                                delay(450)
+                                while (true) {
+                                    currentStep()
+                                    delay(250)
+                                }
+                            }
+                            try {
+                                tryAwaitRelease()
+                            } finally {
+                                repeatJob.cancel()
+                                currentRelease()
+                            }
+                        }
+                    },
+                )
+            },
+    ) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(26.dp))
+        }
+    }
 }
 
 internal fun autocompleteFragmentForEditor(value: TextFieldValue): PromptFragment? =

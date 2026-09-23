@@ -22,6 +22,7 @@ internal data class BackupArchiveSource(
 internal data class RestoredBackupMedia(
     val historyThumbnails: Map<String, String>,
     val tagThumbnails: Map<String, String>,
+    val libraryThumbnails: Map<String, String>,
     val createdFiles: List<File>,
 )
 
@@ -72,20 +73,26 @@ internal object BackupArchiveCodec {
         manifest: BackupMediaManifest,
         historyDirectory: File,
         tagDirectory: File,
+        libraryDirectory: File,
     ): RestoredBackupMedia {
         val expected = linkedMapOf<String, MediaTarget>()
         manifest.historyThumbnails.forEach { (id, entry) ->
             requireSafeEntry(entry, "media/history/")
-            require(expected.put(entry, MediaTarget(id, historyDirectory, true)) == null) { "Duplicate backup media entry" }
+            require(expected.put(entry, MediaTarget(id, historyDirectory, MediaKind.HISTORY)) == null) { "Duplicate backup media entry" }
         }
         manifest.tagThumbnails.forEach { (id, entry) ->
             requireSafeEntry(entry, "media/tags/")
-            require(expected.put(entry, MediaTarget(id, tagDirectory, false)) == null) { "Duplicate backup media entry" }
+            require(expected.put(entry, MediaTarget(id, tagDirectory, MediaKind.TAG)) == null) { "Duplicate backup media entry" }
+        }
+        manifest.libraryThumbnails.forEach { (id, entry) ->
+            requireSafeEntry(entry, "media/library/")
+            require(expected.put(entry, MediaTarget(id, libraryDirectory, MediaKind.LIBRARY)) == null) { "Duplicate backup media entry" }
         }
         require(expected.size <= MAX_MEDIA_ENTRIES) { "Too many backup media entries" }
 
         val history = linkedMapOf<String, String>()
         val tags = linkedMapOf<String, String>()
+        val library = linkedMapOf<String, String>()
         val created = mutableListOf<File>()
         var totalBytes = 0L
         val seen = mutableSetOf<String>()
@@ -111,15 +118,18 @@ internal object BackupArchiveCodec {
                             output.write(buffer, 0, count)
                         }
                     }
-                    if (target.history) history[target.id] = destination.absolutePath
-                    else tags[target.id] = destination.absolutePath
+                    when (target.kind) {
+                        MediaKind.HISTORY -> history[target.id] = destination.absolutePath
+                        MediaKind.TAG -> tags[target.id] = destination.absolutePath
+                        MediaKind.LIBRARY -> library[target.id] = destination.absolutePath
+                    }
                 }
             }
         } catch (error: Throwable) {
             created.forEach(File::delete)
             throw error
         }
-        return RestoredBackupMedia(history, tags, created)
+        return RestoredBackupMedia(history, tags, library, created)
     }
 
     private fun requireSafeEntry(entry: String, prefix: String) {
@@ -130,6 +140,8 @@ internal object BackupArchiveCodec {
     private data class MediaTarget(
         val id: String,
         val directory: File,
-        val history: Boolean,
+        val kind: MediaKind,
     )
+
+    private enum class MediaKind { HISTORY, TAG, LIBRARY }
 }

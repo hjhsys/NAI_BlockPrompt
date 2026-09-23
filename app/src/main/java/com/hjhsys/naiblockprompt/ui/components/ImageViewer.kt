@@ -2,23 +2,35 @@ package com.hjhsys.naiblockprompt.ui.components
 
 import android.net.Uri
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
+import androidx.compose.material.icons.filled.CompareArrows
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -40,6 +52,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -82,8 +95,87 @@ internal fun imageReferenceModel(reference: String): Any {
     return if (uri.scheme == null) File(reference) else uri
 }
 
+data class ImageCompareCandidate(
+    val reference: String,
+    val thumbnailReference: String,
+    val dateLabel: String,
+    val modelLabel: String?,
+    val promptPreview: String,
+)
+
 @Composable
-fun ImageViewer(reference: String, onDismiss: () -> Unit) {
+private fun ImageComparisonPicker(
+    candidates: List<ImageCompareCandidate>,
+    onBack: () -> Unit,
+    onSelect: (ImageCompareCandidate) -> Unit,
+) {
+    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+            Surface(shadowElevation = 3.dp) {
+                Row(
+                    Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back))
+                    }
+                    Text(stringResource(R.string.image_compare_choose), style = MaterialTheme.typography.titleLarge)
+                }
+            }
+            LazyColumn(
+                Modifier.fillMaxSize(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+                verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp),
+            ) {
+                items(candidates, key = { it.reference }) { candidate ->
+                    ElevatedCard(
+                        Modifier.fillMaxWidth().clickable { onSelect(candidate) },
+                    ) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            AsyncImage(
+                                model = imageReferenceModel(candidate.thumbnailReference),
+                                contentDescription = stringResource(R.string.generated_image),
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.size(112.dp).clip(MaterialTheme.shapes.medium),
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    candidate.modelLabel ?: "—",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    candidate.dateLabel,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    candidate.promptPreview.ifBlank { stringResource(R.string.image_compare_prompt_unavailable) },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 4,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ImageViewer(
+    reference: String,
+    comparisonCandidates: List<ImageCompareCandidate> = emptyList(),
+    onDismiss: () -> Unit,
+) {
     var mode by remember(reference) { mutableStateOf(ImageViewerMode.CONTEXTUAL) }
     var loadFailed by remember(reference) { mutableStateOf(false) }
     var viewportSize by remember(reference) { mutableStateOf(IntSize.Zero) }
@@ -91,6 +183,10 @@ fun ImageViewer(reference: String, onDismiss: () -> Unit) {
     var zoom by remember(reference) { mutableFloatStateOf(1f) }
     var panX by remember(reference) { mutableFloatStateOf(0f) }
     var panY by remember(reference) { mutableFloatStateOf(0f) }
+    var chooseComparison by remember(reference) { mutableStateOf(false) }
+    var comparisonReference by remember(reference) { mutableStateOf<String?>(null) }
+    var showingComparison by remember(reference) { mutableStateOf(false) }
+    val displayedReference = if (showingComparison) comparisonReference ?: reference else reference
     val fullscreen = mode == ImageViewerMode.FULLSCREEN
     val maximumZoom = ImageViewerPolicy.maximumOriginalPixelZoom(viewportSize, sourceSize)
     LaunchedEffect(fullscreen) {
@@ -100,16 +196,43 @@ fun ImageViewer(reference: String, onDismiss: () -> Unit) {
             panY = 0f
         }
     }
+    LaunchedEffect(displayedReference) {
+        zoom = 1f
+        panX = 0f
+        panY = 0f
+    }
 
     Dialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (chooseComparison) chooseComparison = false else onDismiss() },
         properties = DialogProperties(
-            usePlatformDefaultWidth = ImageViewerPolicy.usePlatformDefaultWidth(mode),
-            decorFitsSystemWindows = ImageViewerPolicy.decorFitsSystemWindows(mode),
+            usePlatformDefaultWidth = if (chooseComparison) false else ImageViewerPolicy.usePlatformDefaultWidth(mode),
+            decorFitsSystemWindows = if (chooseComparison) false else ImageViewerPolicy.decorFitsSystemWindows(mode),
         ),
     ) {
+        if (chooseComparison) {
+            ImageComparisonPicker(
+                candidates = comparisonCandidates,
+                onBack = { chooseComparison = false },
+                onSelect = { candidate ->
+                    comparisonReference = candidate.reference
+                    showingComparison = true
+                    chooseComparison = false
+                },
+            )
+            return@Dialog
+        }
+        BoxWithConstraints(
+            modifier = if (fullscreen) Modifier.fillMaxSize() else Modifier.fillMaxWidth().fillMaxHeight(0.94f),
+            contentAlignment = Alignment.Center,
+        ) {
+            val sourceAspectHeight = if (sourceSize.width > 0 && sourceSize.height > 0) {
+                sourceSize.height.toFloat() / sourceSize.width.toFloat()
+            } else {
+                1216f / 832f
+            }
+            val contextualHeight = (maxWidth * sourceAspectHeight + 64.dp).coerceAtMost(maxHeight)
         Box(
-            modifier = (if (fullscreen) Modifier.fillMaxSize() else Modifier.fillMaxWidth().fillMaxHeight(0.82f))
+            modifier = (if (fullscreen) Modifier.fillMaxSize() else Modifier.fillMaxWidth().height(contextualHeight))
                 .clip(if (fullscreen) RectangleShape else MaterialTheme.shapes.large)
                 .background(Color(0xFF111111))
                 .onSizeChanged { viewportSize = it }
@@ -125,7 +248,7 @@ fun ImageViewer(reference: String, onDismiss: () -> Unit) {
             contentAlignment = Alignment.Center,
         ) {
             AsyncImage(
-                model = imageReferenceModel(reference),
+                model = imageReferenceModel(displayedReference),
                 contentDescription = stringResource(R.string.generated_image),
                 contentScale = ContentScale.Fit,
                 onLoading = { loadFailed = false },
@@ -135,6 +258,11 @@ fun ImageViewer(reference: String, onDismiss: () -> Unit) {
                 },
                 onError = { loadFailed = true },
                 modifier = Modifier.fillMaxSize()
+                    .then(if (fullscreen) Modifier else Modifier.padding(top = 64.dp))
+                    .clickable {
+                        if (comparisonReference == null) onDismiss()
+                        else showingComparison = !showingComparison
+                    }
                     .graphicsLayer {
                         scaleX = zoom
                         scaleY = zoom
@@ -148,6 +276,18 @@ fun ImageViewer(reference: String, onDismiss: () -> Unit) {
                     color = Color.White,
                     modifier = Modifier.padding(24.dp),
                 )
+            }
+            if (comparisonReference != null) {
+                Surface(
+                    modifier = Modifier.align(Alignment.TopStart)
+                        .then(if (fullscreen) Modifier.windowInsetsPadding(WindowInsets.safeDrawing) else Modifier)
+                        .padding(12.dp),
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                ) {
+                    Text(if (showingComparison) "B" else "A", Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
+                }
             }
             Surface(
                 modifier = Modifier.align(Alignment.TopEnd)
@@ -164,11 +304,19 @@ fun ImageViewer(reference: String, onDismiss: () -> Unit) {
                             contentDescription = stringResource(if (fullscreen) R.string.image_viewer_exit_fullscreen else R.string.image_viewer_fullscreen),
                         )
                     }
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.Close, contentDescription = stringResource(R.string.close))
+                    if (comparisonReference == null && comparisonCandidates.isNotEmpty()) {
+                        IconButton(onClick = { chooseComparison = true }) {
+                            Icon(Icons.Default.CompareArrows, contentDescription = stringResource(R.string.image_compare))
+                        }
+                    }
+                    if (comparisonReference != null) {
+                        IconButton(onClick = onDismiss) {
+                            Icon(Icons.Default.Close, contentDescription = stringResource(R.string.close))
+                        }
                     }
                 }
             }
+        }
         }
     }
 }

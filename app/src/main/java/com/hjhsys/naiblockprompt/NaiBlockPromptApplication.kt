@@ -29,7 +29,7 @@ class NaiBlockPromptApplication : Application() {
         super.onCreate()
         CrashLogStore(this).install()
         val database = Room.databaseBuilder(this, AppDatabase::class.java, "nai_block_prompt.db")
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16)
             .build()
         val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
         val client = OkHttpClient.Builder()
@@ -58,6 +58,35 @@ private val MIGRATION_12_13 = object : Migration(12, 13) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL("CREATE TABLE IF NOT EXISTS tag_exclusions (canonicalTag TEXT NOT NULL PRIMARY KEY, origin TEXT NOT NULL, reasonCode TEXT NOT NULL, reasonText TEXT, userConfirmed INTEGER NOT NULL DEFAULT 0, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL)")
         db.execSQL("CREATE INDEX IF NOT EXISTS index_tag_exclusions_origin ON tag_exclusions(origin)")
+    }
+}
+
+private val MIGRATION_13_14 = object : Migration(13, 14) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE saved_blocks ADD COLUMN scaleMode TEXT NOT NULL DEFAULT 'DEFAULT'")
+        db.execSQL("ALTER TABLE saved_blocks ADD COLUMN customScale TEXT NOT NULL DEFAULT '1.0'")
+    }
+}
+
+private val MIGRATION_14_15 = object : Migration(14, 15) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE saved_folders ADD COLUMN kind TEXT NOT NULL DEFAULT 'BLOCK'")
+        db.execSQL("DROP INDEX IF EXISTS index_saved_folders_name")
+        db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_saved_folders_name_kind ON saved_folders(name, kind)")
+        // Existing shared folders are cloned per library type so every saved item keeps
+        // its former folder name while future edits remain isolated between tabs.
+        db.execSQL("INSERT OR IGNORE INTO saved_folders(id, name, kind, orderIndex, createdAt, updatedAt) SELECT id || ':SET', name, 'SET', orderIndex, createdAt, updatedAt FROM saved_folders WHERE kind = 'BLOCK' AND id IN (SELECT folderId FROM saved_sets WHERE folderId IS NOT NULL)")
+        db.execSQL("UPDATE saved_sets SET folderId = folderId || ':SET' WHERE folderId IS NOT NULL")
+        db.execSQL("INSERT OR IGNORE INTO saved_folders(id, name, kind, orderIndex, createdAt, updatedAt) SELECT id || ':PRESET', name, 'PRESET', orderIndex, createdAt, updatedAt FROM saved_folders WHERE kind = 'BLOCK' AND id IN (SELECT folderId FROM presets WHERE folderId IS NOT NULL)")
+        db.execSQL("UPDATE presets SET folderId = folderId || ':PRESET' WHERE folderId IS NOT NULL")
+    }
+}
+
+private val MIGRATION_15_16 = object : Migration(15, 16) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE saved_blocks ADD COLUMN thumbnailPath TEXT DEFAULT NULL")
+        db.execSQL("ALTER TABLE saved_sets ADD COLUMN thumbnailPath TEXT DEFAULT NULL")
+        db.execSQL("ALTER TABLE presets ADD COLUMN thumbnailPath TEXT DEFAULT NULL")
     }
 }
 

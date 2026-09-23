@@ -50,6 +50,7 @@ import com.hjhsys.naiblockprompt.ui.GenerationUiState
 import com.hjhsys.naiblockprompt.ui.MainViewModel
 import com.hjhsys.naiblockprompt.ui.library.HistoryScreen
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 internal object GenerateNavigationPolicy {
     const val SETTINGS_PAGE = 0
@@ -58,6 +59,7 @@ internal object GenerateNavigationPolicy {
     const val HISTORY_PAGE = 3
     const val PAGE_COUNT = 4
     fun afterGenerationSuccess() = RESULT_PAGE
+    fun shouldDismissQuickEdit(page: Int) = page != GENERATE_PAGE
     fun shouldAutoOpenResult(imagePath: String?, lastOpenedImagePath: String?, autoOpenResult: Boolean = true) =
         autoOpenResult && imagePath != null && imagePath != lastOpenedImagePath
 }
@@ -95,6 +97,7 @@ fun GeneratePagerScreen(
         mutableStateOf((generationState as? GenerationUiState.Success)?.record?.imagePath)
     }
     var showExitDialog by rememberSaveable { mutableStateOf(false) }
+    var quickEditExitSignal by rememberSaveable { mutableIntStateOf(0) }
     val activity = LocalContext.current as? Activity
     val imageInput = session?.generationSettings?.imageInput
     val vibeIgnored = imageInput?.mode == ImageInputMode.VIBE_TRANSFER &&
@@ -110,6 +113,11 @@ fun GeneratePagerScreen(
     }
     LaunchedEffect(returnToPromptSignal) {
         if (returnToPromptSignal > 0) pagerState.animateScrollToPage(GenerateNavigationPolicy.GENERATE_PAGE)
+    }
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerState.settledPage }
+            .distinctUntilChanged()
+            .collect { page -> if (GenerateNavigationPolicy.shouldDismissQuickEdit(page)) quickEditExitSignal++ }
     }
     BackHandler {
         if (pagerState.currentPage != GenerateNavigationPolicy.GENERATE_PAGE) scope.launch { pagerState.animateScrollToPage(GenerateNavigationPolicy.GENERATE_PAGE) }
@@ -172,15 +180,17 @@ fun GeneratePagerScreen(
                 onOpenSettings = onOpenSettings,
                 headerTokenSummary = headerTokenSummary,
             )
-            page == GenerateNavigationPolicy.GENERATE_PAGE -> GenerateScreen(
-                session,
-                appSettings,
-                viewModel,
-                onOpenSettings,
-                { scope.launch { pagerState.animateScrollToPage(GenerateNavigationPolicy.SETTINGS_PAGE) } },
-                onOpenTagDatabase,
-                headerTokenSummary,
-            )
+            page == GenerateNavigationPolicy.GENERATE_PAGE -> CompositionLocalProvider(LocalQuickEditExitSignal provides quickEditExitSignal) {
+                GenerateScreen(
+                    session,
+                    appSettings,
+                    viewModel,
+                    onOpenSettings,
+                    { scope.launch { pagerState.animateScrollToPage(GenerateNavigationPolicy.SETTINGS_PAGE) } },
+                    onOpenTagDatabase,
+                    headerTokenSummary,
+                )
+            }
             page == GenerateNavigationPolicy.RESULT_PAGE -> ResultScreen(
                 viewModel = viewModel,
                 onOpenSettings = onOpenSettings,

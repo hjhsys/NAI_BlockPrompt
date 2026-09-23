@@ -4,6 +4,7 @@ import com.hjhsys.naiblockprompt.data.local.entity.TagEntity
 import com.hjhsys.naiblockprompt.data.local.entity.UserTagOverrideEntity
 import com.hjhsys.naiblockprompt.data.local.entity.TagExclusionEntity
 import com.hjhsys.naiblockprompt.data.local.entity.HistoryEntryEntity
+import com.hjhsys.naiblockprompt.data.local.entity.SavedBlockEntity
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertArrayEquals
@@ -38,6 +39,16 @@ class BackupPayloadTest {
         assertEquals(emptyList<TagExclusionEntity>(), restored.exclusions)
     }
 
+    @Test fun `saved block backup round trip preserves scale and legacy defaults`() {
+        val scaled = SavedBlockEntity("id", null, "Artist", "tag", true, false, false, "CUSTOM", "1.25", 1, 2)
+        assertEquals(scaled, json.decodeFromString<SavedBlockEntity>(json.encodeToString(scaled)))
+        val legacy = json.decodeFromString<SavedBlockEntity>(
+            """{"id":"old","folderId":null,"name":"Old","content":"tag","enabled":true,"locked":false,"collapsed":false,"createdAt":1,"updatedAt":2}""",
+        )
+        assertEquals("DEFAULT", legacy.scaleMode)
+        assertEquals("1.0", legacy.customScale)
+    }
+
     @Test fun `legacy app backup payload still reads thumbnail bytes`() {
         val payload = AppBackupData(
             version = 2,
@@ -69,14 +80,17 @@ class BackupPayloadTest {
         assertFalse(restored.tagThumbnails.isNotEmpty())
     }
 
-    @Test fun `v3 archive stores thumbnails as files and restores them to app media directories`() {
+    @Test fun `v4 archive stores thumbnails as files and restores them to app media directories`() {
         val historyBytes = byteArrayOf(1, 3, 5, 7)
         val tagBytes = byteArrayOf(2, 4, 6, 8)
+        val libraryBytes = byteArrayOf(9, 10, 11, 12)
         val historySource = temporaryFolder.newFile("history-source.img").apply { writeBytes(historyBytes) }
         val tagSource = temporaryFolder.newFile("tag-source.img").apply { writeBytes(tagBytes) }
+        val librarySource = temporaryFolder.newFile("library-source.img").apply { writeBytes(libraryBytes) }
         val manifest = BackupMediaManifest(
             historyThumbnails = mapOf("history-id" to "media/history/0.img"),
             tagThumbnails = mapOf("tag-id" to "media/tags/0.img"),
+            libraryThumbnails = mapOf("BLOCK:block-id" to "media/library/0.img"),
         )
         val payload = emptyAppBackup().copy(mediaManifest = manifest)
 
@@ -88,17 +102,20 @@ class BackupPayloadTest {
             media = listOf(
                 BackupArchiveSource("media/history/0.img", historySource),
                 BackupArchiveSource("media/tags/0.img", tagSource),
+                BackupArchiveSource("media/library/0.img", librarySource),
             ),
         )
         val decoded = BackupArchiveCodec.decodeMetadata(archive, "backup.json", json, AppBackupData.serializer())
         val historyDirectory = temporaryFolder.newFolder("restored-history")
         val tagDirectory = temporaryFolder.newFolder("restored-tags")
-        val restored = BackupArchiveCodec.extractMedia(archive, decoded.mediaManifest, historyDirectory, tagDirectory)
+        val libraryDirectory = temporaryFolder.newFolder("restored-library")
+        val restored = BackupArchiveCodec.extractMedia(archive, decoded.mediaManifest, historyDirectory, tagDirectory, libraryDirectory)
 
-        assertEquals(3, decoded.version)
+        assertEquals(4, decoded.version)
         assertEquals(manifest, decoded.mediaManifest)
         assertArrayEquals(historyBytes, File(restored.historyThumbnails.getValue("history-id")).readBytes())
         assertArrayEquals(tagBytes, File(restored.tagThumbnails.getValue("tag-id")).readBytes())
+        assertArrayEquals(libraryBytes, File(restored.libraryThumbnails.getValue("BLOCK:block-id")).readBytes())
         assertTrue(restored.createdFiles.all(File::isFile))
     }
 
@@ -109,6 +126,7 @@ class BackupPayloadTest {
             manifest = BackupMediaManifest(historyThumbnails = mapOf("history" to "../outside.img")),
             historyDirectory = temporaryFolder.newFolder("history"),
             tagDirectory = temporaryFolder.newFolder("tags"),
+            libraryDirectory = temporaryFolder.newFolder("library"),
         )
     }
 

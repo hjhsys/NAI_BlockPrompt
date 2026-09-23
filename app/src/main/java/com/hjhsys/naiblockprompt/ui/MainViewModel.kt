@@ -66,6 +66,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     val generationState: StateFlow<GenerationUiState> = _generationState.asStateFlow()
     private val _currentResult = MutableStateFlow<GenerationRecord?>(null)
     val currentResult: StateFlow<GenerationRecord?> = _currentResult.asStateFlow()
+    private val _lastSentPrompt = MutableStateFlow<GeneratedPromptSnapshot?>(null)
+    val lastSentPrompt: StateFlow<GeneratedPromptSnapshot?> = _lastSentPrompt.asStateFlow()
     private val generationGate = GenerationRequestGate()
     val generationInProgress: StateFlow<Boolean> = generationGate.inProgress
     private val _tokenConfigured = MutableStateFlow(container.tokenStore.isConfigured())
@@ -114,6 +116,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     private var tagInsertTarget: TagInsertTarget? = null
     private val _tagInsertAvailable = MutableStateFlow(false)
     val tagInsertAvailable: StateFlow<Boolean> = _tagInsertAvailable.asStateFlow()
+    private val _tagInsertReturnTarget = MutableStateFlow<TagInsertReturnTarget?>(null)
+    val tagInsertReturnTarget: StateFlow<TagInsertReturnTarget?> = _tagInsertReturnTarget.asStateFlow()
     val usedTagCategories = container.autocompleteRepository.usedCategories.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val userTagCategories = container.autocompleteRepository.userCategories.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val wildcards = container.autocompleteRepository.wildcards.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -234,6 +238,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         previousSelectionStart: Int,
         previousSelectionEnd: Int,
         kind: PromptEditKind,
+        coalesceKey: String? = null,
     ) {
         val current = _session.value ?: return
         val block = current.findPromptBlock(owner, polarity, id) ?: return
@@ -243,9 +248,16 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             key,
             PromptEditorSnapshot(block.content, previousSelectionStart, previousSelectionEnd),
             kind,
+            coalesceKey = coalesceKey,
         )
         refreshUndoable(key)
         edit { SessionEditor.updateBlock(it, owner, polarity, id) { item -> item.copy(content = content) } }
+    }
+
+    fun finishWeightAdjustment(owner: PromptOwner, polarity: PromptPolarity, id: String, content: String, selectionStart: Int, selectionEnd: Int) {
+        val key = PromptUndoKey(owner, polarity, id)
+        promptUndoHistory.finishWeightAdjustment(key, PromptEditorSnapshot(content, selectionStart, selectionEnd))
+        refreshUndoable(key)
     }
 
     fun undoBlockContent(owner: PromptOwner, polarity: PromptPolarity, id: String, selectionStart: Int, selectionEnd: Int): PromptEditorSnapshot? {
@@ -374,6 +386,10 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         it.copy(generationSettings = transform(it.generationSettings))
     }
 
+    fun updateBlockScale(enabled: Boolean, defaultScale: String) = edit {
+        it.copy(blockScaleEnabled = enabled, defaultBlockScale = defaultScale)
+    }
+
     fun importImageMetadata(
         metadata: NaiImageMetadata,
         blockName: String,
@@ -382,15 +398,11 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         includeCharacters: Boolean,
         includeSettings: Boolean,
         includeSeed: Boolean,
+        characterMode: CharacterImportMode = CharacterImportMode.REPLACE,
     ) {
         val current = _session.value ?: return
-        fun blocks(value: String?) = value?.let { listOf(PromptBlock(name = blockName, content = it)) }.orEmpty()
-        val base = current.base.copy(prompts = current.base.prompts.copy(
-            positiveBlocks = if (includePrompt && metadata.prompt != null) blocks(metadata.prompt) else current.base.prompts.positiveBlocks,
-            negativeBlocks = if (includeNegative && metadata.negativePrompt != null) blocks(metadata.negativePrompt) else current.base.prompts.negativeBlocks,
-        ))
-        val characters = if (includeCharacters && metadata.characterPrompts.isNotEmpty()) {
-            metadata.characterPrompts.mapIndexed { index, positive ->
+        fun blocks(value: String?) = value?.let { listOf(PromptBlock(name = blockName, content = it, scaleMode = BlockScaleMode.CUSTOM, customScale = "1.0")) }.orEmpty()
+        val importedCharacters = metadata.characterPrompts.mapIndexed { index, positive ->
                 CharacterPrompt(
                     type = CharacterType.OTHER,
                     order = index,
@@ -401,7 +413,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
                     ),
                 )
             }
-        } else current.characters
+        val importedSession = ExternalPromptImport.apply(current, blockName, metadata.prompt, metadata.negativePrompt, importedCharacters, includePrompt, includeNegative, includeCharacters, characterMode)
         val old = current.generationSettings
         val importedModel = metadata.model?.takeIf { id -> NaiGenerationCatalog.models.any { it.apiId == id } }
         val importedSampler = metadata.sampler?.takeIf { id -> NaiGenerationCatalog.samplers.any { it.apiId == id } }
@@ -415,7 +427,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             seedMode = if (includeSeed && metadata.seed != null) SeedMode.FIXED else old.seedMode,
             seed = if (includeSeed && metadata.seed != null) metadata.seed else old.seed,
         )
-        replaceWithStash(current.copy(base = base, characters = characters, generationSettings = generationSettings))
+        replaceWithStash(importedSession.copy(generationSettings = generationSettings))
     }
 
     private fun edit(transform: (Session) -> Session) {
@@ -451,6 +463,9 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     }
     fun setQuickEditWeightStep(value: String) = viewModelScope.launch {
         container.settingsRepository.setQuickEditWeightStep(value)
+    }
+    fun setAlternateCharacterColors(value: Boolean) = viewModelScope.launch {
+        container.settingsRepository.setAlternateCharacterColors(value)
     }
     fun setColorHelperMode(value: ColorHelperMode) = viewModelScope.launch { container.settingsRepository.setColorHelperMode(value) }
     fun toggleFavoriteColor(hex: String) = viewModelScope.launch {
@@ -693,7 +708,17 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         tags.forEach { tag ->
             viewModelScope.launch { container.autocompleteRepository.recordUse(tag) }
         }
+        _tagInsertReturnTarget.value = TagInsertReturnTarget(
+            revision = (_tagInsertReturnTarget.value?.revision ?: 0L) + 1L,
+            owner = target.owner,
+            polarity = target.polarity,
+            blockId = target.blockId,
+            cursor = target.cursor,
+        )
         cancelTagInsert()
+    }
+    fun consumeTagInsertReturnTarget(revision: Long) {
+        if (_tagInsertReturnTarget.value?.revision == revision) _tagInsertReturnTarget.value = null
     }
     fun cancelTagInsert() {
         tagInsertTarget = null
@@ -734,7 +759,15 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             refreshUndoable(key)
         }
         updateBlock(workflow.owner, workflow.polarity, workflow.blockId) { current ->
-            current.copy(name = saved.name, content = saved.content, enabled = saved.enabled, locked = saved.locked, collapsed = saved.collapsed)
+            current.copy(
+                name = saved.name,
+                content = saved.content,
+                enabled = saved.enabled,
+                locked = saved.locked,
+                collapsed = saved.collapsed,
+                scaleMode = runCatching { BlockScaleMode.valueOf(saved.scaleMode) }.getOrDefault(BlockScaleMode.DEFAULT),
+                customScale = saved.customScale,
+            )
         }
         _savedWorkflow.value = null
     }
@@ -767,17 +800,31 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         val current = _session.value ?: return
         viewModelScope.launch { container.libraryRepository.savePreset(name.trim().ifBlank { "Preset" }, current) }
     }
-    fun createFolder(name: String) = viewModelScope.launch {
-        if (name.isNotBlank()) container.libraryRepository.createFolder(name.trim(), savedFolders.value.size)
+    fun createFolder(name: String, kind: SavedFolderKind) = viewModelScope.launch {
+        if (name.isNotBlank()) container.libraryRepository.createFolder(name.trim(), kind, savedFolders.value.count { it.kind == kind.name })
     }
     fun deleteSavedBlock(item: SavedBlockEntity) = viewModelScope.launch { container.libraryRepository.deleteBlock(item) }
     fun moveSavedBlock(item: SavedBlockEntity, folderId: String?) = viewModelScope.launch { container.libraryRepository.moveBlock(item, folderId) }
     fun movePreset(item: PresetEntity, folderId: String?) = viewModelScope.launch { container.libraryRepository.movePreset(item, folderId) }
     fun moveSavedSet(item: SavedSetEntity, folderId: String?) = viewModelScope.launch { container.libraryRepository.moveSet(item, folderId) }
+    fun moveSavedBlocks(items: List<SavedBlockEntity>, folderId: String?) = viewModelScope.launch { container.libraryRepository.moveBlocks(items, folderId) }
+    fun movePresets(items: List<PresetEntity>, folderId: String?) = viewModelScope.launch { container.libraryRepository.movePresets(items, folderId) }
+    fun moveSavedSets(items: List<SavedSetEntity>, folderId: String?) = viewModelScope.launch { container.libraryRepository.moveSets(items, folderId) }
+    fun setLibraryThumbnail(kind: SavedFolderKind, id: String, previousPath: String?, uri: android.net.Uri) = viewModelScope.launch {
+        container.libraryRepository.setLibraryThumbnail(kind, id, previousPath, uri)
+    }
+    fun setLibraryThumbnailFromFile(kind: SavedFolderKind, id: String, previousPath: String?, sourcePath: String) = viewModelScope.launch {
+        container.libraryRepository.setLibraryThumbnailFromFile(kind, id, previousPath, sourcePath)
+    }
+    fun removeLibraryThumbnail(kind: SavedFolderKind, id: String, previousPath: String?) = viewModelScope.launch {
+        container.libraryRepository.removeLibraryThumbnail(kind, id, previousPath)
+    }
     fun deleteFolder(item: SavedFolderEntity) = viewModelScope.launch { container.libraryRepository.deleteFolder(item) }
     fun deletePreset(item: PresetEntity) = viewModelScope.launch { container.libraryRepository.deletePreset(item) }
     fun deleteSavedSet(item: SavedSetEntity) = viewModelScope.launch { container.libraryRepository.deleteSet(item) }
-    fun deleteHistory(item: HistoryEntryEntity) = viewModelScope.launch { container.libraryRepository.deleteHistory(item) }
+    fun deleteHistory(item: HistoryEntryEntity, deleteOriginal: Boolean, result: (HistoryDeleteResult) -> Unit = {}) = viewModelScope.launch {
+        result(container.libraryRepository.deleteHistory(item, deleteOriginal))
+    }
     fun setHistoryFavorite(item: HistoryEntryEntity, favorite: Boolean) = viewModelScope.launch {
         container.libraryRepository.setHistoryFavorite(item, favorite)
     }
@@ -787,7 +834,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
     fun addSavedBlockToBase(item: SavedBlockEntity) = edit { current ->
         val blocks = current.base.prompts.positiveBlocks
-        val block = PromptBlock(name = item.name, content = item.content, enabled = item.enabled, locked = item.locked, order = blocks.size)
+        val block = PromptBlock(name = item.name, content = item.content, enabled = item.enabled, locked = item.locked, order = blocks.size, scaleMode = runCatching { BlockScaleMode.valueOf(item.scaleMode) }.getOrDefault(BlockScaleMode.DEFAULT), customScale = item.customScale)
         current.copy(base = current.base.copy(prompts = current.base.prompts.copy(positiveBlocks = blocks + block)))
     }
 
@@ -830,7 +877,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         val baseSelection = BaseSetImportSelection(options.basePositive, options.baseNegative)
         replaceWithStash(current.copy(
             base = BaseSetImport.applyOrKeep(current.base, restoredBase, baseSelection),
-            characters = if (options.characters) restoredCharacters else current.characters,
+            characters = if (options.characters) CharacterImport.apply(current.characters, restoredCharacters, options.characterMode) else current.characters,
             generationSettings = generationSettings,
         ))
     }
@@ -1007,6 +1054,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             return
         }
         publishGenerationState(GenerationUiState.Loading)
+        _lastSentPrompt.value = HistorySnapshotFactory.from(generation, generation.usedSeed).generation
         when (val result = container.generationRepository.generate(token, generation)) {
             is GenerationResult.Success -> {
                 val promptText = buildString {
@@ -1115,6 +1163,7 @@ data class RestoreOptions(
     val seed: Boolean = true,
     val inputImage: Boolean = false,
     val wildcardOriginal: Boolean = true,
+    val characterMode: CharacterImportMode = CharacterImportMode.REPLACE,
 )
 
 sealed interface SavedWorkflow {
@@ -1200,6 +1249,14 @@ internal class AutocompleteRequestGuard {
 }
 
 private data class TagInsertTarget(
+    val owner: PromptOwner,
+    val polarity: PromptPolarity,
+    val blockId: String,
+    val cursor: Int,
+)
+
+data class TagInsertReturnTarget(
+    val revision: Long,
     val owner: PromptOwner,
     val polarity: PromptPolarity,
     val blockId: String,

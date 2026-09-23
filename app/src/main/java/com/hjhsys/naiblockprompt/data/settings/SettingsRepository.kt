@@ -31,6 +31,7 @@ class SettingsRepository(private val context: Context) {
         val appearanceMode = stringPreferencesKey("appearance_mode")
         val bundledTagVersion = intPreferencesKey("bundled_tag_version")
         val quickEditWeightStep = stringPreferencesKey("quick_edit_weight_step")
+        val alternateCharacterColors = booleanPreferencesKey("alternate_character_colors")
         val showExclusionConfirmationHelp = booleanPreferencesKey("show_exclusion_confirmation_help")
     }
 
@@ -53,6 +54,7 @@ class SettingsRepository(private val context: Context) {
             imageSaveTreeUri = prefs[Keys.imageSaveTreeUri],
             appearanceMode = prefs[Keys.appearanceMode]?.let { runCatching { AppearanceMode.valueOf(it) }.getOrNull() } ?: AppearanceMode.SYSTEM,
             quickEditWeightStep = prefs[Keys.quickEditWeightStep]?.takeIf(::isValidWeightStep) ?: "0.1",
+            alternateCharacterColors = prefs[Keys.alternateCharacterColors] ?: true,
             showExclusionConfirmationHelp = prefs[Keys.showExclusionConfirmationHelp] ?: true,
         )
     }
@@ -84,6 +86,9 @@ class SettingsRepository(private val context: Context) {
     suspend fun setQuickEditWeightStep(value: String) = context.settingsDataStore.edit { prefs ->
         if (isValidWeightStep(value)) prefs[Keys.quickEditWeightStep] = value.trim()
     }
+    suspend fun setAlternateCharacterColors(value: Boolean) = context.settingsDataStore.edit {
+        it[Keys.alternateCharacterColors] = value
+    }
     suspend fun setShowExclusionConfirmationHelp(value: Boolean) = context.settingsDataStore.edit {
         it[Keys.showExclusionConfirmationHelp] = value
     }
@@ -106,6 +111,7 @@ class SettingsRepository(private val context: Context) {
         setAppearanceMode(settings.appearanceMode)
         setImageSaveTreeUri(settings.imageSaveTreeUri)
         setQuickEditWeightStep(settings.quickEditWeightStep)
+        setAlternateCharacterColors(settings.alternateCharacterColors)
         setShowExclusionConfirmationHelp(settings.showExclusionConfirmationHelp)
     }
 

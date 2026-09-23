@@ -26,10 +26,14 @@ data class StashEntity(
 )
 
 @Serializable
-@Entity(tableName = "saved_folders", indices = [Index(value = ["name"], unique = true)])
+enum class SavedFolderKind { BLOCK, SET, PRESET }
+
+@Serializable
+@Entity(tableName = "saved_folders", indices = [Index(value = ["name", "kind"], unique = true)])
 data class SavedFolderEntity(
     @PrimaryKey val id: String,
     val name: String,
+    @ColumnInfo(defaultValue = "'BLOCK'") val kind: String = SavedFolderKind.BLOCK.name,
     val orderIndex: Int,
     val createdAt: Long,
     val updatedAt: Long,
@@ -54,8 +58,11 @@ data class SavedBlockEntity(
     val enabled: Boolean,
     val locked: Boolean,
     val collapsed: Boolean,
+    @ColumnInfo(defaultValue = "'DEFAULT'") val scaleMode: String = "DEFAULT",
+    @ColumnInfo(defaultValue = "'1.0'") val customScale: String = "1.0",
     val createdAt: Long,
     val updatedAt: Long,
+    @ColumnInfo(defaultValue = "NULL") val thumbnailPath: String? = null,
 )
 
 @Serializable
@@ -68,6 +75,7 @@ data class PresetEntity(
     val updatedAt: Long,
     val snapshotVersion: Int,
     val snapshotJson: String,
+    @ColumnInfo(defaultValue = "NULL") val thumbnailPath: String? = null,
 )
 
 @Serializable
@@ -81,6 +89,7 @@ data class SavedSetEntity(
     val snapshotJson: String,
     val createdAt: Long,
     val updatedAt: Long,
+    @ColumnInfo(defaultValue = "NULL") val thumbnailPath: String? = null,
 )
 
 @Serializable

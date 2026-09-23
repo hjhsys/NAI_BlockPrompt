@@ -179,6 +179,9 @@ fun NaiBlockPromptApp(container: AppContainer) {
                     useTextRendering = settings.useTextRendering,
                     colorHelperMode = settings.colorHelperMode,
                     quickEditWeightStep = settings.quickEditWeightStep,
+                    alternateCharacterColors = settings.alternateCharacterColors,
+                    blockScaleEnabled = session?.blockScaleEnabled ?: false,
+                    defaultBlockScale = session?.defaultBlockScale ?: "1.0",
                     showExclusionConfirmationHelp = settings.showExclusionConfirmationHelp,
                     historyLimit = settings.historyLimit,
                     historyStorageSample = viewModel.historyStorageSample,
@@ -193,6 +196,8 @@ fun NaiBlockPromptApp(container: AppContainer) {
                     onUseTextRenderingChange = viewModel::setUseTextRendering,
                     onColorHelperModeChange = viewModel::setColorHelperMode,
                     onQuickEditWeightStepChange = viewModel::setQuickEditWeightStep,
+                    onAlternateCharacterColorsChange = viewModel::setAlternateCharacterColors,
+                    onBlockScaleChange = viewModel::updateBlockScale,
                     onShowExclusionConfirmationHelpChange = viewModel::setShowExclusionConfirmationHelp,
                     onHistoryLimitChange = viewModel::setHistoryLimit,
                     onAutocompleteSourceChange = viewModel::setAutocompleteSource,
@@ -247,6 +252,9 @@ private fun SettingsScreen(
     useTextRendering: Boolean,
     colorHelperMode: com.hjhsys.naiblockprompt.domain.model.ColorHelperMode,
     quickEditWeightStep: String,
+    alternateCharacterColors: Boolean,
+    blockScaleEnabled: Boolean,
+    defaultBlockScale: String,
     showExclusionConfirmationHelp: Boolean,
     historyLimit: Int,
     historyStorageSample: kotlinx.coroutines.flow.StateFlow<HistoryStorageSample>,
@@ -261,6 +269,8 @@ private fun SettingsScreen(
     onUseTextRenderingChange: (Boolean) -> Unit,
     onColorHelperModeChange: (com.hjhsys.naiblockprompt.domain.model.ColorHelperMode) -> Unit,
     onQuickEditWeightStepChange: (String) -> Unit,
+    onAlternateCharacterColorsChange: (Boolean) -> Unit,
+    onBlockScaleChange: (Boolean, String) -> Unit,
     onShowExclusionConfirmationHelpChange: (Boolean) -> Unit,
     onHistoryLimitChange: (Int) -> Unit,
     onAutocompleteSourceChange: (AutocompleteSource) -> Unit,
@@ -364,6 +374,34 @@ private fun SettingsScreen(
             label = { Text(stringResource(R.string.settings_quick_edit_weight_step)) },
             supportingText = { Text(stringResource(R.string.settings_quick_edit_weight_step_hint)) },
             isError = quickStepDraft.toBigDecimalOrNull()?.let { it <= java.math.BigDecimal.ZERO } ?: true,
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        SettingSwitch(
+            R.string.settings_alternate_character_colors,
+            alternateCharacterColors,
+            onAlternateCharacterColorsChange,
+            R.string.settings_alternate_character_colors_hint,
+        )
+        var blockScaleDraft by rememberSaveable(defaultBlockScale) { mutableStateOf(defaultBlockScale) }
+        SettingSwitch(
+            R.string.use_block_scale,
+            blockScaleEnabled,
+            { enabled ->
+                val value = blockScaleDraft.toBigDecimalOrNull()
+                if (!enabled || value != null) onBlockScaleChange(enabled, blockScaleDraft)
+            },
+        )
+        if (blockScaleEnabled) OutlinedTextField(
+            value = blockScaleDraft,
+            onValueChange = { value ->
+                blockScaleDraft = value
+                if (value.toBigDecimalOrNull() != null) onBlockScaleChange(true, value)
+            },
+            label = { Text(stringResource(R.string.default_block_scale)) },
+            supportingText = { Text(stringResource(R.string.default_block_scale_hint)) },
+            isError = blockScaleDraft.toBigDecimalOrNull() == null,
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             modifier = Modifier.fillMaxWidth(),

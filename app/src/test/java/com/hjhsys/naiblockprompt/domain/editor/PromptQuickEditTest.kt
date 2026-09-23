@@ -144,13 +144,15 @@ class PromptQuickEditTest {
         assertEquals(listOf(QuickEditUnitType.RANDOMIZER, QuickEditUnitType.COMMENT, QuickEditUnitType.TAG), units.map { it.type })
     }
 
-    @Test fun `newlines split only top level tags including CRLF`() {
+    @Test fun `newlines split tags at top level and inside weights including CRLF`() {
         assertEquals(3, PromptQuickEdit.parse("ABC\nDEF\r\nGHI").size)
         assertEquals(4, PromptQuickEdit.parse("ABC, DEF\nGHI, JKL").size)
         val weighted = PromptQuickEdit.parse("1.2::ABC\nDEF ::")
         assertEquals(1, weighted.size)
         assertEquals(QuickEditUnitType.WEIGHT_GROUP, weighted.single().type)
-        assertEquals(1, weighted.single().children.size)
+        assertEquals(2, weighted.single().children.size)
+        assertEquals("ABC", "1.2::ABC\nDEF ::".substring(weighted.single().children[0].range.start, weighted.single().children[0].range.endExclusive))
+        assertEquals("DEF", "1.2::ABC\nDEF ::".substring(weighted.single().children[1].range.start, weighted.single().children[1].range.endExclusive))
         assertEquals(QuickEditUnitType.COMMENT, PromptQuickEdit.parse("## ABC\nDEF ##").single().type)
         assertEquals(QuickEditUnitType.RANDOMIZER, PromptQuickEdit.parse("|| ABC\nDEF ||").single().type)
     }

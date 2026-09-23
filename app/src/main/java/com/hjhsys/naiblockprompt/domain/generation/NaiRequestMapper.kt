@@ -3,6 +3,7 @@ package com.hjhsys.naiblockprompt.domain.generation
 import com.hjhsys.naiblockprompt.data.network.nai.dto.*
 import com.hjhsys.naiblockprompt.domain.model.*
 import com.hjhsys.naiblockprompt.domain.prompt.PromptProcessor
+import java.math.BigDecimal
 import com.hjhsys.naiblockprompt.domain.prompt.WildcardResolver
 import java.security.SecureRandom
 
@@ -71,7 +72,12 @@ class NaiRequestMapper(
             SeedMode.FIXED -> settings.seed ?: return PrepareGenerationResult.Invalid(MissingGenerationField.FIXED_SEED)
         }
 
-        fun joined(blocks: List<PromptBlock>) = PromptProcessor.joinEnabledBlocks(blocks, false)
+        fun joined(blocks: List<PromptBlock>) = PromptProcessor.joinEnabledBlocks(
+            blocks = blocks,
+            normalizeWeightClosings = false,
+            blockScaleEnabled = session.blockScaleEnabled,
+            defaultBlockScale = session.defaultBlockScale.toBigDecimalOrNull() ?: BigDecimal.ONE,
+        )
         fun positive(blocks: List<PromptBlock>, textRendering: TextRenderingState) =
             if (includeTextRendering) PromptProcessor.appendTextRendering(joined(blocks), textRendering) else joined(blocks)
         fun resolved(value: String): String {

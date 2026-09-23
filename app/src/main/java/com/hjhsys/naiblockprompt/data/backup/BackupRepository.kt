@@ -25,7 +25,7 @@ data class PortableTagData(
 
 @Serializable
 data class AppBackupData(
-    val version: Int = 3,
+    val version: Int = 4,
     val settings: AppSettings,
     val currentSession: CurrentSessionEntity?,
     val stash: StashEntity?,
@@ -46,12 +46,14 @@ data class AppBackupData(
 data class BackupMediaManifest(
     val historyThumbnails: Map<String, String> = emptyMap(),
     val tagThumbnails: Map<String, String> = emptyMap(),
+    val libraryThumbnails: Map<String, String> = emptyMap(),
 )
 
 private data class BackupExportSnapshot(
     val payload: AppBackupData,
     val history: List<HistoryEntryEntity>,
     val tagOverrides: List<UserTagOverrideEntity>,
+    val libraryThumbnails: Map<String, String>,
 )
 
 class BackupRepository(
@@ -87,14 +89,19 @@ class BackupRepository(
                     settings = currentSettings,
                     currentSession = sessionDao.getCurrent(),
                     stash = sessionDao.getStash(),
-                    folders = savedDao.listFolders(), blocks = savedDao.listBlocks(),
-                    presets = savedDao.listPresets(), sets = savedDao.listSets(),
+                    folders = savedDao.listFolders(), blocks = savedDao.listBlocks().map { it.copy(thumbnailPath = null) },
+                    presets = savedDao.listPresets().map { it.copy(thumbnailPath = null) }, sets = savedDao.listSets().map { it.copy(thumbnailPath = null) },
                     history = history.map { it.copy(imagePath = "", thumbnailPath = "") },
                     tagData = tagData.copy(overrides = tagData.overrides.map { it.copy(thumbnailPath = null) }),
                     wildcards = tagDao.listWildcards(),
                 ),
                 history = history,
                 tagOverrides = tagData.overrides,
+                libraryThumbnails = buildMap {
+                    savedDao.listBlocks().forEach { row -> row.thumbnailPath?.let { put("BLOCK:${row.id}", it) } }
+                    savedDao.listSets().forEach { row -> row.thumbnailPath?.let { put("SET:${row.id}", it) } }
+                    savedDao.listPresets().forEach { row -> row.thumbnailPath?.let { put("PRESET:${row.id}", it) } }
+                },
             )
         }
         val sources = mutableListOf<BackupArchiveSource>()
@@ -112,17 +119,25 @@ class BackupRepository(
             tagManifest[row.tagId] = entry
             sources += BackupArchiveSource(entry, source)
         }
-        val payload = snapshot.payload.copy(mediaManifest = BackupMediaManifest(historyManifest, tagManifest))
+        val libraryManifest = linkedMapOf<String, String>()
+        snapshot.libraryThumbnails.forEach { (key, path) ->
+            val source = File(path).takeIf { it.isFile && it.length() > 0 } ?: return@forEach
+            val entry = "media/library/${libraryManifest.size}.img"
+            libraryManifest[key] = entry
+            sources += BackupArchiveSource(entry, source)
+        }
+        val payload = snapshot.payload.copy(mediaManifest = BackupMediaManifest(historyManifest, tagManifest, libraryManifest))
         BackupArchiveCodec.encode(json, "backup.json", AppBackupData.serializer(), payload, sources)
     }
 
     suspend fun importAppBackup(bytes: ByteArray) {
         val payload = BackupArchiveCodec.decodeMetadata(bytes, "backup.json", json, AppBackupData.serializer())
-        require(payload.version in 1..3 && payload.tagData.version in 1..2) { "Unsupported backup version" }
+        require(payload.version in 1..4 && payload.tagData.version in 1..2) { "Unsupported backup version" }
         withContext(Dispatchers.IO) {
             val historyDirectory = File(context.filesDir, "backup_history_thumbnails")
             val tagDirectory = File(context.filesDir, "tag_thumbnails")
-            val restoredMedia = BackupArchiveCodec.extractMedia(bytes, payload.mediaManifest, historyDirectory, tagDirectory)
+            val libraryDirectory = File(context.filesDir, "library_thumbnails")
+            val restoredMedia = BackupArchiveCodec.extractMedia(bytes, payload.mediaManifest, historyDirectory, tagDirectory, libraryDirectory)
             try {
                 database.withTransaction {
                     val sessionDao = database.sessionDao()
@@ -130,14 +145,17 @@ class BackupRepository(
                     val historyDao = database.historyDao()
                     val existingFolders = savedDao.listFolders()
                     val folderIds = payload.folders.associate { incoming ->
-                        incoming.id to (existingFolders.firstOrNull { it.name == incoming.name }?.id ?: incoming.id)
+                        incoming.id to (existingFolders.firstOrNull { it.name == incoming.name && it.kind == incoming.kind }?.id ?: incoming.id)
                     }
                     payload.currentSession?.let { sessionDao.upsert(it) }
                     payload.stash?.let { sessionDao.upsertStash(it) }
                     savedDao.upsertFolders(payload.folders.map { it.copy(id = folderIds.getValue(it.id)) })
-                    savedDao.upsertBlocks(payload.blocks.map { it.copy(folderId = folderIds[it.folderId] ?: it.folderId) })
-                    savedDao.upsertPresets(payload.presets.map { it.copy(folderId = folderIds[it.folderId] ?: it.folderId) })
-                    savedDao.upsertSets(payload.sets.map { it.copy(folderId = folderIds[it.folderId] ?: it.folderId) })
+                    val existingBlocks = savedDao.listBlocks().associateBy { it.id }
+                    val existingPresets = savedDao.listPresets().associateBy { it.id }
+                    val existingSets = savedDao.listSets().associateBy { it.id }
+                    savedDao.upsertBlocks(payload.blocks.map { it.copy(folderId = folderIds[it.folderId] ?: it.folderId, thumbnailPath = restoredMedia.libraryThumbnails["BLOCK:${it.id}"] ?: existingBlocks[it.id]?.thumbnailPath) })
+                    savedDao.upsertPresets(payload.presets.map { it.copy(folderId = folderIds[it.folderId] ?: it.folderId, thumbnailPath = restoredMedia.libraryThumbnails["PRESET:${it.id}"] ?: existingPresets[it.id]?.thumbnailPath) })
+                    savedDao.upsertSets(payload.sets.map { it.copy(folderId = folderIds[it.folderId] ?: it.folderId, thumbnailPath = restoredMedia.libraryThumbnails["SET:${it.id}"] ?: existingSets[it.id]?.thumbnailPath) })
                     val existingHistory = historyDao.listAll().associateBy { it.id }
                     historyDirectory.mkdirs()
                     val restoredHistory = payload.history.map { row ->

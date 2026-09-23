@@ -8,6 +8,22 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class NaiRequestMapperTest {
+    @Test fun `block scale changes generated prompt only and excludes text rendering`() {
+        val source = "plain, 1.2::strong ::"
+        val session = Session(
+            base = BasePrompt(
+                PromptPair(positiveBlocks = listOf(PromptBlock(name="p", content=source))),
+                textRendering = TextRenderingState(true, "HELLO"),
+            ),
+            blockScaleEnabled = true,
+            defaultBlockScale = "0.5",
+            generationSettings = GenerationSettings("nai-diffusion-4-5-full", samplerId="k_euler_ancestral", steps=28, scale=5f),
+        )
+        val request = (NaiRequestMapper { 9L }.prepare(session, true) as PrepareGenerationResult.Ready).generation.request
+        assertEquals("0.5::plain ::, 0.6::strong ::,\nText: HELLO", request.input)
+        assertEquals(source, session.base.prompts.positiveBlocks.single().content)
+    }
+
     @Test fun `maps base and ordered characters while preprocessing blocks`() {
         val session = Session(
             base = BasePrompt(PromptPair(

@@ -6,6 +6,9 @@ import java.util.UUID
 const val CURRENT_SNAPSHOT_VERSION = 1
 
 @Serializable
+enum class BlockScaleMode { DEFAULT, CUSTOM }
+
+@Serializable
 data class PromptBlock(
     val id: String = UUID.randomUUID().toString(),
     val name: String,
@@ -14,6 +17,8 @@ data class PromptBlock(
     val locked: Boolean = false,
     val collapsed: Boolean = false,
     val order: Int = 0,
+    val scaleMode: BlockScaleMode = BlockScaleMode.DEFAULT,
+    val customScale: String = "1.0",
 )
 
 @Serializable
@@ -114,6 +119,8 @@ data class Session(
     val base: BasePrompt = BasePrompt(),
     val characters: List<CharacterPrompt> = emptyList(),
     val generationSettings: GenerationSettings = GenerationSettings(),
+    val blockScaleEnabled: Boolean = false,
+    val defaultBlockScale: String = "1.0",
     val updatedAtEpochMillis: Long = System.currentTimeMillis(),
 ) {
     companion object {

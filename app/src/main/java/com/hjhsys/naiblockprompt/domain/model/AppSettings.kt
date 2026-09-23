@@ -19,6 +19,7 @@ data class AppSettings(
     val appearanceMode: AppearanceMode = AppearanceMode.SYSTEM,
     val lastUsedSeed: Long? = null,
     val quickEditWeightStep: String = "0.1",
+    val alternateCharacterColors: Boolean = true,
     val showExclusionConfirmationHelp: Boolean = true,
 )
 

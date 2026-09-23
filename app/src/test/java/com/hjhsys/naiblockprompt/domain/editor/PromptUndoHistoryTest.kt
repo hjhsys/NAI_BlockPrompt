@@ -69,5 +69,24 @@ class PromptUndoHistoryTest {
         assertNull(history.redo(first, snapshot("C")))
     }
 
+    @Test fun `continuous mixed weight adjustments are one undo and redo step`() {
+        val history = PromptUndoHistory()
+        history.recordBeforeChange(first, snapshot("1.0::tag ::"), PromptEditKind.WEIGHT_ADJUSTMENT, coalesceKey = "tag")
+        history.recordBeforeChange(first, snapshot("1.1::tag ::"), PromptEditKind.WEIGHT_ADJUSTMENT, coalesceKey = "tag")
+        history.recordBeforeChange(first, snapshot("1.2::tag ::"), PromptEditKind.WEIGHT_ADJUSTMENT, coalesceKey = "tag")
+        assertEquals("1.0::tag ::", history.undo(first, snapshot("1.1::tag ::"))?.content)
+        assertEquals("1.1::tag ::", history.redo(first, snapshot("1.0::tag ::"))?.content)
+    }
+
+    @Test fun `selection change and typing end weight coalescing`() {
+        val history = PromptUndoHistory()
+        history.recordBeforeChange(first, snapshot("A"), PromptEditKind.WEIGHT_ADJUSTMENT, coalesceKey = "a")
+        history.recordBeforeChange(first, snapshot("B"), PromptEditKind.WEIGHT_ADJUSTMENT, coalesceKey = "b")
+        history.recordBeforeChange(first, snapshot("C"), PromptEditKind.TYPING, 10)
+        assertEquals("C", history.undo(first, snapshot("D"))?.content)
+        assertEquals("B", history.undo(first, snapshot("C"))?.content)
+        assertEquals("A", history.undo(first, snapshot("B"))?.content)
+    }
+
     private fun snapshot(content: String, cursor: Int = 0) = PromptEditorSnapshot(content, cursor, cursor)
 }

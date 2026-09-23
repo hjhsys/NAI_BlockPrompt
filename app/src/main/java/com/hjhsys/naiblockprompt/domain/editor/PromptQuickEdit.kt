@@ -225,7 +225,7 @@ object PromptQuickEdit {
             val close = range.endExclusive - 2
             val content = trimRange(text, QuickEditRange(open + 2, close))
             val protected = (comments + randomizers).filter { it.start >= content.start && it.endExclusive <= content.endExclusive }
-            val children = splitContainer(text, content.start, content.endExclusive, emptyList(), protected.filter { text.startsWith("##", it.start) }, protected.filter { text.startsWith("||", it.start) }, splitNewlines = false)
+            val children = splitContainer(text, content.start, content.endExclusive, emptyList(), protected.filter { text.startsWith("##", it.start) }, protected.filter { text.startsWith("||", it.start) }, splitNewlines = true)
                 .mapNotNull { child ->
                     val cr = trimRange(text, child); if (cr.start == cr.endExclusive) null
                     else {

@@ -13,7 +13,7 @@ import com.hjhsys.naiblockprompt.data.local.entity.*
         TagExclusionEntity::class,
         WildcardEntity::class,
     ],
-    version = 13,
+    version = 16,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {

@@ -4,8 +4,27 @@ import com.hjhsys.naiblockprompt.domain.model.PromptBlock
 import com.hjhsys.naiblockprompt.domain.model.TextRenderingState
 import org.junit.Assert.*
 import org.junit.Test
+import java.math.BigDecimal
 
 class PromptProcessorTest {
+    @Test fun `block scale groups plain runs and multiplies explicit weights`() {
+        val input = "ABC, DEF, 1.3::year 2025 ::, GHI, JKL, -0.3::low complexity ::, ||red, blue||"
+        assertEquals(
+            "0.7::ABC, DEF ::, 0.91::year 2025 ::, 0.7::GHI, JKL ::, -0.21::low complexity ::, 0.7::||red, blue|| ::",
+            PromptProcessor.scalePrompt(input, BigDecimal("0.70")),
+        )
+    }
+
+    @Test fun `block scale one and malformed weight are no ops`() {
+        assertEquals("ABC, 1.2::DEF ::", PromptProcessor.scalePrompt("ABC, 1.2::DEF ::", BigDecimal.ONE))
+        assertEquals("ABC, 1.2::DEF", PromptProcessor.scalePrompt("ABC, 1.2::DEF", BigDecimal("0.7")))
+    }
+
+    @Test fun `join scale off remains legacy and comments are removed before scaling`() {
+        val block = PromptBlock(name = "x", content = "ABC, ## memo ## DEF")
+        assertEquals("ABC,  DEF,", PromptProcessor.joinEnabledBlocks(listOf(block), false, false, BigDecimal("0.7")))
+        assertEquals("0.7::ABC, DEF ::,", PromptProcessor.joinEnabledBlocks(listOf(block), false, true, BigDecimal("0.7")))
+    }
     @Test fun `top level comma split accepts comma whitespace boundary only`() {
         val input = "ABC, DEF, GHI"
 

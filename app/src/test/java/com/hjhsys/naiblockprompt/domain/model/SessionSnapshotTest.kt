@@ -55,6 +55,19 @@ class SessionSnapshotTest {
         assertEquals(false, restored.session.characters.single().collapsed)
         assertEquals(true, restored.session.characters.single().enabled)
         assertEquals(false, restored.session.base.collapsed)
+        assertEquals(false, restored.session.blockScaleEnabled)
+        assertEquals("1.0", restored.session.defaultBlockScale)
+    }
+
+    @Test fun `snapshot round trip preserves global and per block scale`() {
+        val block = PromptBlock(name = "Artist", content = "artist", scaleMode = BlockScaleMode.CUSTOM, customScale = "1.25")
+        val original = SessionSnapshot(session = Session.empty().copy(
+            base = BasePrompt(PromptPair(positiveBlocks = listOf(block))),
+            blockScaleEnabled = true,
+            defaultBlockScale = "0.7",
+        ))
+        val restored = json.decodeFromString(SessionSnapshot.serializer(), json.encodeToString(SessionSnapshot.serializer(), original))
+        assertEquals(original, restored)
     }
 
     @Test

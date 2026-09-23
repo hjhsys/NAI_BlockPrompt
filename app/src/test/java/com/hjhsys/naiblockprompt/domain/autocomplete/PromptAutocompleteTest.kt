@@ -43,14 +43,14 @@ class PromptAutocompleteTest {
         assertEquals("red hair, ", replacement.text)
     }
 
-    @Test fun `separate words after fragment are preserved as context`() {
+    @Test fun `selection replaces the complete multi word token`() {
         val text = "shirt lift"
         val replacement = PromptAutocomplete.replace(
             text,
             PromptAutocomplete.currentFragment(text, "shirt".length)!!,
             "shirt",
         )
-        assertEquals("shirt lift, shirt, ", replacement.text)
+        assertEquals("shirt, ", replacement.text)
         assertEquals(replacement.text.length, replacement.cursor)
     }
 
@@ -64,25 +64,25 @@ class PromptAutocompleteTest {
         assertEquals("shirt, ", replacement.text)
     }
 
-    @Test fun `multi word context at token end is preserved when selection is not its completion`() {
+    @Test fun `different canonical suggestion replaces the whole typed token`() {
         val text = "shirt lift"
         val replacement = PromptAutocomplete.replace(
             text,
             PromptAutocomplete.currentFragment(text, text.length)!!,
             "shirt",
         )
-        assertEquals("shirt lift, shirt, ", replacement.text)
+        assertEquals("shirt, ", replacement.text)
     }
 
-    @Test fun `context insertion before another token keeps one comma boundary`() {
+    @Test fun `replacement before another token keeps one comma boundary`() {
         val text = "shirt lift, smile"
         val replacement = PromptAutocomplete.replace(
             text,
             PromptAutocomplete.currentFragment(text, "shirt".length)!!,
             "shirt",
         )
-        assertEquals("shirt lift, shirt, smile", replacement.text)
-        assertEquals("shirt lift, shirt".length, replacement.cursor)
+        assertEquals("shirt, smile", replacement.text)
+        assertEquals("shirt".length, replacement.cursor)
     }
 
     @Test fun `token replacement works at token start middle and end`() {
@@ -127,5 +127,77 @@ class PromptAutocompleteTest {
     @Test fun `weighted syntax prefix is not part of queried fragment`() {
         val text = "1.2::red hai"
         assertEquals(PromptFragment("red hai", 5, text.length), PromptAutocomplete.currentFragment(text, text.length))
+    }
+
+    @Test fun `canonical suggestion replaces misspelled whole tag`() {
+        val text = "op shirt"
+        val replacement = PromptAutocomplete.replace(
+            text,
+            PromptAutocomplete.currentFragment(text, text.length)!!,
+            "open_shirt",
+        )
+
+        assertEquals("open shirt, ", replacement.text)
+    }
+
+    @Test fun `semantically different suggestion replaces whole tag instead of appending`() {
+        val text = "thick penis"
+        val replacement = PromptAutocomplete.replace(
+            text,
+            PromptAutocomplete.currentFragment(text, text.length)!!,
+            "girthy_penis",
+        )
+
+        assertEquals("girthy penis, ", replacement.text)
+    }
+
+    @Test fun `weight opener is preserved while autocomplete replaces its tag`() {
+        val text = "1.2::op shirt"
+        val replacement = PromptAutocomplete.replace(
+            text,
+            PromptAutocomplete.currentFragment(text, text.length)!!,
+            "open_shirt",
+        )
+
+        assertEquals("1.2::open shirt, ", replacement.text)
+    }
+
+    @Test fun `autocomplete before another line adds a trailing comma`() {
+        val text = "op shirt\nblue eyes"
+        val replacement = PromptAutocomplete.replace(
+            text,
+            PromptAutocomplete.currentFragment(text, "op shirt".length)!!,
+            "open_shirt",
+        )
+
+        assertEquals("open shirt,\nblue eyes", replacement.text)
+    }
+
+    @Test fun `autocomplete does not add a comma when next line already starts with one`() {
+        val text = "op shirt\n, blue eyes"
+        val replacement = PromptAutocomplete.replace(
+            text,
+            PromptAutocomplete.currentFragment(text, "op shirt".length)!!,
+            "open_shirt",
+        )
+
+        assertEquals("open shirt\n, blue eyes", replacement.text)
+    }
+
+    @Test fun `cursor between weight delimiter characters does not create an invalid fragment range`() {
+        val text = "tag, " + "x".repeat(180) + "::weighted tag"
+        val cursorBetweenColons = text.indexOf("::") + 1
+
+        assertNull(PromptAutocomplete.currentFragment(text, cursorBetweenColons))
+        assertEquals(
+            PromptFragment("weighted tag", cursorBetweenColons + 1, text.length),
+            PromptAutocomplete.currentFragment(text, text.length),
+        )
+    }
+
+    @Test fun `autocomplete fragment remains safe for every cursor offset around weight syntax`() {
+        val text = "first, 1.2::second tag ::, third"
+
+        (0..text.length).forEach { cursor -> PromptAutocomplete.currentFragment(text, cursor) }
     }
 }
