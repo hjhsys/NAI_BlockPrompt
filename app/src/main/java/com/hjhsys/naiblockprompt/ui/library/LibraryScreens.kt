@@ -59,6 +59,7 @@ import com.hjhsys.naiblockprompt.domain.editor.PromptCherryPickDraft
 import com.hjhsys.naiblockprompt.domain.editor.CharacterImportMode
 import com.hjhsys.naiblockprompt.ui.generate.PromptCherryPickDialog
 import com.hjhsys.naiblockprompt.ui.generate.ProcessedPromptDialog
+import com.hjhsys.naiblockprompt.ui.generate.PromptCompareCandidate
 import com.hjhsys.naiblockprompt.domain.generation.SeedSelection
 import com.hjhsys.naiblockprompt.domain.model.SavedSetKind
 import java.io.File
@@ -83,7 +84,7 @@ fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, isActive
     }
     var restore by remember { mutableStateOf<HistoryItem?>(null) }
     var cherryPick by remember { mutableStateOf<PromptCherryPickDraft?>(null) }
-    var promptToView by remember { mutableStateOf<com.hjhsys.naiblockprompt.domain.model.SessionSnapshot?>(null) }
+    var promptToView by remember { mutableStateOf<HistoryItem?>(null) }
     var viewerReference by remember { mutableStateOf<String?>(null) }
     var actionImage by remember { mutableStateOf<HistoryItem?>(null) }
     var deleteCandidate by remember { mutableStateOf<HistoryItem?>(null) }
@@ -96,9 +97,24 @@ fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, isActive
             viewModel.appendCherryPickedSelection(blocks, selected, destination)
         }
     } }
-    promptToView?.let { snapshot ->
-        snapshot.generation?.let { prompt -> ProcessedPromptDialog(prompt) { promptToView = null } }
-            ?: SessionPromptDialog(snapshot.session) { promptToView = null }
+    promptToView?.let { selectedItem ->
+        selectedItem.snapshot?.generation?.let { prompt ->
+            ProcessedPromptDialog(
+                prompt = prompt,
+                comparisonCandidates = history.mapNotNull { item ->
+                    val candidatePrompt = item.snapshot?.generation ?: return@mapNotNull null
+                    if (item.entity.id == selectedItem.entity.id) return@mapNotNull null
+                    PromptCompareCandidate(
+                        id = item.entity.id,
+                        prompt = candidatePrompt,
+                        thumbnailPath = item.entity.thumbnailPath,
+                        dateLabel = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(item.entity.createdAt)),
+                        modelLabel = item.entity.model,
+                        promptPreview = (listOf(candidatePrompt.basePositive) + candidatePrompt.characterPositive).filter(String::isNotBlank).joinToString(", "),
+                    )
+                },
+            ) { promptToView = null }
+        } ?: selectedItem.snapshot?.session?.let { SessionPromptDialog(it) { promptToView = null } }
     }
     viewerReference?.let { reference ->
         ImageViewer(
@@ -216,7 +232,7 @@ fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, isActive
                             { cherryPick = PromptCherryPick.fromSession(source) }
                         },
                         promptViewEnabled = item.snapshot != null,
-                        onViewPrompt = item.snapshot?.let { snapshot -> { promptToView = snapshot } },
+                        onViewPrompt = item.snapshot?.let { { promptToView = item } },
                     )
                 }
             }
@@ -336,6 +352,7 @@ fun SavedScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onWorkflow
     var search by rememberSaveable { mutableStateOf("") }
     var searchScope by rememberSaveable { mutableStateOf(SavedSearchScope.TITLE_ONLY) }
     var searchMenuExpanded by remember { mutableStateOf(false) }
+    var showLibraryHelp by remember { mutableStateOf(false) }
     var workflowName by rememberSaveable(workflow) { mutableStateOf(when (val active = workflow) { is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveBlock -> active.block.name; is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SavePreset -> "Preset"; else -> "" }) }
     var folderFilter by rememberSaveable { mutableStateOf("ALL") }
     var overwriteWorkflow by rememberSaveable { mutableStateOf(false) }
@@ -353,6 +370,18 @@ fun SavedScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onWorkflow
     var loadBasePositive by rememberSaveable { mutableStateOf(true) }
     var loadBaseNegative by rememberSaveable { mutableStateOf(true) }
     var thumbnailTarget by remember { mutableStateOf<LibraryThumbnailTarget?>(null) }
+    if (showLibraryHelp) AlertDialog(
+        onDismissRequest = { showLibraryHelp = false },
+        title = { Text(stringResource(R.string.library_types_help_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                LibraryTypeHelpSection(R.string.saved_blocks, R.string.library_block_help)
+                LibraryTypeHelpSection(R.string.saved_sets, R.string.library_set_help)
+                LibraryTypeHelpSection(R.string.presets, R.string.library_preset_help)
+            }
+        },
+        confirmButton = { TextButton(onClick = { showLibraryHelp = false }) { Text(stringResource(R.string.confirm)) } },
+    )
     thumbnailTarget?.let { target ->
         LibraryThumbnailDialog(
             target = target,
@@ -498,7 +527,13 @@ fun SavedScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onWorkflow
     }
     Scaffold(
         topBar = {
-            if (workflow == null) AppTitleBar(R.string.saved_title, menuItems = listOf(AppTitleMenuItem(R.string.nav_settings, Icons.Default.Settings, onClick = onOpenSettings)))
+            if (workflow == null) AppTitleBar(
+                R.string.saved_title,
+                menuItems = listOf(
+                    AppTitleMenuItem(R.string.nav_settings, Icons.Default.Settings, onClick = onOpenSettings),
+                    AppTitleMenuItem(R.string.library_types_help_title, Icons.Default.HelpOutline, onClick = { showLibraryHelp = true }),
+                ),
+            )
             else if (isSaveWorkflow) AppTitleBar(
                 when (workflow) {
                     is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveBlock -> R.string.save_block_mode
@@ -647,6 +682,14 @@ fun SavedScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onWorkflow
         }
         }
     } }
+}
+
+@Composable
+private fun LibraryTypeHelpSection(@StringRes title: Int, @StringRes body: Int) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(stringResource(title), style = MaterialTheme.typography.titleSmall)
+        Text(stringResource(body), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
 }
 
 private enum class SavedSearchScope(@param:StringRes val label: Int) {

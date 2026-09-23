@@ -8,6 +8,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
@@ -147,6 +148,7 @@ private class StickyAutocompleteState(
 )
 
 private class PromptToolbarHost(
+    val viewportTopInWindow: Float,
     val viewportBottomInWindow: Float,
     val update: (String, StickyPromptToolbarState?) -> Unit,
 )
@@ -162,6 +164,18 @@ internal fun shouldShowStickyPromptToolbar(
     inlineToolbarTopInWindow.isFinite() &&
     viewportBottomInWindow.isFinite() &&
     inlineToolbarTopInWindow >= viewportBottomInWindow - thresholdPx
+
+internal fun shouldShowStickyAutocomplete(
+    editorTopInWindow: Float,
+    editorBottomInWindow: Float,
+    viewportTopInWindow: Float,
+    viewportBottomInWindow: Float,
+): Boolean = editorTopInWindow.isFinite() &&
+    editorBottomInWindow.isFinite() &&
+    viewportTopInWindow.isFinite() &&
+    viewportBottomInWindow.isFinite() &&
+    editorBottomInWindow > viewportTopInWindow &&
+    editorTopInWindow < viewportBottomInWindow
 
 @Composable
 private fun StickyPromptToolbar(state: StickyPromptToolbarState, modifier: Modifier = Modifier) {
@@ -321,6 +335,7 @@ fun GenerateScreen(
         viewModel.consumeTagInsertReturnTarget(target.revision)
     }
     var shortcutArea by remember { mutableStateOf(IntSize.Zero) }
+    var promptViewportTopInWindow by remember { mutableFloatStateOf(Float.NEGATIVE_INFINITY) }
     var promptViewportBottomInWindow by remember { mutableFloatStateOf(Float.POSITIVE_INFINITY) }
     var stickyPromptToolbar by remember { mutableStateOf<StickyPromptToolbarState?>(null) }
     var databasePosition by rememberSaveable { mutableStateOf(floatArrayOf(-1f, -1f)) }
@@ -390,11 +405,12 @@ fun GenerateScreen(
         Modifier.fillMaxSize().padding(innerPadding)
             .onSizeChanged { shortcutArea = it }
             .onGloballyPositioned { coordinates ->
-                promptViewportBottomInWindow = coordinates.positionInWindow().y + coordinates.size.height
+                promptViewportTopInWindow = coordinates.positionInWindow().y
+                promptViewportBottomInWindow = promptViewportTopInWindow + coordinates.size.height
             },
     ) {
       CompositionLocalProvider(
-          LocalPromptToolbarHost provides PromptToolbarHost(promptViewportBottomInWindow) { blockId, state ->
+          LocalPromptToolbarHost provides PromptToolbarHost(promptViewportTopInWindow, promptViewportBottomInWindow) { blockId, state ->
               if (state != null) stickyPromptToolbar = state
               else if (stickyPromptToolbar?.blockId == blockId) stickyPromptToolbar = null
           },
@@ -931,6 +947,15 @@ private fun CharacterPositioningDialog(session: Session, viewModel: MainViewMode
 
 private data class TagEditorTarget(val owner: PromptOwner, val polarity: PromptPolarity, val blockId: String, val cursor: Int)
 
+internal data class PromptCompareCandidate(
+    val id: String,
+    val prompt: GeneratedPromptSnapshot,
+    val thumbnailPath: String,
+    val dateLabel: String,
+    val modelLabel: String?,
+    val promptPreview: String,
+)
+
 @Composable
 fun GenerationSettingsScreen(session: Session?, viewModel: MainViewModel, onBack: () -> Unit, onOpenSettings: () -> Unit, headerTokenSummary: String? = null) {
     val subscriptionStatus by viewModel.subscriptionStatus.collectAsStateWithLifecycle()
@@ -1002,6 +1027,7 @@ private fun GenerationCard(
     onExportInpaintDiagnostics: (() -> Unit)? = null,
     debugPrompt: GeneratedPromptSnapshot? = null,
     comparisonCandidates: List<ImageCompareCandidate> = emptyList(),
+    promptComparisonCandidates: List<PromptCompareCandidate> = emptyList(),
 ) {
     var showActions by remember { mutableStateOf(false) }
     var showOriginal by rememberSaveable { mutableStateOf(false) }
@@ -1011,7 +1037,7 @@ private fun GenerationCard(
     if (showOriginal && record != null) {
         ImageViewer(record.imagePath, comparisonCandidates) { showOriginal = false }
     }
-    if (showDebugPrompt && debugPrompt != null) ProcessedPromptDialog(debugPrompt) { showDebugPrompt = false }
+    if (showDebugPrompt && debugPrompt != null) ProcessedPromptDialog(debugPrompt, promptComparisonCandidates) { showDebugPrompt = false }
     ElevatedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             if (record != null) {
@@ -1156,13 +1182,37 @@ fun ResultScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onRestore
                             .orEmpty(),
                     )
                 },
+                promptComparisonCandidates = history.mapNotNull { item ->
+                    val prompt = item.snapshot?.generation ?: return@mapNotNull null
+                    if (item.entity.imagePath == currentResult?.imagePath) return@mapNotNull null
+                    PromptCompareCandidate(
+                        id = item.entity.id,
+                        prompt = prompt,
+                        thumbnailPath = item.entity.thumbnailPath,
+                        dateLabel = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(item.entity.createdAt)),
+                        modelLabel = item.entity.model,
+                        promptPreview = (listOf(prompt.basePositive) + prompt.characterPositive).filter(String::isNotBlank).joinToString(", "),
+                    )
+                },
             )
         }
     }
 }
 
 @Composable
-internal fun ProcessedPromptDialog(prompt: GeneratedPromptSnapshot, dismiss: () -> Unit) {
+internal fun ProcessedPromptDialog(
+    prompt: GeneratedPromptSnapshot,
+    comparisonCandidates: List<PromptCompareCandidate> = emptyList(),
+    dismiss: () -> Unit,
+) {
+    var showComparePicker by remember(prompt) { mutableStateOf(false) }
+    var compareTarget by remember(prompt) { mutableStateOf<PromptCompareCandidate?>(null) }
+    if (showComparePicker) PromptComparePicker(
+        candidates = comparisonCandidates,
+        dismiss = { showComparePicker = false },
+        select = { compareTarget = it; showComparePicker = false },
+    )
+    compareTarget?.let { target -> PromptComparisonDialog(prompt, target, dismiss = { compareTarget = null }) }
     AlertDialog(
         onDismissRequest = dismiss,
         title = { Text(stringResource(R.string.prompt_view_title)) },
@@ -1195,20 +1245,128 @@ internal fun ProcessedPromptDialog(prompt: GeneratedPromptSnapshot, dismiss: () 
             }
         },
         confirmButton = { TextButton(onClick = dismiss) { Text(stringResource(R.string.confirm)) } },
+        dismissButton = {
+            if (comparisonCandidates.isNotEmpty()) {
+                TextButton(onClick = { showComparePicker = true }) {
+                    Icon(Icons.Default.CompareArrows, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text(stringResource(R.string.compare_prompts))
+                }
+            }
+        },
     )
 }
 
 @Composable
-private fun DebugPromptSection(title: String, value: String) {
+@OptIn(ExperimentalMaterial3Api::class)
+private fun PromptComparePicker(
+    candidates: List<PromptCompareCandidate>,
+    dismiss: () -> Unit,
+    select: (PromptCompareCandidate) -> Unit,
+) {
+    Dialog(onDismissRequest = dismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            Scaffold(
+                topBar = { TopAppBar(title = { Text(stringResource(R.string.choose_prompt_to_compare)) }, navigationIcon = { IconButton(onClick = dismiss) { Icon(Icons.Default.Close, stringResource(R.string.close)) } }) },
+            ) { padding ->
+                LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(candidates, key = { it.id }) { candidate ->
+                        ElevatedCard(Modifier.fillMaxWidth().clickable { select(candidate) }) {
+                            Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                AsyncImage(
+                                    model = File(candidate.thumbnailPath),
+                                    contentDescription = stringResource(R.string.generated_image),
+                                    modifier = Modifier.size(92.dp),
+                                    contentScale = ContentScale.Crop,
+                                )
+                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                        Text(candidate.modelLabel ?: candidate.prompt.modelId, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text(candidate.dateLabel, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                    Text(candidate.promptPreview.ifBlank { stringResource(R.string.empty_prompt) }, maxLines = 3, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+@OptIn(ExperimentalMaterial3Api::class)
+private fun PromptComparisonDialog(
+    first: GeneratedPromptSnapshot,
+    secondCandidate: PromptCompareCandidate,
+    dismiss: () -> Unit,
+) {
+    var showSecond by remember(first, secondCandidate.id) { mutableStateOf(false) }
+    val firstFields = processedPromptFields(first)
+    val secondFields = processedPromptFields(secondCandidate.prompt)
+    val firstMap = firstFields.toMap()
+    val secondMap = secondFields.toMap()
+    val labels = (firstFields.map { it.first } + secondFields.map { it.first }).distinct()
+    val changedCount = labels.count { firstMap[it].orEmpty() != secondMap[it].orEmpty() }
+    val visible = if (showSecond) secondMap else firstMap
+    Dialog(onDismissRequest = dismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            Scaffold(
+                topBar = { TopAppBar(title = { Text(stringResource(R.string.prompt_comparison_title)) }, actions = { IconButton(onClick = dismiss) { Icon(Icons.Default.Close, stringResource(R.string.close)) } }) },
+            ) { padding ->
+                Column(Modifier.fillMaxSize().padding(padding).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(!showSecond, { showSecond = false }, label = { Text("A") }, modifier = Modifier.weight(1f))
+                        FilterChip(showSecond, { showSecond = true }, label = { Text("B") }, modifier = Modifier.weight(1f))
+                    }
+                    Text(stringResource(R.string.prompt_comparison_changed_count, changedCount), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        items(labels, key = { it }) { label ->
+                            DebugPromptSection(
+                                title = label,
+                                value = visible[label].orEmpty(),
+                                highlighted = firstMap[label].orEmpty() != secondMap[label].orEmpty(),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun processedPromptFields(prompt: GeneratedPromptSnapshot): List<Pair<String, String>> {
+    val basePositiveLabel = stringResource(R.string.restore_base_positive)
+    val baseNegativeLabel = stringResource(R.string.restore_base_negative)
+    val positiveLabel = stringResource(R.string.positive)
+    val negativeLabel = stringResource(R.string.negative)
+    val characterLabels = (0 until maxOf(prompt.characterPositive.size, prompt.characterNegative.size)).map { index ->
+        stringResource(R.string.character_prompt, index + 1)
+    }
+    return buildList {
+        add(basePositiveLabel to prompt.basePositive)
+        add(baseNegativeLabel to prompt.baseNegative)
+        val characterCount = maxOf(prompt.characterPositive.size, prompt.characterNegative.size)
+        repeat(characterCount) { index ->
+            add("${characterLabels[index]} · $positiveLabel" to prompt.characterPositive.getOrNull(index).orEmpty())
+            add("${characterLabels[index]} · $negativeLabel" to prompt.characterNegative.getOrNull(index).orEmpty())
+        }
+    }
+}
+
+@Composable
+private fun DebugPromptSection(title: String, value: String, highlighted: Boolean = false) {
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
         Text(title, style = MaterialTheme.typography.titleSmall)
-        Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = MaterialTheme.shapes.small) {
+        Surface(color = if (highlighted) MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = .55f) else MaterialTheme.colorScheme.surfaceContainer, shape = MaterialTheme.shapes.small) {
             Text(value.ifEmpty { "—" }, Modifier.fillMaxWidth().padding(10.dp), style = MaterialTheme.typography.bodySmall)
         }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 internal fun PromptCherryPickDialog(
     current: Session,
@@ -1226,13 +1384,18 @@ internal fun PromptCherryPickDialog(
             if (character.prompts.negativeBlocks.any { it.content.isNotBlank() }) add(SourceField("${character.id}-n", stringResource(R.string.character_prompt, index + 1) + " · " + stringResource(R.string.negative), PromptOwner.Character(character.id), PromptPolarity.NEGATIVE, character.prompts.negativeBlocks, character.type))
         }
     }
-    var sourceKey by remember(initialDraft) { mutableStateOf(sourceFields.firstOrNull()?.key.orEmpty()) }
-    val source = sourceFields.firstOrNull { it.key == sourceKey } ?: sourceFields.firstOrNull()
+    var sourceIndex by rememberSaveable(initialDraft) { mutableIntStateOf(0) }
+    val sourcePage = sourceIndex.coerceIn(0, sourceFields.lastIndex.coerceAtLeast(0))
+    val source = sourceFields.getOrNull(sourcePage)
     var selected by remember(source?.key) { mutableStateOf(emptySet<String>()) }
     var destination by remember(source?.key) {
-        mutableStateOf<CherryPickDestination>(CherryPickDestination.Base(source?.polarity ?: PromptPolarity.POSITIVE))
+        mutableStateOf(
+            source?.let { PromptCherryPick.defaultDestination(current, draft, it.owner, it.polarity) }
+                ?: CherryPickDestination.Base(PromptPolarity.POSITIVE),
+        )
     }
     var importedNotice by remember { mutableStateOf(false) }
+    var cherryPickViewportTop by remember { mutableFloatStateOf(Float.NaN) }
     val cursors = remember(initialDraft) { mutableStateMapOf<String, Int>() }
     val splitName = stringResource(R.string.imported_block_name)
     Dialog(onDismissRequest = dismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
@@ -1254,49 +1417,186 @@ internal fun PromptCherryPickDialog(
                     }
                 },
             ) { padding ->
-                Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(stringResource(R.string.cherry_pick_source), style = MaterialTheme.typography.titleMedium)
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        items(sourceFields, key = { it.key }) { field -> FilterChip(selected = source?.key == field.key, onClick = { sourceKey = field.key; importedNotice = false }, label = { Text(field.label) }) }
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(padding)
+                        .onGloballyPositioned { cherryPickViewportTop = it.positionInWindow().y },
+                    contentPadding = PaddingValues(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    item { Text(stringResource(R.string.cherry_pick_source), style = MaterialTheme.typography.titleMedium) }
+                    item {
+                        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            sourceFields.groupBy { it.owner }.values.forEach { fields ->
+                                FlowRow(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    verticalArrangement = Arrangement.spacedBy(0.dp),
+                                    maxItemsInEachRow = 2,
+                                ) {
+                                    fields.forEach { field ->
+                                        val index = sourceFields.indexOf(field)
+                                        CompactPromptSelectorChip(
+                                            selected = sourcePage == index,
+                                            onClick = { sourceIndex = index },
+                                            label = field.label,
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
-                    source?.blocks?.sortedBy { it.order }?.forEach { block ->
-                        val cursor = cursors[block.id]?.coerceIn(0, block.content.length) ?: block.content.length
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-                            Checkbox(block.id in selected, { checked -> selected = if (checked) selected + block.id else selected - block.id })
-                            OutlinedTextField(
-                                value = TextFieldValue(block.content, TextRange(cursor)),
-                                onValueChange = { value ->
-                                    cursors[block.id] = value.selection.end
-                                    if (value.text != block.content) draft = PromptCherryPick.updateBlockContent(draft, source.owner, source.polarity, block.id, value.text)
+                    if (sourceFields.isNotEmpty()) item {
+                        Text(
+                            "${source?.label.orEmpty()}  ·  ${sourcePage + 1} / ${sourceFields.size}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    source?.let { field ->
+                        item(key = field.key) {
+                            val swipeThreshold = with(LocalDensity.current) { 48.dp.toPx() }
+                            Column(
+                                Modifier.fillMaxWidth().pointerInput(sourceFields.size, sourcePage) {
+                                    var totalDrag = 0f
+                                    detectHorizontalDragGestures(
+                                        onDragStart = { totalDrag = 0f },
+                                        onDragCancel = { totalDrag = 0f },
+                                        onDragEnd = {
+                                            sourceIndex = when {
+                                                totalDrag < -swipeThreshold -> (sourcePage + 1).coerceAtMost(sourceFields.lastIndex)
+                                                totalDrag > swipeThreshold -> (sourcePage - 1).coerceAtLeast(0)
+                                                else -> sourcePage
+                                            }
+                                            totalDrag = 0f
+                                        },
+                                    ) { change, amount ->
+                                        change.consume()
+                                        totalDrag += amount
+                                    }
                                 },
-                                label = { Text(block.name) },
-                                minLines = 3,
-                                modifier = Modifier.weight(1f),
-                            )
-                            IconButton(
-                                onClick = { draft = PromptCherryPick.splitBlock(draft, source.owner, source.polarity, block.id, cursor, splitName) },
-                                enabled = PromptProcessor.splitAtTopLevelBoundary(block.content, cursor) != null,
-                            ) { Icon(Icons.Default.CallSplit, stringResource(R.string.cherry_pick_split)) }
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                val orderedBlocks = field.blocks.sortedBy { it.order }
+                                orderedBlocks.forEachIndexed { index, block ->
+                                    key(block.id) {
+                                        val cursor = cursors[block.id]?.coerceIn(0, block.content.length) ?: block.content.length
+                                        var blockTopInWindow by remember(block.id) { mutableFloatStateOf(Float.NaN) }
+                                        var blockHeightPx by remember(block.id) { mutableIntStateOf(0) }
+                                        var actionsHeightPx by remember(block.id) { mutableIntStateOf(0) }
+                                        val stickyMarginPx = with(LocalDensity.current) { 4.dp.toPx() }
+                                        val actionsOffset = if (cherryPickViewportTop.isFinite() && blockTopInWindow.isFinite()) {
+                                            (cherryPickViewportTop + stickyMarginPx - blockTopInWindow)
+                                                .coerceIn(0f, (blockHeightPx - actionsHeightPx).coerceAtLeast(0).toFloat())
+                                                .toInt()
+                                        } else 0
+                                        Box(
+                                            Modifier
+                                                .fillMaxWidth()
+                                                .onGloballyPositioned {
+                                                    blockTopInWindow = it.positionInWindow().y
+                                                    blockHeightPx = it.size.height
+                                                },
+                                        ) {
+                                            Row(Modifier.fillMaxWidth().padding(end = 48.dp), verticalAlignment = Alignment.Top) {
+                                                Checkbox(block.id in selected, { checked -> selected = if (checked) selected + block.id else selected - block.id })
+                                                OutlinedTextField(
+                                                    value = TextFieldValue(block.content, TextRange(cursor)),
+                                                    onValueChange = { value ->
+                                                        cursors[block.id] = value.selection.end
+                                                        if (value.text != block.content) draft = PromptCherryPick.updateBlockContent(draft, field.owner, field.polarity, block.id, value.text)
+                                                    },
+                                                    label = { Text(block.name) },
+                                                    minLines = 3,
+                                                    modifier = Modifier.weight(1f),
+                                                )
+                                            }
+                                            Column(
+                                                Modifier
+                                                    .align(Alignment.TopEnd)
+                                                    .offset { IntOffset(0, actionsOffset) }
+                                                    .onSizeChanged { actionsHeightPx = it.height },
+                                            ) {
+                                                IconButton(
+                                                    onClick = { draft = PromptCherryPick.splitBlock(draft, field.owner, field.polarity, block.id, cursor, splitName) },
+                                                    enabled = PromptProcessor.splitAtTopLevelBoundary(block.content, cursor) != null,
+                                                ) { Icon(Icons.Default.CallSplit, stringResource(R.string.cherry_pick_split)) }
+                                                IconButton(
+                                                    onClick = {
+                                                        val previous = orderedBlocks[index - 1]
+                                                        draft = PromptCherryPick.mergeBlockWithPrevious(draft, field.owner, field.polarity, block.id)
+                                                        if (block.id in selected) selected = selected - block.id + previous.id
+                                                    },
+                                                    enabled = index > 0,
+                                                ) { Icon(Icons.Default.MergeType, stringResource(R.string.merge_with_previous_block)) }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
-                    HorizontalDivider()
-                    Text(stringResource(R.string.cherry_pick_destination), style = MaterialTheme.typography.titleMedium)
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        item { FilterChip(destination == CherryPickDestination.Base(PromptPolarity.POSITIVE), { destination = CherryPickDestination.Base(PromptPolarity.POSITIVE) }, label = { Text(stringResource(R.string.base_prompt) + " · " + stringResource(R.string.positive)) }) }
-                        item { FilterChip(destination == CherryPickDestination.Base(PromptPolarity.NEGATIVE), { destination = CherryPickDestination.Base(PromptPolarity.NEGATIVE) }, label = { Text(stringResource(R.string.base_prompt) + " · " + stringResource(R.string.negative)) }) }
-                        current.characters.sortedBy { it.order }.forEachIndexed { index, character ->
-                            item { FilterChip(destination == CherryPickDestination.Character(character.id, PromptPolarity.POSITIVE), { destination = CherryPickDestination.Character(character.id, PromptPolarity.POSITIVE) }, label = { Text(stringResource(R.string.character_prompt, index + 1) + " · " + stringResource(R.string.positive)) }) }
-                            item { FilterChip(destination == CherryPickDestination.Character(character.id, PromptPolarity.NEGATIVE), { destination = CherryPickDestination.Character(character.id, PromptPolarity.NEGATIVE) }, label = { Text(stringResource(R.string.character_prompt, index + 1) + " · " + stringResource(R.string.negative)) }) }
+                    item { HorizontalDivider(Modifier.padding(vertical = 4.dp)) }
+                    item { Text(stringResource(R.string.cherry_pick_destination), style = MaterialTheme.typography.titleMedium) }
+                    item {
+                        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), maxItemsInEachRow = 2) {
+                                CompactPromptSelectorChip(
+                                    destination == CherryPickDestination.Base(PromptPolarity.POSITIVE),
+                                    { destination = CherryPickDestination.Base(PromptPolarity.POSITIVE) },
+                                    stringResource(R.string.base_prompt) + " · " + stringResource(R.string.positive),
+                                )
+                                CompactPromptSelectorChip(
+                                    destination == CherryPickDestination.Base(PromptPolarity.NEGATIVE),
+                                    { destination = CherryPickDestination.Base(PromptPolarity.NEGATIVE) },
+                                    stringResource(R.string.base_prompt) + " · " + stringResource(R.string.negative),
+                                )
+                            }
+                            current.characters.sortedBy { it.order }.forEachIndexed { index, character ->
+                                FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), maxItemsInEachRow = 2) {
+                                    CompactPromptSelectorChip(
+                                        destination == CherryPickDestination.Character(character.id, PromptPolarity.POSITIVE),
+                                        { destination = CherryPickDestination.Character(character.id, PromptPolarity.POSITIVE) },
+                                        stringResource(R.string.character_prompt, index + 1) + " · " + stringResource(R.string.positive_short),
+                                    )
+                                    CompactPromptSelectorChip(
+                                        destination == CherryPickDestination.Character(character.id, PromptPolarity.NEGATIVE),
+                                        { destination = CherryPickDestination.Character(character.id, PromptPolarity.NEGATIVE) },
+                                        stringResource(R.string.character_prompt, index + 1) + " · " + stringResource(R.string.negative_short),
+                                    )
+                                }
+                            }
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), maxItemsInEachRow = 2) {
+                                CompactPromptSelectorChip(
+                                    (destination as? CherryPickDestination.NewCharacter)?.polarity == PromptPolarity.POSITIVE,
+                                    { destination = CherryPickDestination.NewCharacter(source?.type ?: CharacterType.OTHER, PromptPolarity.POSITIVE) },
+                                    stringResource(R.string.cherry_pick_new_character) + " · " + stringResource(R.string.positive_short),
+                                )
+                                CompactPromptSelectorChip(
+                                    (destination as? CherryPickDestination.NewCharacter)?.polarity == PromptPolarity.NEGATIVE,
+                                    { destination = CherryPickDestination.NewCharacter(source?.type ?: CharacterType.OTHER, PromptPolarity.NEGATIVE) },
+                                    stringResource(R.string.cherry_pick_new_character) + " · " + stringResource(R.string.negative_short),
+                                )
+                            }
                         }
-                        item { FilterChip((destination as? CherryPickDestination.NewCharacter)?.polarity == PromptPolarity.POSITIVE, { destination = CherryPickDestination.NewCharacter(source?.type ?: CharacterType.OTHER, PromptPolarity.POSITIVE) }, label = { Text(stringResource(R.string.cherry_pick_new_character) + " · " + stringResource(R.string.positive)) }) }
-                        item { FilterChip((destination as? CherryPickDestination.NewCharacter)?.polarity == PromptPolarity.NEGATIVE, { destination = CherryPickDestination.NewCharacter(source?.type ?: CharacterType.OTHER, PromptPolarity.NEGATIVE) }, label = { Text(stringResource(R.string.cherry_pick_new_character) + " · " + stringResource(R.string.negative)) }) }
                     }
-                    if (selected.isEmpty()) Text(stringResource(R.string.cherry_pick_nothing), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    if (importedNotice) Text(stringResource(R.string.cherry_pick_imported), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium)
+                    if (selected.isEmpty()) item { Text(stringResource(R.string.cherry_pick_nothing), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    if (importedNotice) item { Text(stringResource(R.string.cherry_pick_imported), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium) }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun CompactPromptSelectorChip(selected: Boolean, onClick: () -> Unit, label: String) {
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        label = { Text(label, maxLines = 1, style = MaterialTheme.typography.labelMedium) },
+        modifier = Modifier.height(36.dp),
+    )
 }
 
 @Composable
@@ -1754,6 +2054,8 @@ private fun PromptBlockCard(
     val toolbarHost = LocalPromptToolbarHost.current
     val density = LocalDensity.current
     var inlineToolbarTopInWindow by remember(block.id) { mutableFloatStateOf(Float.NaN) }
+    var editorTopInWindow by remember(block.id) { mutableFloatStateOf(Float.NaN) }
+    var editorBottomInWindow by remember(block.id) { mutableFloatStateOf(Float.NaN) }
     var editorValue by remember(block.id) {
         mutableStateOf(TextFieldValue(block.content, TextRange(block.content.length)))
     }
@@ -1886,7 +2188,15 @@ private fun PromptBlockCard(
     val canUndo = !block.locked && undoKey in undoableBlocks
     val canRedo = !block.locked && undoKey in redoableBlocks
     val stickyToolbarLabel = "$ownerLabel · ${block.name}"
-    val stickyAutocomplete = if (!quickEdit && autocomplete.blockId == block.id) {
+    val editorVisibleInViewport = toolbarHost?.let { host ->
+        shouldShowStickyAutocomplete(
+            editorTopInWindow = editorTopInWindow,
+            editorBottomInWindow = editorBottomInWindow,
+            viewportTopInWindow = host.viewportTopInWindow,
+            viewportBottomInWindow = host.viewportBottomInWindow,
+        )
+    } == true
+    val stickyAutocomplete = if (!quickEdit && autocomplete.blockId == block.id && editorVisibleInViewport) {
         StickyAutocompleteState(
             local = autocomplete.local,
             novelAi = autocomplete.novelAi,
@@ -1899,7 +2209,7 @@ private fun PromptBlockCard(
             onSelect = ::selectAutocompleteSuggestion,
         )
     } else null
-    val stickyToolbarState = remember(block.id, stickyToolbarLabel, quickEdit, canUndo, canRedo, showFormatter, autocomplete) {
+    val stickyToolbarState = remember(block.id, stickyToolbarLabel, quickEdit, canUndo, canRedo, showFormatter, autocomplete, editorVisibleInViewport) {
         StickyPromptToolbarState(
             blockId = block.id,
             label = stickyToolbarLabel,
@@ -2105,7 +2415,7 @@ private fun PromptBlockCard(
                                         context.getString(R.string.split_block_selection_error),
                                         android.widget.Toast.LENGTH_SHORT,
                                     ).show()
-                                    PromptProcessor.splitAtTopLevelComma(editorValue.text, selection.end) == null ->
+                                    PromptProcessor.splitAtTopLevelBoundary(editorValue.text, selection.end) == null ->
                                         android.widget.Toast.makeText(
                                             context,
                                             context.getString(R.string.split_block_boundary_error),
@@ -2316,10 +2626,16 @@ private fun PromptBlockCard(
                     enabled = !block.locked,
                     label = { Text(stringResource(R.string.prompt_content)) },
                     minLines = 3,
-                    modifier = Modifier.fillMaxWidth().onFocusChanged {
-                        editorFocused = it.isFocused
-                        onEditorState(it.isFocused, editorValue.selection.end)
-                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onGloballyPositioned { coordinates ->
+                            editorTopInWindow = coordinates.positionInWindow().y
+                            editorBottomInWindow = editorTopInWindow + coordinates.size.height
+                        }
+                        .onFocusChanged {
+                            editorFocused = it.isFocused
+                            onEditorState(it.isFocused, editorValue.selection.end)
+                        },
                     visualTransformation = remember(highColor, lowColor, neutralWeightColor, commentColor, randomizerColor) {
                         PromptVisualTransformation(highColor, lowColor, neutralWeightColor, commentColor, randomizerColor)
                     },

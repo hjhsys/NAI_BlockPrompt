@@ -109,10 +109,10 @@ fun NaiBlockPromptApp(container: AppContainer) {
             if (currentRoute != MainDestination.TagPicker.route &&
                 currentRoute != MainDestination.Help.route
             ) NavigationBar(
-                // Keep the compact 72dp bar above the system navigation/gesture inset.
+                // Keep the compact 62dp bar above the system navigation/gesture inset.
                 // Applying height first would include the inset inside that fixed height
                 // and squeeze/crop the labels on devices with a tall bottom inset.
-                modifier = Modifier.navigationBarsPadding().height(72.dp),
+                modifier = Modifier.navigationBarsPadding().height(62.dp),
                 windowInsets = WindowInsets(0, 0, 0, 0),
             ) {
                 listOf(MainDestination.Database, MainDestination.Generate, MainDestination.Saved).forEach { destination ->
@@ -125,7 +125,7 @@ fun NaiBlockPromptApp(container: AppContainer) {
                                 launchSingleTop = true
                             }
                         },
-                        modifier = Modifier.height(72.dp),
+                        modifier = Modifier.height(62.dp),
                         icon = { Icon(destination.icon, contentDescription = null, modifier = Modifier.size(22.dp)) },
                         label = { Text(stringResource(destination.label), style = MaterialTheme.typography.labelSmall, maxLines = 1) },
                     )

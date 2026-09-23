@@ -112,7 +112,7 @@ object SessionEditor {
         val index = blocks.indexOfFirst { it.id == blockId }
         val block = blocks.getOrNull(index) ?: return@updateBlocks source
         if (block.locked) return@updateBlocks source
-        val split = PromptProcessor.splitAtTopLevelComma(block.content, cursor) ?: return@updateBlocks source
+        val split = PromptProcessor.splitAtTopLevelBoundary(block.content, cursor) ?: return@updateBlocks source
         val created = PromptBlock(
             name = newBlockName,
             content = split.right,

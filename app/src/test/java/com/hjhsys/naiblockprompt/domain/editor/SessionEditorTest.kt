@@ -162,6 +162,17 @@ class SessionEditorTest {
         assertTrue(after.characters.single().prompts.positiveBlocks.isEmpty())
     }
 
+    @Test fun `split accepts a top level newline without a comma`() {
+        val block = PromptBlock(name = "Block 1", content = "ABC\nDEF")
+        val before = Session.empty().copy(base = BasePrompt(PromptPair(positiveBlocks = listOf(block))))
+
+        val after = SessionEditor.splitBlockAtCursor(
+            before, PromptOwner.Base, PromptPolarity.POSITIVE, block.id, 3, "Block 2",
+        )
+
+        assertEquals(listOf("ABC", "DEF"), after.base.prompts.positiveBlocks.map { it.content })
+    }
+
     @Test fun `split rejects tag middle protected empty and locked boundaries`() {
         val invalidContents = listOf(
             "blue eyes",

@@ -52,6 +52,27 @@ object PromptCherryPick {
         )
     }
 
+    /** Chooses the least-surprising initial target when the visible source field changes. */
+    fun defaultDestination(
+        current: Session,
+        draft: PromptCherryPickDraft,
+        sourceOwner: PromptOwner,
+        polarity: PromptPolarity,
+    ): CherryPickDestination = when (sourceOwner) {
+        PromptOwner.Base -> CherryPickDestination.Base(polarity)
+        is PromptOwner.Character -> {
+            val sourceCharacters = draft.characters.sortedBy { it.order }
+            val sourceIndex = sourceCharacters.indexOfFirst { it.id == sourceOwner.id }
+            val sourceCharacter = sourceCharacters.getOrNull(sourceIndex)
+            val destinationCharacter = current.characters.sortedBy { it.order }.getOrNull(sourceIndex)
+            if (destinationCharacter != null) {
+                CherryPickDestination.Character(destinationCharacter.id, polarity)
+            } else {
+                CherryPickDestination.NewCharacter(sourceCharacter?.type ?: CharacterType.OTHER, polarity)
+            }
+        }
+    }
+
     fun splitBlock(
         draft: PromptCherryPickDraft,
         owner: PromptOwner,
@@ -72,6 +93,35 @@ object PromptCherryPick {
         fun pair(source: PromptPair) = when (polarity) {
             PromptPolarity.POSITIVE -> source.copy(positiveBlocks = split(source.positiveBlocks))
             PromptPolarity.NEGATIVE -> source.copy(negativeBlocks = split(source.negativeBlocks))
+        }
+        return when (owner) {
+            PromptOwner.Base -> draft.copy(base = pair(draft.base))
+            is PromptOwner.Character -> draft.copy(characters = draft.characters.map {
+                if (it.id == owner.id) it.copy(prompts = pair(it.prompts)) else it
+            })
+        }
+    }
+
+    fun mergeBlockWithPrevious(
+        draft: PromptCherryPickDraft,
+        owner: PromptOwner,
+        polarity: PromptPolarity,
+        blockId: String,
+    ): PromptCherryPickDraft {
+        fun merge(blocks: List<PromptBlock>): List<PromptBlock> {
+            val ordered = blocks.sortedBy { it.order }
+            val index = ordered.indexOfFirst { it.id == blockId }
+            if (index <= 0) return blocks
+            val upper = ordered[index - 1]
+            val current = ordered[index]
+            return ordered.toMutableList().apply {
+                this[index - 1] = upper.copy(content = PromptProcessor.mergeBlockContents(upper.content, current.content))
+                removeAt(index)
+            }.mapIndexed { order, item -> item.copy(order = order) }
+        }
+        fun pair(source: PromptPair) = when (polarity) {
+            PromptPolarity.POSITIVE -> source.copy(positiveBlocks = merge(source.positiveBlocks))
+            PromptPolarity.NEGATIVE -> source.copy(negativeBlocks = merge(source.negativeBlocks))
         }
         return when (owner) {
             PromptOwner.Base -> draft.copy(base = pair(draft.base))

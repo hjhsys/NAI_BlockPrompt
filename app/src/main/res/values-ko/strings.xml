@@ -617,7 +617,7 @@
     <string name="split_block_at_cursor">커서 위치에서 Block 나누기</string>
     <string name="merge_with_previous_block">위 Block과 합치기</string>
     <string name="split_block_selection_error">텍스트 선택을 해제하고 나눌 위치에 커서를 놓아주세요.</string>
-    <string name="split_block_boundary_error">태그 사이의 쉼표 뒤에 커서를 두고 다시 시도해주세요.</string>
+    <string name="split_block_boundary_error">태그 사이의 쉼표 뒤 또는 줄바꿈 위치에 커서를 두고 다시 시도해주세요.</string>
     <string name="merge_block_enabled_mismatch">ON/OFF 상태가 같은 Block만 합칠 수 있습니다.</string>
     <string name="use_block_scale">Block 배율 사용</string>
     <string name="default_block_scale">기본 Block 배율</string>
@@ -644,4 +644,16 @@
     <string name="move_selected">이동</string>
     <string name="view_prompt">Prompt 보기</string>
     <string name="prompt_view_title">생성에 사용한 Prompt</string>
+    <string name="previous">이전</string>
+    <string name="next">다음</string>
+    <string name="positive_short">P</string>
+    <string name="negative_short">N</string>
+    <string name="library_types_help_title">Block / Set / Preset이란?</string>
+    <string name="library_block_help">재사용할 Prompt Block 하나입니다. 스타일, 의상, 구도 같은 태그 묶음을 저장할 때 사용합니다.</string>
+    <string name="library_set_help">Base 또는 Character 한 영역의 Positive/Negative Block 전체입니다. 작업 전체를 바꾸지 않고 한 Prompt 영역만 재사용할 때 사용합니다.</string>
+    <string name="library_preset_help">Base, Character, Block과 생성 설정을 포함한 생성 작업 전체입니다.</string>
+    <string name="compare_prompts">Prompt 비교</string>
+    <string name="choose_prompt_to_compare">비교할 Prompt 선택</string>
+    <string name="prompt_comparison_title">Prompt 비교</string>
+    <string name="prompt_comparison_changed_count">%1$d개 영역이 다릅니다. A/B를 전환해 확인하세요.</string>
 </resources>

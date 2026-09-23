@@ -13,6 +13,14 @@ class GeneratePagerPageTest {
         assertTrue(shouldShowStickyPromptToolbar(true, 900f, 800f, 4f))
         assertFalse(shouldShowStickyPromptToolbar(true, Float.NaN, 800f, 4f))
     }
+    @Test fun `sticky autocomplete only appears while its editor intersects viewport`() {
+        assertTrue(shouldShowStickyAutocomplete(100f, 500f, 50f, 800f))
+        assertTrue(shouldShowStickyAutocomplete(-100f, 100f, 50f, 800f))
+        assertTrue(shouldShowStickyAutocomplete(700f, 900f, 50f, 800f))
+        assertFalse(shouldShowStickyAutocomplete(-200f, 50f, 50f, 800f))
+        assertFalse(shouldShowStickyAutocomplete(800f, 900f, 50f, 800f))
+        assertFalse(shouldShowStickyAutocomplete(Float.NaN, 500f, 50f, 800f))
+    }
     @Test fun `generation workspace uses four stable pages`() {
         assertEquals(0, GenerateNavigationPolicy.SETTINGS_PAGE)
         assertEquals(1, GenerateNavigationPolicy.GENERATE_PAGE)

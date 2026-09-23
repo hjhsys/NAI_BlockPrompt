@@ -79,7 +79,7 @@ object PromptProcessor {
         return null
     }
 
-    /** Cherry-pick draft split: accepts the same comma boundary plus a top-level line break. */
+    /** Block split boundary: accepts a top-level comma boundary or line break. */
     fun splitAtTopLevelBoundary(input: String, cursor: Int): PromptSplit? {
         splitAtTopLevelComma(input, cursor)?.let { return it }
         if (cursor !in 0..input.length) return null
@@ -96,7 +96,10 @@ object PromptProcessor {
                     val breakEnd = if (input[index] == '\r' && input.getOrNull(index + 1) == '\n') index + 2 else index + 1
                     var rightStart = breakEnd
                     while (rightStart < input.length && input[rightStart].isWhitespace()) rightStart++
-                    if (cursor in breakEnd..rightStart) {
+                    // Android places the caret before the line-break code point when the
+                    // user taps the visual end of the previous line. Accept that position,
+                    // the CR/LF interior, and indentation before the next tag.
+                    if (cursor in index..rightStart) {
                         val left = input.substring(0, index).trimEnd()
                         val right = input.substring(rightStart).trimEnd()
                         if (left.trim().trim(',').isEmpty() || right.trim().trim(',').isEmpty()) return null

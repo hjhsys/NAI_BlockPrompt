@@ -617,7 +617,7 @@
     <string name="split_block_at_cursor">Split block at cursor</string>
     <string name="merge_with_previous_block">Merge with previous block</string>
     <string name="split_block_selection_error">Clear the text selection and place the cursor where you want to split.</string>
-    <string name="split_block_boundary_error">Place the cursor after a comma between tags and try again.</string>
+    <string name="split_block_boundary_error">Place the cursor after a comma or at a line break between tags and try again.</string>
     <string name="merge_block_enabled_mismatch">Only blocks with the same ON/OFF state can be merged.</string>
     <string name="use_block_scale">Use Block Scale</string>
     <string name="default_block_scale">Default Block Scale</string>
@@ -644,4 +644,16 @@
     <string name="move_selected">Move</string>
     <string name="view_prompt">View prompt</string>
     <string name="prompt_view_title">Prompt used for generation</string>
+    <string name="previous">Previous</string>
+    <string name="next">Next</string>
+    <string name="positive_short">P</string>
+    <string name="negative_short">N</string>
+    <string name="library_types_help_title">What are Block, Set, and Preset?</string>
+    <string name="library_block_help">A single reusable Prompt Block. Use it for a tag group such as style, clothing, or composition.</string>
+    <string name="library_set_help">All Positive/Negative blocks for one Base or Character section. Use it to reuse one prompt section without replacing the whole session.</string>
+    <string name="library_preset_help">A complete generation workspace, including Base, Characters, blocks, and generation settings.</string>
+    <string name="compare_prompts">Compare prompts</string>
+    <string name="choose_prompt_to_compare">Choose a prompt to compare</string>
+    <string name="prompt_comparison_title">Prompt comparison</string>
+    <string name="prompt_comparison_changed_count">%1$d sections differ. Switch A/B to inspect them.</string>
 </resources>

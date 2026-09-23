@@ -75,12 +75,30 @@ class PromptCherryPickTest {
     @Test fun `temporary split accepts top level newline but rejects protected newline`() {
         val plain = block("Source", "ABC\nDEF")
         val source = PromptCherryPickDraft(PromptPair(listOf(plain)), emptyList())
-        val split = PromptCherryPick.splitBlock(source, PromptOwner.Base, PromptPolarity.POSITIVE, plain.id, 4, "Part")
+        val split = PromptCherryPick.splitBlock(source, PromptOwner.Base, PromptPolarity.POSITIVE, plain.id, 3, "Part")
         assertEquals(listOf("ABC", "DEF"), split.base.positiveBlocks.map { it.content })
 
         val protected = block("Protected", "1.2::ABC\nDEF ::")
         val protectedSource = PromptCherryPickDraft(PromptPair(listOf(protected)), emptyList())
         assertEquals(protectedSource, PromptCherryPick.splitBlock(protectedSource, PromptOwner.Base, PromptPolarity.POSITIVE, protected.id, 9, "Part"))
+    }
+
+    @Test fun `temporary merge joins current block into previous without mutating source`() {
+        val first = block("First", "ABC", 0)
+        val second = block("Second", "DEF", 1)
+        val source = PromptCherryPickDraft(PromptPair(listOf(first, second)), emptyList())
+
+        val merged = PromptCherryPick.mergeBlockWithPrevious(
+            source,
+            PromptOwner.Base,
+            PromptPolarity.POSITIVE,
+            second.id,
+        )
+
+        assertEquals(listOf("ABC,\n\nDEF"), merged.base.positiveBlocks.map { it.content })
+        assertEquals(first.id, merged.base.positiveBlocks.single().id)
+        assertEquals(listOf("ABC", "DEF"), source.base.positiveBlocks.map { it.content })
+        assertEquals(source, PromptCherryPick.mergeBlockWithPrevious(source, PromptOwner.Base, PromptPolarity.POSITIVE, first.id))
     }
 
     @Test fun `one source selection can append to opposite base polarity or a new character`() {
@@ -94,5 +112,35 @@ class PromptCherryPickTest {
         assertEquals(CharacterType.GIRL, character.characters.single().type)
         assertEquals("ABC", character.characters.single().prompts.positiveBlocks.single().content)
         assertNotEquals(sourceBlock.id, character.characters.single().prompts.positiveBlocks.single().id)
+    }
+
+    @Test fun `default destination follows base polarity and matching character position`() {
+        val firstSource = CharacterPrompt(type = CharacterType.GIRL, order = 0)
+        val secondSource = CharacterPrompt(type = CharacterType.BOY, order = 1)
+        val draft = PromptCherryPickDraft(PromptPair(), listOf(secondSource, firstSource))
+        val firstDestination = CharacterPrompt(order = 0)
+        val secondDestination = CharacterPrompt(order = 1)
+        val current = Session.empty().copy(characters = listOf(secondDestination, firstDestination))
+
+        assertEquals(
+            CherryPickDestination.Base(PromptPolarity.NEGATIVE),
+            PromptCherryPick.defaultDestination(current, draft, PromptOwner.Base, PromptPolarity.NEGATIVE),
+        )
+        assertEquals(
+            CherryPickDestination.Character(secondDestination.id, PromptPolarity.POSITIVE),
+            PromptCherryPick.defaultDestination(current, draft, PromptOwner.Character(secondSource.id), PromptPolarity.POSITIVE),
+        )
+    }
+
+    @Test fun `default destination creates a character when source position exceeds current characters`() {
+        val firstSource = CharacterPrompt(type = CharacterType.GIRL, order = 0)
+        val secondSource = CharacterPrompt(type = CharacterType.BOY, order = 1)
+        val draft = PromptCherryPickDraft(PromptPair(), listOf(firstSource, secondSource))
+        val current = Session.empty().copy(characters = listOf(CharacterPrompt(order = 0)))
+
+        assertEquals(
+            CherryPickDestination.NewCharacter(CharacterType.BOY, PromptPolarity.NEGATIVE),
+            PromptCherryPick.defaultDestination(current, draft, PromptOwner.Character(secondSource.id), PromptPolarity.NEGATIVE),
+        )
     }
 }
