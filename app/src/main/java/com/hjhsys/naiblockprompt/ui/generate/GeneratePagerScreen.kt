@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -39,6 +41,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import android.app.Activity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.hjhsys.naiblockprompt.R
@@ -64,6 +67,8 @@ internal object GenerateNavigationPolicy {
         autoOpenResult && imagePath != null && imagePath != lastOpenedImagePath
 }
 
+internal val LocalGeneratePagerScrolling = staticCompositionLocalOf { false }
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun GeneratePagerScreen(
@@ -81,6 +86,7 @@ fun GeneratePagerScreen(
     val scope = rememberCoroutineScope()
     val generationState by viewModel.generationState.collectAsStateWithLifecycle()
     val generationInProgress by viewModel.generationInProgress.collectAsStateWithLifecycle()
+    val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     val wildcardItems by viewModel.wildcards.collectAsStateWithLifecycle()
     val wildcardValues = remember(wildcardItems) {
         wildcardItems.associate { it.name to it.valuesText.lines().filter(String::isNotBlank) }
@@ -133,7 +139,7 @@ fun GeneratePagerScreen(
     Scaffold(
         contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
         bottomBar = {
-            Surface(shadowElevation = 8.dp) {
+            if (!imeVisible) Surface(shadowElevation = 8.dp) {
                 Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)) {
                     if (vibeIgnored) {
                         Surface(
@@ -168,7 +174,6 @@ fun GeneratePagerScreen(
             state = pagerState,
             modifier = Modifier.fillMaxSize(),
             beyondViewportPageCount = 1,
-            // Autocomplete state may outlive TextField focus. It must never globally disable paging.
             userScrollEnabled = true,
         ) { page ->
         key(page) {
@@ -180,7 +185,10 @@ fun GeneratePagerScreen(
                 onOpenSettings = onOpenSettings,
                 headerTokenSummary = headerTokenSummary,
             )
-            page == GenerateNavigationPolicy.GENERATE_PAGE -> CompositionLocalProvider(LocalQuickEditExitSignal provides quickEditExitSignal) {
+            page == GenerateNavigationPolicy.GENERATE_PAGE -> CompositionLocalProvider(
+                LocalQuickEditExitSignal provides quickEditExitSignal,
+                LocalGeneratePagerScrolling provides pagerState.isScrollInProgress,
+            ) {
                 GenerateScreen(
                     session,
                     appSettings,

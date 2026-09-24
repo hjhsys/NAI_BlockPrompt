@@ -21,7 +21,7 @@ class PromptAutocompleteTest {
         val fragment = PromptAutocomplete.currentFragment(source, 14)!!
         val replacement = PromptAutocomplete.replace(source, fragment, "blue_hair")
         assertEquals("girl, blue hair, smile", replacement.text)
-        assertEquals(15, replacement.cursor)
+        assertEquals(17, replacement.cursor)
     }
 
     @Test fun `single incomplete tag is completed in place`() {
@@ -82,7 +82,7 @@ class PromptAutocompleteTest {
             "shirt",
         )
         assertEquals("shirt, smile", replacement.text)
-        assertEquals("shirt".length, replacement.cursor)
+        assertEquals("shirt, ".length, replacement.cursor)
     }
 
     @Test fun `token replacement works at token start middle and end`() {
@@ -100,7 +100,7 @@ class PromptAutocompleteTest {
     @Test fun `replacement normalizes whitespace around the active token`() {
         val replacement = PromptTokenEditing.replaceAtCursor("girl,   ski rt   ,   smile", 12, "shirt")
         assertEquals("girl, shirt, smile", replacement.text)
-        assertEquals("girl, shirt".length, replacement.cursor)
+        assertEquals("girl, shirt, ".length, replacement.cursor)
     }
 
     @Test fun `first and last prompt tokens are replaced without duplicate commas`() {

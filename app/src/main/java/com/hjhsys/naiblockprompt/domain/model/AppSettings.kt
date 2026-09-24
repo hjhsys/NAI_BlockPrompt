@@ -19,10 +19,13 @@ data class AppSettings(
     val appearanceMode: AppearanceMode = AppearanceMode.SYSTEM,
     val lastUsedSeed: Long? = null,
     val quickEditWeightStep: String = "0.1",
+    val quickEditToolbarPlacement: QuickEditToolbarPlacement = QuickEditToolbarPlacement.BELOW_SELECTION,
     val alternateCharacterColors: Boolean = true,
+    val showStickyPromptControls: Boolean = true,
     val showExclusionConfirmationHelp: Boolean = true,
 )
 
 @Serializable enum class AutocompleteSource { NOVEL_AI, DANBOORU, BOTH }
 @Serializable enum class AppearanceMode { SYSTEM, LIGHT, DARK }
 @Serializable enum class ColorHelperMode { ALWAYS, WHILE_EDITING, OFF }
+@Serializable enum class QuickEditToolbarPlacement { BELOW_SELECTION, BOTTOM }

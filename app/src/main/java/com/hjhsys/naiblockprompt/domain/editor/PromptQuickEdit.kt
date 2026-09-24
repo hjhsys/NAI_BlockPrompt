@@ -92,6 +92,20 @@ object PromptQuickEdit {
         it.type == QuickEditUnitType.WEIGHT_GROUP || it.type == QuickEditUnitType.TAG && it.parentWeightRange == null
     } == true
 
+    fun canAdjustWeight(text: String, selections: List<QuickEditSelection>): Boolean {
+        if (canAdjustWeight(selections)) return true
+        val selected = selections.distinctBy { it.range }.sortedBy { it.range.start }
+        if (selected.size < 2) return false
+        if (selected.all { it.type == QuickEditUnitType.WEIGHT_GROUP && it.weightValue != null }) {
+            val commonWeight = selected.first().weightValue
+            return selected.all { it.weightValue?.compareTo(commonWeight) == 0 }
+        }
+        if (selected.any { it.type != QuickEditUnitType.TAG || it.parentWeightRange != null }) return false
+        val top = parse(text)
+        val indexes = selected.map { selection -> top.indexOfFirst { it.range == selection.range } }
+        return indexes.none { it < 0 } && indexes.zipWithNext().all { (first, second) -> second == first + 1 }
+    }
+
     fun selectedText(text: String, selections: List<QuickEditSelection>): String = selections
         .sortedBy { it.range.start }
         .joinToString(", ") { text.substring(it.range.start, it.range.endExclusive) }
@@ -149,6 +163,62 @@ object PromptQuickEdit {
             }
             else -> QuickEditResult.Unsupported
         }
+    }
+
+    /** Wraps adjacent, unweighted top-level tags as one group; existing groups keep single-selection semantics. */
+    fun adjustWeight(text: String, selections: List<QuickEditSelection>, delta: BigDecimal): QuickEditResult {
+        val selected = selections.distinctBy { it.range }.sortedBy { it.range.start }
+        if (selected.size == 1) return adjustWeight(text, selected.single(), delta)
+        if (!canAdjustWeight(text, selected)) return QuickEditResult.Unsupported
+        if (selected.all { it.type == QuickEditUnitType.WEIGHT_GROUP }) {
+            val current = selected.first().weightValue ?: return QuickEditResult.Unsupported
+            var next = current + delta
+            if (next.compareTo(BigDecimal.ZERO) == 0) next += delta
+            val output = StringBuilder(text.length)
+            val selectionOffsets = mutableListOf<Int>()
+            val parsedGroups = parse(text).associateBy { it.range }
+            var copiedUntil = 0
+            selected.forEach { group ->
+                val parsed = parsedGroups[group.range] ?: return QuickEditResult.Unsupported
+                output.append(text, copiedUntil, group.range.start)
+                selectionOffsets += output.length
+                val body = text.substring(parsed.contentRange.start, parsed.contentRange.endExclusive)
+                if (next.compareTo(BigDecimal.ONE) == 0) output.append(body)
+                else output.append(format(next)).append("::").append(body).append(" ::")
+                copiedUntil = group.range.endExclusive
+            }
+            output.append(text, copiedUntil, text.length)
+            return QuickEditResult.Changed(output.toString(), selectionOffsets.firstOrNull(), selectionOffsets)
+        }
+        val range = QuickEditRange(selected.first().range.start, selected.last().range.endExclusive)
+        val weight = format(BigDecimal.ONE + delta)
+        return replace(text, range, "$weight::${text.slice(range)} ::", range.start)
+    }
+
+    /** Adds one visual line break around a selected semantic bundle without reformatting unrelated text. */
+    fun insertLineBreak(text: String, selections: List<QuickEditSelection>, before: Boolean): QuickEditResult {
+        val selected = selections.distinctBy { it.range }.sortedBy { it.range.start }
+        if (selected.isEmpty()) return QuickEditResult.Unsupported
+        val first = selected.first().range.start
+        val last = selected.last().range.endExclusive
+        val changed: String
+        val shift: Int
+        if (before) {
+            var whitespaceStart = first
+            while (whitespaceStart > 0 && text[whitespaceStart - 1] in charArrayOf(' ', '\t')) whitespaceStart--
+            changed = text.replaceRange(whitespaceStart, first, "\n")
+            shift = 1 - (first - whitespaceStart)
+        } else {
+            var insertion = last
+            while (insertion < text.length && text[insertion] in charArrayOf(' ', '\t')) insertion++
+            if (text.getOrNull(insertion) == ',') insertion++
+            var whitespaceEnd = insertion
+            while (whitespaceEnd < text.length && text[whitespaceEnd] in charArrayOf(' ', '\t')) whitespaceEnd++
+            changed = text.replaceRange(insertion, whitespaceEnd, "\n")
+            shift = 0
+        }
+        val offsets = selected.map { (it.range.start + shift).coerceIn(0, changed.length) }
+        return QuickEditResult.Changed(changed, offsets.firstOrNull(), offsets)
     }
 
     fun setWeight(text: String, selection: QuickEditSelection, value: BigDecimal): QuickEditResult {

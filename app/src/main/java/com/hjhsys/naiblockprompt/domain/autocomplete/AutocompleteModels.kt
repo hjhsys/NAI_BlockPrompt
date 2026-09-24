@@ -53,7 +53,13 @@ object PromptTokenEditing {
             else -> rawSuffix
         }
         val prefix = before + leadingSpace
-        val separatorLength = if (rawSuffix.isEmpty()) suffix.length else 0
+        val separatorLength = when {
+            rawSuffix.startsWith(',') -> 2 // normalized comma + following space
+            rawSuffix.startsWith("\r\n") || rawSuffix.startsWith('\n') || rawSuffix.startsWith('\r') ->
+                if (rawSuffix.trimStart('\r', '\n', ' ', '\t').startsWith(',')) 0 else 1
+            rawSuffix.isEmpty() -> suffix.length
+            else -> 0
+        }
         return PromptReplacement(
             text = prefix + token + suffix,
             cursor = prefix.length + token.length + separatorLength,

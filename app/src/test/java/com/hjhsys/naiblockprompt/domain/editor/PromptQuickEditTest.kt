@@ -2,6 +2,7 @@ package com.hjhsys.naiblockprompt.domain.editor
 
 import java.math.BigDecimal
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -304,5 +305,57 @@ class PromptQuickEditTest {
         val after = changed(PromptQuickEdit.adjustWeight(before, selection(before, "ABC"), BigDecimal("0.1")))
         assertEquals("1.1::ABC ::", after)
         assertEquals(before, history.undo(key, PromptEditorSnapshot(after, after.length, after.length))?.content)
+    }
+
+    @Test fun `adjacent unweighted selections become one weight group`() {
+        val text = "ABC, DEF, GHI"
+        val selected = listOf(selection(text, "ABC"), selection(text, "DEF"))
+
+        assertTrue(PromptQuickEdit.canAdjustWeight(text, selected))
+        val increased = PromptQuickEdit.adjustWeight(text, selected, BigDecimal("0.1")) as QuickEditResult.Changed
+
+        assertEquals("1.1::ABC, DEF ::, GHI", increased.text)
+        assertEquals(QuickEditUnitType.WEIGHT_GROUP, PromptQuickEdit.selectionAt(increased.text, increased.preferredSelectionOffset!!)!!.type)
+    }
+
+    @Test fun `non adjacent or weighted child selections cannot be grouped by weight`() {
+        val text = "ABC, DEF, GHI"
+        assertFalse(PromptQuickEdit.canAdjustWeight(text, listOf(selection(text, "ABC"), selection(text, "GHI"))))
+
+        val weighted = "1.2::ABC, DEF ::, GHI"
+        assertFalse(PromptQuickEdit.canAdjustWeight(weighted, listOf(selection(weighted, "ABC"), selection(weighted, "GHI"))))
+    }
+
+    @Test fun `quick edit adds a line break at a tag boundary without reformatting other text`() {
+        val text = "ABC, DEF, GHI"
+        val def = selection(text, "DEF")
+
+        assertEquals("ABC,\nDEF, GHI", changed(PromptQuickEdit.insertLineBreak(text, listOf(def), before = true)))
+        assertEquals("ABC, DEF,\nGHI", changed(PromptQuickEdit.insertLineBreak(text, listOf(def), before = false)))
+
+        val multiline = "ABC,\nDEF,\nGHI"
+        val multilineDef = selection(multiline, "DEF")
+        assertEquals("ABC,\n\nDEF,\nGHI", changed(PromptQuickEdit.insertLineBreak(multiline, listOf(multilineDef), before = true)))
+        assertEquals("ABC,\nDEF,\n\nGHI", changed(PromptQuickEdit.insertLineBreak(multiline, listOf(multilineDef), before = false)))
+    }
+
+    @Test fun `same weight groups adjust together while different weights remain disabled`() {
+        val text = "1.2::ABC ::, keep, 1.2::DEF ::"
+        val groups = PromptQuickEdit.parse(text)
+            .filter { it.type == QuickEditUnitType.WEIGHT_GROUP }
+            .map { PromptQuickEdit.selectionAt(text, it.range.start)!! }
+
+        assertTrue(PromptQuickEdit.canAdjustWeight(text, groups))
+        val increased = PromptQuickEdit.adjustWeight(text, groups, BigDecimal("0.1")) as QuickEditResult.Changed
+        assertEquals("1.3::ABC ::, keep, 1.3::DEF ::", increased.text)
+        assertEquals(2, increased.preferredSelectionOffsets.size)
+
+        val unwrapped = PromptQuickEdit.adjustWeight(text, groups, BigDecimal("-0.2")) as QuickEditResult.Changed
+        assertEquals("ABC, keep, DEF", unwrapped.text)
+
+        val mixed = "1.2::ABC ::, 0.8::DEF ::"
+        val mixedGroups = PromptQuickEdit.parse(mixed).map { PromptQuickEdit.selectionAt(mixed, it.range.start)!! }
+        assertFalse(PromptQuickEdit.canAdjustWeight(mixed, mixedGroups))
+        assertTrue(PromptQuickEdit.adjustWeight(mixed, mixedGroups, BigDecimal("0.1")) is QuickEditResult.Unsupported)
     }
 }

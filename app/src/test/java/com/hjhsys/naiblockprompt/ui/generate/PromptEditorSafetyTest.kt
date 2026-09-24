@@ -11,6 +11,15 @@ import org.junit.Test
 
 class PromptEditorSafetyTest {
     @Test
+    fun `quick edit popup skips empty layouts and clamps stale selection offsets`() {
+        assertNull(quickEditBoundingBoxIndex(0, 0))
+        assertNull(quickEditBoundingBoxIndex(0, 12))
+        assertEquals(0, quickEditBoundingBoxIndex(1, 12))
+        assertEquals(4, quickEditBoundingBoxIndex(5, 99))
+        assertEquals(0, quickEditBoundingBoxIndex(5, -3))
+    }
+
+    @Test
     fun `external text replacement clamps both selection ends and clears composition`() {
         val current = TextFieldValue(
             text = "1.2::shirt, long hair ::",

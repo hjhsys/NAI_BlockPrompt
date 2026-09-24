@@ -89,6 +89,7 @@ fun NaiBlockPromptApp(container: AppContainer) {
     val savedWorkflow by viewModel.savedWorkflow.collectAsStateWithLifecycle()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
+    val imeVisible = WindowInsets.ime.getBottom(androidx.compose.ui.platform.LocalDensity.current) > 0
     var generateReturnSignal by rememberSaveable { mutableIntStateOf(0) }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, viewModel) {
@@ -105,8 +106,11 @@ fun NaiBlockPromptApp(container: AppContainer) {
     }
 
     Scaffold(
+        // The app handles the bottom navigation/IME area itself, but the root content
+        // must still stay below the status bar and display cutout.
+        contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top),
         bottomBar = {
-            if (currentRoute != MainDestination.TagPicker.route &&
+            if (!imeVisible && currentRoute != MainDestination.TagPicker.route &&
                 currentRoute != MainDestination.Help.route
             ) NavigationBar(
                 // Keep the compact 62dp bar above the system navigation/gesture inset.
@@ -179,7 +183,9 @@ fun NaiBlockPromptApp(container: AppContainer) {
                     useTextRendering = settings.useTextRendering,
                     colorHelperMode = settings.colorHelperMode,
                     quickEditWeightStep = settings.quickEditWeightStep,
+                    quickEditToolbarPlacement = settings.quickEditToolbarPlacement,
                     alternateCharacterColors = settings.alternateCharacterColors,
+                    showStickyPromptControls = settings.showStickyPromptControls,
                     blockScaleEnabled = session?.blockScaleEnabled ?: false,
                     defaultBlockScale = session?.defaultBlockScale ?: "1.0",
                     showExclusionConfirmationHelp = settings.showExclusionConfirmationHelp,
@@ -196,7 +202,9 @@ fun NaiBlockPromptApp(container: AppContainer) {
                     onUseTextRenderingChange = viewModel::setUseTextRendering,
                     onColorHelperModeChange = viewModel::setColorHelperMode,
                     onQuickEditWeightStepChange = viewModel::setQuickEditWeightStep,
+                    onQuickEditToolbarPlacementChange = viewModel::setQuickEditToolbarPlacement,
                     onAlternateCharacterColorsChange = viewModel::setAlternateCharacterColors,
+                    onShowStickyPromptControlsChange = viewModel::setShowStickyPromptControls,
                     onBlockScaleChange = viewModel::updateBlockScale,
                     onShowExclusionConfirmationHelpChange = viewModel::setShowExclusionConfirmationHelp,
                     onHistoryLimitChange = viewModel::setHistoryLimit,
@@ -252,7 +260,9 @@ private fun SettingsScreen(
     useTextRendering: Boolean,
     colorHelperMode: com.hjhsys.naiblockprompt.domain.model.ColorHelperMode,
     quickEditWeightStep: String,
+    quickEditToolbarPlacement: com.hjhsys.naiblockprompt.domain.model.QuickEditToolbarPlacement,
     alternateCharacterColors: Boolean,
+    showStickyPromptControls: Boolean,
     blockScaleEnabled: Boolean,
     defaultBlockScale: String,
     showExclusionConfirmationHelp: Boolean,
@@ -269,7 +279,9 @@ private fun SettingsScreen(
     onUseTextRenderingChange: (Boolean) -> Unit,
     onColorHelperModeChange: (com.hjhsys.naiblockprompt.domain.model.ColorHelperMode) -> Unit,
     onQuickEditWeightStepChange: (String) -> Unit,
+    onQuickEditToolbarPlacementChange: (com.hjhsys.naiblockprompt.domain.model.QuickEditToolbarPlacement) -> Unit,
     onAlternateCharacterColorsChange: (Boolean) -> Unit,
+    onShowStickyPromptControlsChange: (Boolean) -> Unit,
     onBlockScaleChange: (Boolean, String) -> Unit,
     onShowExclusionConfirmationHelpChange: (Boolean) -> Unit,
     onHistoryLimitChange: (Int) -> Unit,
@@ -378,11 +390,28 @@ private fun SettingsScreen(
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             modifier = Modifier.fillMaxWidth(),
         )
+        Text(stringResource(R.string.settings_quick_edit_toolbar_placement), style = MaterialTheme.typography.titleMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            com.hjhsys.naiblockprompt.domain.model.QuickEditToolbarPlacement.entries.forEach { placement ->
+                FilterChip(
+                    selected = quickEditToolbarPlacement == placement,
+                    onClick = { onQuickEditToolbarPlacementChange(placement) },
+                    label = { Text(stringResource(if (placement == com.hjhsys.naiblockprompt.domain.model.QuickEditToolbarPlacement.BELOW_SELECTION) R.string.quick_edit_toolbar_below_selection else R.string.quick_edit_toolbar_bottom)) },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
         SettingSwitch(
             R.string.settings_alternate_character_colors,
             alternateCharacterColors,
             onAlternateCharacterColorsChange,
             R.string.settings_alternate_character_colors_hint,
+        )
+        SettingSwitch(
+            R.string.settings_sticky_prompt_controls,
+            showStickyPromptControls,
+            onShowStickyPromptControlsChange,
+            R.string.settings_sticky_prompt_controls_hint,
         )
         var blockScaleDraft by rememberSaveable(defaultBlockScale) { mutableStateOf(defaultBlockScale) }
         SettingSwitch(

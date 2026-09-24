@@ -464,8 +464,14 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     fun setQuickEditWeightStep(value: String) = viewModelScope.launch {
         container.settingsRepository.setQuickEditWeightStep(value)
     }
+    fun setQuickEditToolbarPlacement(value: QuickEditToolbarPlacement) = viewModelScope.launch {
+        container.settingsRepository.setQuickEditToolbarPlacement(value)
+    }
     fun setAlternateCharacterColors(value: Boolean) = viewModelScope.launch {
         container.settingsRepository.setAlternateCharacterColors(value)
+    }
+    fun setShowStickyPromptControls(value: Boolean) = viewModelScope.launch {
+        container.settingsRepository.setShowStickyPromptControls(value)
     }
     fun setColorHelperMode(value: ColorHelperMode) = viewModelScope.launch { container.settingsRepository.setColorHelperMode(value) }
     fun toggleFavoriteColor(hex: String) = viewModelScope.launch {

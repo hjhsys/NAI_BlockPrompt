@@ -7,6 +7,7 @@ import com.hjhsys.naiblockprompt.domain.model.AppSettings
 import com.hjhsys.naiblockprompt.domain.model.AutocompleteSource
 import com.hjhsys.naiblockprompt.domain.model.AppearanceMode
 import com.hjhsys.naiblockprompt.domain.model.ColorHelperMode
+import com.hjhsys.naiblockprompt.domain.model.QuickEditToolbarPlacement
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.first
@@ -31,7 +32,9 @@ class SettingsRepository(private val context: Context) {
         val appearanceMode = stringPreferencesKey("appearance_mode")
         val bundledTagVersion = intPreferencesKey("bundled_tag_version")
         val quickEditWeightStep = stringPreferencesKey("quick_edit_weight_step")
+        val quickEditToolbarPlacement = stringPreferencesKey("quick_edit_toolbar_placement")
         val alternateCharacterColors = booleanPreferencesKey("alternate_character_colors")
+        val showStickyPromptControls = booleanPreferencesKey("show_sticky_prompt_controls")
         val showExclusionConfirmationHelp = booleanPreferencesKey("show_exclusion_confirmation_help")
     }
 
@@ -54,7 +57,11 @@ class SettingsRepository(private val context: Context) {
             imageSaveTreeUri = prefs[Keys.imageSaveTreeUri],
             appearanceMode = prefs[Keys.appearanceMode]?.let { runCatching { AppearanceMode.valueOf(it) }.getOrNull() } ?: AppearanceMode.SYSTEM,
             quickEditWeightStep = prefs[Keys.quickEditWeightStep]?.takeIf(::isValidWeightStep) ?: "0.1",
+            quickEditToolbarPlacement = prefs[Keys.quickEditToolbarPlacement]
+                ?.let { runCatching { QuickEditToolbarPlacement.valueOf(it) }.getOrNull() }
+                ?: QuickEditToolbarPlacement.BELOW_SELECTION,
             alternateCharacterColors = prefs[Keys.alternateCharacterColors] ?: true,
+            showStickyPromptControls = prefs[Keys.showStickyPromptControls] ?: true,
             showExclusionConfirmationHelp = prefs[Keys.showExclusionConfirmationHelp] ?: true,
         )
     }
@@ -86,8 +93,14 @@ class SettingsRepository(private val context: Context) {
     suspend fun setQuickEditWeightStep(value: String) = context.settingsDataStore.edit { prefs ->
         if (isValidWeightStep(value)) prefs[Keys.quickEditWeightStep] = value.trim()
     }
+    suspend fun setQuickEditToolbarPlacement(value: QuickEditToolbarPlacement) = context.settingsDataStore.edit {
+        it[Keys.quickEditToolbarPlacement] = value.name
+    }
     suspend fun setAlternateCharacterColors(value: Boolean) = context.settingsDataStore.edit {
         it[Keys.alternateCharacterColors] = value
+    }
+    suspend fun setShowStickyPromptControls(value: Boolean) = context.settingsDataStore.edit {
+        it[Keys.showStickyPromptControls] = value
     }
     suspend fun setShowExclusionConfirmationHelp(value: Boolean) = context.settingsDataStore.edit {
         it[Keys.showExclusionConfirmationHelp] = value
@@ -111,7 +124,9 @@ class SettingsRepository(private val context: Context) {
         setAppearanceMode(settings.appearanceMode)
         setImageSaveTreeUri(settings.imageSaveTreeUri)
         setQuickEditWeightStep(settings.quickEditWeightStep)
+        setQuickEditToolbarPlacement(settings.quickEditToolbarPlacement)
         setAlternateCharacterColors(settings.alternateCharacterColors)
+        setShowStickyPromptControls(settings.showStickyPromptControls)
         setShowExclusionConfirmationHelp(settings.showExclusionConfirmationHelp)
     }
 
