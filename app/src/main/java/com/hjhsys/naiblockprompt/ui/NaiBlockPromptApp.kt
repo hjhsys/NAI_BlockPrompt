@@ -183,6 +183,8 @@ fun NaiBlockPromptApp(container: AppContainer) {
                     useTextRendering = settings.useTextRendering,
                     colorHelperMode = settings.colorHelperMode,
                     quickEditWeightStep = settings.quickEditWeightStep,
+                    quickEditLongPressMillis = settings.quickEditLongPressMillis,
+                    quickEditRepeatIntervalMillis = settings.quickEditRepeatIntervalMillis,
                     quickEditToolbarPlacement = settings.quickEditToolbarPlacement,
                     alternateCharacterColors = settings.alternateCharacterColors,
                     showStickyPromptControls = settings.showStickyPromptControls,
@@ -202,6 +204,8 @@ fun NaiBlockPromptApp(container: AppContainer) {
                     onUseTextRenderingChange = viewModel::setUseTextRendering,
                     onColorHelperModeChange = viewModel::setColorHelperMode,
                     onQuickEditWeightStepChange = viewModel::setQuickEditWeightStep,
+                    onQuickEditLongPressMillisChange = viewModel::setQuickEditLongPressMillis,
+                    onQuickEditRepeatIntervalMillisChange = viewModel::setQuickEditRepeatIntervalMillis,
                     onQuickEditToolbarPlacementChange = viewModel::setQuickEditToolbarPlacement,
                     onAlternateCharacterColorsChange = viewModel::setAlternateCharacterColors,
                     onShowStickyPromptControlsChange = viewModel::setShowStickyPromptControls,
@@ -260,6 +264,8 @@ private fun SettingsScreen(
     useTextRendering: Boolean,
     colorHelperMode: com.hjhsys.naiblockprompt.domain.model.ColorHelperMode,
     quickEditWeightStep: String,
+    quickEditLongPressMillis: Int,
+    quickEditRepeatIntervalMillis: Int,
     quickEditToolbarPlacement: com.hjhsys.naiblockprompt.domain.model.QuickEditToolbarPlacement,
     alternateCharacterColors: Boolean,
     showStickyPromptControls: Boolean,
@@ -279,6 +285,8 @@ private fun SettingsScreen(
     onUseTextRenderingChange: (Boolean) -> Unit,
     onColorHelperModeChange: (com.hjhsys.naiblockprompt.domain.model.ColorHelperMode) -> Unit,
     onQuickEditWeightStepChange: (String) -> Unit,
+    onQuickEditLongPressMillisChange: (Int) -> Unit,
+    onQuickEditRepeatIntervalMillisChange: (Int) -> Unit,
     onQuickEditToolbarPlacementChange: (com.hjhsys.naiblockprompt.domain.model.QuickEditToolbarPlacement) -> Unit,
     onAlternateCharacterColorsChange: (Boolean) -> Unit,
     onShowStickyPromptControlsChange: (Boolean) -> Unit,
@@ -388,6 +396,35 @@ private fun SettingsScreen(
             isError = quickStepDraft.toBigDecimalOrNull()?.let { it <= java.math.BigDecimal.ZERO } ?: true,
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        val quickEditTiming = com.hjhsys.naiblockprompt.domain.model.QuickEditPressTiming
+        var longPressDraft by rememberSaveable(quickEditLongPressMillis) { mutableStateOf(quickEditLongPressMillis.toString()) }
+        OutlinedTextField(
+            value = longPressDraft,
+            onValueChange = { value ->
+                longPressDraft = value.filter(Char::isDigit)
+                longPressDraft.toIntOrNull()?.takeIf(quickEditTiming::isValidLongPress)?.let(onQuickEditLongPressMillisChange)
+            },
+            label = { Text(stringResource(R.string.settings_quick_edit_long_press_ms)) },
+            supportingText = { Text(stringResource(R.string.settings_quick_edit_long_press_ms_hint)) },
+            isError = longPressDraft.toIntOrNull()?.let(quickEditTiming::isValidLongPress) != true,
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        var repeatIntervalDraft by rememberSaveable(quickEditRepeatIntervalMillis) { mutableStateOf(quickEditRepeatIntervalMillis.toString()) }
+        OutlinedTextField(
+            value = repeatIntervalDraft,
+            onValueChange = { value ->
+                repeatIntervalDraft = value.filter(Char::isDigit)
+                repeatIntervalDraft.toIntOrNull()?.takeIf(quickEditTiming::isValidRepeatInterval)?.let(onQuickEditRepeatIntervalMillisChange)
+            },
+            label = { Text(stringResource(R.string.settings_quick_edit_repeat_interval_ms)) },
+            supportingText = { Text(stringResource(R.string.settings_quick_edit_repeat_interval_ms_hint)) },
+            isError = repeatIntervalDraft.toIntOrNull()?.let(quickEditTiming::isValidRepeatInterval) != true,
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             modifier = Modifier.fillMaxWidth(),
         )
         Text(stringResource(R.string.settings_quick_edit_toolbar_placement), style = MaterialTheme.typography.titleMedium)

@@ -110,6 +110,25 @@ object PromptQuickEdit {
         .sortedBy { it.range.start }
         .joinToString(", ") { text.substring(it.range.start, it.range.endExclusive) }
 
+    /** Returns a dictionary canonical candidate only when the semantic selection is one tag. */
+    fun selectedCanonicalTag(text: String, selections: List<QuickEditSelection>): String? {
+        val selection = selections.singleOrNull() ?: return null
+        val range = when (selection.type) {
+            QuickEditUnitType.TAG -> selection.range
+            QuickEditUnitType.WEIGHT_GROUP -> parse(text)
+                .firstOrNull { it.type == QuickEditUnitType.WEIGHT_GROUP && it.range == selection.range }
+                ?.children
+                ?.singleOrNull()
+                ?.takeIf { it.type == QuickEditUnitType.TAG }
+                ?.range
+            else -> null
+        } ?: return null
+        return text.substring(range.start, range.endExclusive)
+            .trim()
+            .takeIf(String::isNotBlank)
+            ?.replace(' ', '_')
+    }
+
     /** Inserts clipboard prompt text at a visual line/gap boundary with minimal separator repair. */
     fun pasteAt(text: String, offset: Int, clipboardText: String): QuickEditResult {
         val pasted = clipboardText.trim().trim(',').trim()

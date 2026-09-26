@@ -8,6 +8,7 @@ import com.hjhsys.naiblockprompt.domain.model.AutocompleteSource
 import com.hjhsys.naiblockprompt.domain.model.AppearanceMode
 import com.hjhsys.naiblockprompt.domain.model.ColorHelperMode
 import com.hjhsys.naiblockprompt.domain.model.QuickEditToolbarPlacement
+import com.hjhsys.naiblockprompt.domain.model.QuickEditPressTiming
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.first
@@ -32,6 +33,8 @@ class SettingsRepository(private val context: Context) {
         val appearanceMode = stringPreferencesKey("appearance_mode")
         val bundledTagVersion = intPreferencesKey("bundled_tag_version")
         val quickEditWeightStep = stringPreferencesKey("quick_edit_weight_step")
+        val quickEditLongPressMillis = intPreferencesKey("quick_edit_long_press_millis")
+        val quickEditRepeatIntervalMillis = intPreferencesKey("quick_edit_repeat_interval_millis")
         val quickEditToolbarPlacement = stringPreferencesKey("quick_edit_toolbar_placement")
         val alternateCharacterColors = booleanPreferencesKey("alternate_character_colors")
         val showStickyPromptControls = booleanPreferencesKey("show_sticky_prompt_controls")
@@ -57,6 +60,12 @@ class SettingsRepository(private val context: Context) {
             imageSaveTreeUri = prefs[Keys.imageSaveTreeUri],
             appearanceMode = prefs[Keys.appearanceMode]?.let { runCatching { AppearanceMode.valueOf(it) }.getOrNull() } ?: AppearanceMode.SYSTEM,
             quickEditWeightStep = prefs[Keys.quickEditWeightStep]?.takeIf(::isValidWeightStep) ?: "0.1",
+            quickEditLongPressMillis = prefs[Keys.quickEditLongPressMillis]
+                ?.takeIf(QuickEditPressTiming::isValidLongPress)
+                ?: QuickEditPressTiming.DEFAULT_LONG_PRESS_MILLIS,
+            quickEditRepeatIntervalMillis = prefs[Keys.quickEditRepeatIntervalMillis]
+                ?.takeIf(QuickEditPressTiming::isValidRepeatInterval)
+                ?: QuickEditPressTiming.DEFAULT_REPEAT_INTERVAL_MILLIS,
             quickEditToolbarPlacement = prefs[Keys.quickEditToolbarPlacement]
                 ?.let { runCatching { QuickEditToolbarPlacement.valueOf(it) }.getOrNull() }
                 ?: QuickEditToolbarPlacement.BELOW_SELECTION,
@@ -93,6 +102,12 @@ class SettingsRepository(private val context: Context) {
     suspend fun setQuickEditWeightStep(value: String) = context.settingsDataStore.edit { prefs ->
         if (isValidWeightStep(value)) prefs[Keys.quickEditWeightStep] = value.trim()
     }
+    suspend fun setQuickEditLongPressMillis(value: Int) = context.settingsDataStore.edit { prefs ->
+        if (QuickEditPressTiming.isValidLongPress(value)) prefs[Keys.quickEditLongPressMillis] = value
+    }
+    suspend fun setQuickEditRepeatIntervalMillis(value: Int) = context.settingsDataStore.edit { prefs ->
+        if (QuickEditPressTiming.isValidRepeatInterval(value)) prefs[Keys.quickEditRepeatIntervalMillis] = value
+    }
     suspend fun setQuickEditToolbarPlacement(value: QuickEditToolbarPlacement) = context.settingsDataStore.edit {
         it[Keys.quickEditToolbarPlacement] = value.name
     }
@@ -124,6 +139,8 @@ class SettingsRepository(private val context: Context) {
         setAppearanceMode(settings.appearanceMode)
         setImageSaveTreeUri(settings.imageSaveTreeUri)
         setQuickEditWeightStep(settings.quickEditWeightStep)
+        setQuickEditLongPressMillis(settings.quickEditLongPressMillis)
+        setQuickEditRepeatIntervalMillis(settings.quickEditRepeatIntervalMillis)
         setQuickEditToolbarPlacement(settings.quickEditToolbarPlacement)
         setAlternateCharacterColors(settings.alternateCharacterColors)
         setShowStickyPromptControls(settings.showStickyPromptControls)

@@ -5,11 +5,25 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import com.hjhsys.naiblockprompt.domain.autocomplete.PromptFragment
+import com.hjhsys.naiblockprompt.domain.editor.QuickEditRange
+import com.hjhsys.naiblockprompt.domain.editor.QuickEditSelection
+import com.hjhsys.naiblockprompt.domain.editor.QuickEditUnitType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
 class PromptEditorSafetyTest {
+    @Test
+    fun `quick edit stays single select until multi select is enabled`() {
+        val first = QuickEditSelection(QuickEditUnitType.TAG, QuickEditRange(0, 3))
+        val second = QuickEditSelection(QuickEditUnitType.TAG, QuickEditRange(5, 8))
+
+        assertEquals(listOf(first), quickEditSelectionsAfterTap(emptyList(), first, multiSelect = false))
+        assertEquals(listOf(second), quickEditSelectionsAfterTap(listOf(first), second, multiSelect = false))
+        assertEquals(listOf(first, second), quickEditSelectionsAfterTap(listOf(first), second, multiSelect = true))
+        assertEquals(emptyList<QuickEditSelection>(), quickEditSelectionsAfterTap(listOf(first), first, multiSelect = false))
+    }
+
     @Test
     fun `quick edit popup skips empty layouts and clamps stale selection offsets`() {
         assertNull(quickEditBoundingBoxIndex(0, 0))

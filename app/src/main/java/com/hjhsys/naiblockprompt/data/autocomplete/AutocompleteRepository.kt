@@ -73,6 +73,13 @@ class AutocompleteRepository(
     fun dictionaryCount(query: String, filter: TagDictionaryFilter, category: String): Flow<Int> =
         tagDao.observeDictionaryCount(query.trim(), query.trim().replace(' ', '_'), filter.name, category)
 
+    suspend fun tagDetails(canonical: String): TagDictionaryItem? {
+        val normalized = canonical.trim().replace(' ', '_')
+        if (normalized.isBlank()) return null
+        return tagDao.searchAutocomplete(normalized.replace('_', ' '), normalized, limit = 12)
+            .firstOrNull { it.canonicalTag.equals(normalized, ignoreCase = true) }
+    }
+
     suspend fun addCategory(name: String) {
         name.trim().takeIf(String::isNotBlank)?.let { tagDao.upsertUserCategory(UserTagCategoryEntity(it, now())) }
     }

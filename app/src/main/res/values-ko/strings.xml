@@ -621,6 +621,10 @@
     <string name="quick_edit_move">이동</string>
     <string name="quick_edit_set_weight">가중치 직접 입력</string>
     <string name="settings_quick_edit_weight_step">빠른 편집 가중치 증감 단위</string>
+    <string name="settings_quick_edit_long_press_ms">길게 누르기 판정 시간(ms)</string>
+    <string name="settings_quick_edit_long_press_ms_hint">+/− 반복이 시작될 때까지의 시간입니다. 100~3000ms, 기본값 450.</string>
+    <string name="settings_quick_edit_repeat_interval_ms">가중치 연속 조절 간격(ms)</string>
+    <string name="settings_quick_edit_repeat_interval_ms_hint">길게 누를 때 +/−가 반복되는 간격입니다. 50~2000ms, 기본값 250.</string>
     <string name="settings_quick_edit_toolbar_placement">빠른 편집 도구 위치</string>
     <string name="quick_edit_toolbar_below_selection">선택 태그 아래</string>
     <string name="quick_edit_toolbar_bottom">화면 하단 고정</string>
@@ -629,6 +633,9 @@
     <string name="settings_quick_edit_weight_step_hint">기본값 0.1. 0보다 큰 소수를 입력할 수 있습니다.</string>
     <string name="cut">잘라내기</string>
     <string name="quick_edit_copy">복사</string>
+    <string name="quick_edit_multi_select">여러 태그 선택</string>
+    <string name="quick_edit_tag_info">태그 정보</string>
+    <string name="quick_edit_tag_not_found">태그 사전에서 이 태그를 찾을 수 없습니다.</string>
     <string name="quick_edit_paste">여기에 붙여넣기</string>
     <string name="quick_edit_choose_tags">태그 선택</string>
     <string name="split_block_at_cursor">커서 위치에서 Block 나누기</string>

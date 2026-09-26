@@ -770,7 +770,7 @@ private fun WildcardTagPicker(viewModel: MainViewModel, onDismiss: () -> Unit, o
 }
 
 @Composable
-private fun TagEditDialog(
+internal fun TagEditDialog(
     item: TagDictionaryItem,
     onDismiss: () -> Unit,
     onSave: (String, String, String) -> Unit,
@@ -902,7 +902,13 @@ fun TagPickerScreen(
         topBar = { AppTitleBar(R.string.tag_picker_title, onBack = onDismiss) },
         bottomBar = {
             Surface(shadowElevation = 8.dp) {
-                Column(Modifier.fillMaxWidth().padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
                     if (selected.isNotEmpty()) LazyRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         items(selected, key = { it }) { tag ->
                             InputChip(selected = true, onClick = { selected.remove(tag) }, label = { Text(tag.replace('_', ' '), maxLines = 1) })

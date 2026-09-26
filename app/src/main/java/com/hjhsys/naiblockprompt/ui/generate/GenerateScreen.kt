@@ -122,6 +122,7 @@ import com.hjhsys.naiblockprompt.domain.autocomplete.PromptAutocomplete
 import com.hjhsys.naiblockprompt.domain.autocomplete.PromptFragment
 import com.hjhsys.naiblockprompt.domain.autocomplete.TagSuggestion
 import com.hjhsys.naiblockprompt.ui.library.RestoreDialog
+import com.hjhsys.naiblockprompt.ui.database.TagEditDialog
 
 internal val LocalQuickEditExitSignal = staticCompositionLocalOf { 0 }
 
@@ -164,9 +165,14 @@ private class QuickEditActionState(
     val canSetWeight: Boolean,
     val canMutate: Boolean,
     val moveActive: Boolean,
+    val multiSelect: Boolean,
+    val canShowTagInfo: Boolean,
     val onDecrease: () -> Unit,
     val onIncrease: () -> Unit,
     val onFinishWeightAdjustment: () -> Unit,
+    val onWeightPressChanged: (Boolean) -> Unit,
+    val onToggleMultiSelect: () -> Unit,
+    val onShowTagInfo: () -> Unit,
     val onToggleComment: () -> Unit,
     val onDelete: () -> Unit,
     val onToggleMove: () -> Unit,
@@ -182,15 +188,19 @@ private class QuickEditToolbarHost(val update: (String, QuickEditActionState?) -
 private val LocalPromptToolbarHost = staticCompositionLocalOf<PromptToolbarHost?> { null }
 private val LocalQuickEditToolbarHost = staticCompositionLocalOf<QuickEditToolbarHost?> { null }
 private val LocalQuickEditToolbarPlacement = staticCompositionLocalOf { QuickEditToolbarPlacement.BELOW_SELECTION }
+private val LocalQuickEditLongPressMillis = staticCompositionLocalOf { QuickEditPressTiming.DEFAULT_LONG_PRESS_MILLIS }
+private val LocalQuickEditRepeatIntervalMillis = staticCompositionLocalOf { QuickEditPressTiming.DEFAULT_REPEAT_INTERVAL_MILLIS }
 private val LocalStickyPromptControlsEnabled = staticCompositionLocalOf { true }
 
 @Composable
 private fun QuickEditActionToolbar(state: QuickEditActionState, modifier: Modifier = Modifier) {
     var showMore by remember(state.blockId) { mutableStateOf(false) }
     val commentDescription = stringResource(R.string.quick_edit_comment)
+    val longPressMillis = LocalQuickEditLongPressMillis.current
+    val repeatIntervalMillis = LocalQuickEditRepeatIntervalMillis.current
     Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(1.dp)) {
-        RepeatingIconButton(R.string.quick_edit_decrease, Icons.Default.Remove, state.canAdjustWeight, state.onDecrease, state.onFinishWeightAdjustment)
-        RepeatingIconButton(R.string.quick_edit_increase, Icons.Default.Add, state.canAdjustWeight, state.onIncrease, state.onFinishWeightAdjustment)
+        RepeatingIconButton(R.string.quick_edit_decrease, Icons.Default.Remove, state.canAdjustWeight, longPressMillis, repeatIntervalMillis, state.onDecrease, state.onFinishWeightAdjustment, state.onWeightPressChanged)
+        RepeatingIconButton(R.string.quick_edit_increase, Icons.Default.Add, state.canAdjustWeight, longPressMillis, repeatIntervalMillis, state.onIncrease, state.onFinishWeightAdjustment, state.onWeightPressChanged)
         TextButton(
             onClick = state.onToggleComment,
             enabled = state.canMutate,
@@ -207,9 +217,29 @@ private fun QuickEditActionToolbar(state: QuickEditActionState, modifier: Modifi
             ),
             modifier = Modifier.size(36.dp),
         ) { Icon(Icons.Default.OpenWith, stringResource(R.string.quick_edit_move), Modifier.size(20.dp)) }
+        IconButton(
+            onClick = state.onToggleMultiSelect,
+            colors = IconButtonDefaults.filledTonalIconButtonColors(
+                containerColor = if (state.multiSelect) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                contentColor = if (state.multiSelect) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+            ),
+            modifier = Modifier.size(36.dp),
+        ) {
+            Icon(
+                if (state.multiSelect) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
+                stringResource(R.string.quick_edit_multi_select),
+                Modifier.size(20.dp),
+            )
+        }
         Box {
             SmallIconButton(R.string.more_actions, Icons.Default.MoreVert, true) { showMore = true }
             DropdownMenu(showMore, { showMore = false }) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.quick_edit_tag_info)) },
+                    leadingIcon = { Icon(Icons.Default.Info, null) },
+                    enabled = state.canShowTagInfo,
+                    onClick = { showMore = false; state.onShowTagInfo() },
+                )
                 DropdownMenuItem(text = { Text(stringResource(R.string.quick_edit_copy)) }, onClick = { showMore = false; state.onCopy() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.cut)) }, enabled = state.canMutate, onClick = { showMore = false; state.onCut() })
                 DropdownMenuItem(text = { Text(stringResource(R.string.quick_edit_set_weight)) }, enabled = state.canSetWeight, onClick = { showMore = false; state.onSetWeight() })
@@ -478,6 +508,8 @@ fun GenerateScreen(
       CompositionLocalProvider(
           LocalStickyPromptControlsEnabled provides appSettings.showStickyPromptControls,
           LocalQuickEditToolbarPlacement provides appSettings.quickEditToolbarPlacement,
+          LocalQuickEditLongPressMillis provides appSettings.quickEditLongPressMillis,
+          LocalQuickEditRepeatIntervalMillis provides appSettings.quickEditRepeatIntervalMillis,
           LocalQuickEditToolbarHost provides QuickEditToolbarHost { blockId, state ->
               if (state != null) bottomQuickEditToolbar = state
               else if (bottomQuickEditToolbar?.blockId == blockId) bottomQuickEditToolbar = null
@@ -2182,6 +2214,8 @@ private fun PromptBlockCard(
     // Character parent must dispose it rather than restore a stale popup/drag state.
     var quickEdit by remember(block.id) { mutableStateOf(false) }
     var quickSelections by remember(block.id) { mutableStateOf<List<QuickEditSelection>>(emptyList()) }
+    var quickMultiSelect by remember(block.id) { mutableStateOf(false) }
+    var quickTagDetails by remember(block.id) { mutableStateOf<TagDictionaryItem?>(null) }
     var quickPasteOffset by remember(block.id) { mutableStateOf<Int?>(null) }
     var quickPasteText by remember(block.id) { mutableStateOf<String?>(null) }
     var showWeightInput by remember { mutableStateOf(false) }
@@ -2196,6 +2230,7 @@ private fun PromptBlockCard(
     val focusManager = LocalFocusManager.current
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
+    val quickEditScope = rememberCoroutineScope()
     val autocomplete by viewModel.autocomplete.collectAsStateWithLifecycle()
     val undoableBlocks by viewModel.undoablePromptBlocks.collectAsStateWithLifecycle()
     val redoableBlocks by viewModel.redoablePromptBlocks.collectAsStateWithLifecycle()
@@ -2205,6 +2240,7 @@ private fun PromptBlockCard(
     val quickEditToolbarPlacement = LocalQuickEditToolbarPlacement.current
     val stickyPromptControlsEnabled = LocalStickyPromptControlsEnabled.current
     val pagerScrolling = LocalGeneratePagerScrolling.current
+    val setPagerSwipeLocked = LocalGeneratePagerSwipeLock.current
     val density = LocalDensity.current
     var inlineToolbarTopInWindow by remember(block.id) { mutableFloatStateOf(Float.NaN) }
     var editorTopInWindow by remember(block.id) { mutableFloatStateOf(Float.NaN) }
@@ -2220,6 +2256,8 @@ private fun PromptBlockCard(
         if (quickEditExitSignal > 0) {
             quickEdit = false
             quickSelections = emptyList()
+            quickMultiSelect = false
+            quickTagDetails = null
             quickPasteOffset = null
             quickPasteText = null
             moveTargets = emptyList()
@@ -2230,6 +2268,8 @@ private fun PromptBlockCard(
         if (block.collapsed) {
             quickEdit = false
             quickSelections = emptyList()
+            quickMultiSelect = false
+            quickTagDetails = null
             quickPasteOffset = null
             quickPasteText = null
             moveTargets = emptyList()
@@ -2247,6 +2287,8 @@ private fun PromptBlockCard(
                     lastEditorSelection = it.selection
                 }
                 quickSelections = emptyList()
+                quickMultiSelect = false
+                quickTagDetails = null
                 quickPasteOffset = null
                 quickPasteText = null
                 moveTargets = emptyList()
@@ -2297,6 +2339,8 @@ private fun PromptBlockCard(
         finishWeightAdjustment()
         quickEdit = !quickEdit
         quickSelections = emptyList()
+        quickMultiSelect = false
+        quickTagDetails = null
         quickPasteOffset = null
         quickPasteText = null
         moveTargets = emptyList()
@@ -2394,6 +2438,9 @@ private fun PromptBlockCard(
     BackHandler(enabled = editorFocused) {
         keyboardController?.hide()
         focusManager.clearFocus()
+    }
+    quickTagDetails?.let { item ->
+        QuickEditTagDetailsDialog(item, viewModel) { quickTagDetails = null }
     }
     if (showBlockScale) AlertDialog(
         onDismissRequest = { showBlockScale = false },
@@ -2652,6 +2699,7 @@ private fun PromptBlockCard(
                 val quickStep = quickEditWeightStep.toBigDecimalOrNull() ?: java.math.BigDecimal("0.1")
                 val canQuickWeight = !block.locked && PromptQuickEdit.canAdjustWeight(editorValue.text, quickSelections)
                 val canSetQuickWeight = !block.locked && PromptQuickEdit.canAdjustWeight(quickSelections)
+                val selectedCanonicalTag = PromptQuickEdit.selectedCanonicalTag(editorValue.text, quickSelections)
                 val quickActionState = activeSelection?.let {
                     QuickEditActionState(
                         blockId = block.id,
@@ -2659,9 +2707,25 @@ private fun PromptBlockCard(
                         canSetWeight = canSetQuickWeight,
                         canMutate = !block.locked,
                         moveActive = moveTargets.isNotEmpty(),
+                        multiSelect = quickMultiSelect,
+                        canShowTagInfo = selectedCanonicalTag != null,
                         onDecrease = { applyQuick(PromptQuickEdit.adjustWeight(editorValue.text, quickSelections, quickStep.negate()), weightAdjustment = true) },
                         onIncrease = { applyQuick(PromptQuickEdit.adjustWeight(editorValue.text, quickSelections, quickStep), weightAdjustment = true) },
                         onFinishWeightAdjustment = ::finishWeightAdjustment,
+                        onWeightPressChanged = setPagerSwipeLocked,
+                        onToggleMultiSelect = {
+                            quickMultiSelect = !quickMultiSelect
+                            if (!quickMultiSelect) quickSelections = quickSelections.takeLast(1)
+                        },
+                        onShowTagInfo = {
+                            selectedCanonicalTag?.let { canonical ->
+                                quickEditScope.launch {
+                                    val item = viewModel.tagDetails(canonical)
+                                    if (item != null) quickTagDetails = item
+                                    else android.widget.Toast.makeText(context, R.string.quick_edit_tag_not_found, android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
                         onToggleComment = { applyQuick(PromptQuickEdit.toggleComments(editorValue.text, quickSelections)) },
                         onDelete = { applyQuick(PromptQuickEdit.deleteMany(editorValue.text, quickSelections)) },
                         onToggleMove = {
@@ -2707,7 +2771,7 @@ private fun PromptBlockCard(
                             finishWeightAdjustment()
                             val candidate = if (insertionIntent) null else PromptQuickEdit.selectionAt(editorValue.text, offset)
                             if (candidate != null) {
-                                quickSelections = PromptQuickEdit.toggleSelection(quickSelections, candidate)
+                                quickSelections = quickEditSelectionsAfterTap(quickSelections, candidate, quickMultiSelect)
                                 quickPasteOffset = null
                                 quickPasteText = null
                             } else {
@@ -2868,6 +2932,41 @@ private fun PromptBlockCard(
             }
         }
     }
+}
+
+@Composable
+private fun QuickEditTagDetailsDialog(
+    item: TagDictionaryItem,
+    viewModel: MainViewModel,
+    onDismiss: () -> Unit,
+) {
+    val userCategories by viewModel.userTagCategories.collectAsStateWithLifecycle()
+    val history by viewModel.history.collectAsStateWithLifecycle()
+    TagEditDialog(
+        item = item,
+        onDismiss = onDismiss,
+        onSave = { korean, aliases, category ->
+            viewModel.saveTagDetails(item, korean, aliases, category)
+            onDismiss()
+        },
+        onReset = {
+            viewModel.resetTagDetails(item)
+            onDismiss()
+        },
+        onDelete = {
+            viewModel.deleteUserOnlyTag(item)
+            onDismiss()
+        },
+        categories = (AppTagCategory.entries.map { it.value } + userCategories).distinct(),
+        generatedImages = history.map { it.entity.thumbnailPath to it.entity.imagePath },
+        onChooseThumbnail = { viewModel.setTagThumbnail(item, it) },
+        onUseGeneratedThumbnail = { viewModel.setTagThumbnailFromFile(item, it) },
+        onRemoveThumbnail = { viewModel.removeTagThumbnail(item) },
+        onExclude = {
+            viewModel.excludeTag(item)
+            onDismiss()
+        },
+    )
 }
 
 @Composable
@@ -3032,6 +3131,18 @@ private fun QuickEditPromptSurface(
 
 internal fun quickEditBoundingBoxIndex(textLength: Int, requestedOffset: Int): Int? =
     if (textLength <= 0) null else requestedOffset.coerceIn(0, textLength - 1)
+
+internal fun quickEditSelectionsAfterTap(
+    current: List<QuickEditSelection>,
+    candidate: QuickEditSelection,
+    multiSelect: Boolean,
+): List<QuickEditSelection> = if (multiSelect) {
+    PromptQuickEdit.toggleSelection(current, candidate)
+} else if (current.singleOrNull() == candidate) {
+    emptyList()
+} else {
+    listOf(candidate)
+}
 
 private class QuickEditPopupPositionProvider(
     private val selectionRect: Rect,
@@ -3531,12 +3642,16 @@ private fun RepeatingIconButton(
     @StringRes label: Int,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     enabled: Boolean,
+    longPressMillis: Int,
+    repeatIntervalMillis: Int,
     onStep: () -> Unit,
     onRelease: () -> Unit,
+    onPressChanged: (Boolean) -> Unit,
 ) {
     val description = stringResource(label)
     val currentStep by rememberUpdatedState(onStep)
     val currentRelease by rememberUpdatedState(onRelease)
+    val currentPressChanged by rememberUpdatedState(onPressChanged)
     Surface(
         color = Color.Transparent,
         shape = androidx.compose.foundation.shape.CircleShape,
@@ -3547,24 +3662,29 @@ private fun RepeatingIconButton(
                 contentDescription = description
                 if (enabled) onClick { currentStep(); currentRelease(); true }
             }
-            .pointerInput(enabled) {
+            .pointerInput(enabled, longPressMillis, repeatIntervalMillis) {
                 if (enabled) detectTapGestures(
                     onPress = {
-                        currentStep()
-                        coroutineScope {
-                            val repeatJob = launch {
-                                delay(450)
-                                while (true) {
-                                    currentStep()
-                                    delay(250)
+                        currentPressChanged(true)
+                        try {
+                            currentStep()
+                            coroutineScope {
+                                val repeatJob = launch {
+                                    delay(longPressMillis.toLong())
+                                    while (true) {
+                                        currentStep()
+                                        delay(repeatIntervalMillis.toLong())
+                                    }
+                                }
+                                try {
+                                    tryAwaitRelease()
+                                } finally {
+                                    repeatJob.cancel()
+                                    currentRelease()
                                 }
                             }
-                            try {
-                                tryAwaitRelease()
-                            } finally {
-                                repeatJob.cancel()
-                                currentRelease()
-                            }
+                        } finally {
+                            currentPressChanged(false)
                         }
                     },
                 )

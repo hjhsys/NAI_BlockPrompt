@@ -65,6 +65,18 @@ class PromptQuickEditTest {
         assertEquals(QuickEditUnitType.TAG, selection(multiple, "DEF").type)
     }
 
+    @Test fun `tag details resolve plain and single child weighted tags only`() {
+        val plain = "head back, long hair"
+        assertEquals("head_back", PromptQuickEdit.selectedCanonicalTag(plain, listOf(selection(plain, "head back"))))
+
+        val weighted = "1.2::open shirt ::"
+        assertEquals("open_shirt", PromptQuickEdit.selectedCanonicalTag(weighted, listOf(selection(weighted, "open shirt"))))
+
+        val multiChild = "1.2::open shirt, long hair ::"
+        assertEquals(null, PromptQuickEdit.selectedCanonicalTag(multiChild, listOf(selection(multiChild, "1.2"))))
+        assertEquals(null, PromptQuickEdit.selectedCanonicalTag(plain, listOf(selection(plain, "head back"), selection(plain, "long hair"))))
+    }
+
     @Test fun `multi selection toggles units and removes group child conflicts`() {
         val text = "1.2::ABC, DEF ::, GHI"
         val abc = selection(text, "ABC")

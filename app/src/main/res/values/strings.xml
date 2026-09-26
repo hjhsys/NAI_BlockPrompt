@@ -621,6 +621,10 @@
     <string name="quick_edit_move">Move</string>
     <string name="quick_edit_set_weight">Set weight</string>
     <string name="settings_quick_edit_weight_step">Quick edit weight step</string>
+    <string name="settings_quick_edit_long_press_ms">Hold recognition time (ms)</string>
+    <string name="settings_quick_edit_long_press_ms_hint">Time before holding +/− starts repeating. 100–3000 ms, default 450.</string>
+    <string name="settings_quick_edit_repeat_interval_ms">Weight repeat interval (ms)</string>
+    <string name="settings_quick_edit_repeat_interval_ms_hint">Interval between repeated +/− changes. 50–2000 ms, default 250.</string>
     <string name="settings_quick_edit_toolbar_placement">Quick edit toolbar position</string>
     <string name="quick_edit_toolbar_below_selection">Below selected tag</string>
     <string name="quick_edit_toolbar_bottom">Fixed at bottom</string>
@@ -629,6 +633,9 @@
     <string name="settings_quick_edit_weight_step_hint">Default 0.1. Decimal values greater than zero are supported.</string>
     <string name="cut">Cut</string>
     <string name="quick_edit_copy">Copy</string>
+    <string name="quick_edit_multi_select">Select multiple tags</string>
+    <string name="quick_edit_tag_info">Tag information</string>
+    <string name="quick_edit_tag_not_found">This tag is not in the tag dictionary.</string>
     <string name="quick_edit_paste">Paste here</string>
     <string name="quick_edit_choose_tags">Choose tags</string>
     <string name="split_block_at_cursor">Split block at cursor</string>

@@ -464,6 +464,12 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     fun setQuickEditWeightStep(value: String) = viewModelScope.launch {
         container.settingsRepository.setQuickEditWeightStep(value)
     }
+    fun setQuickEditLongPressMillis(value: Int) = viewModelScope.launch {
+        container.settingsRepository.setQuickEditLongPressMillis(value)
+    }
+    fun setQuickEditRepeatIntervalMillis(value: Int) = viewModelScope.launch {
+        container.settingsRepository.setQuickEditRepeatIntervalMillis(value)
+    }
     fun setQuickEditToolbarPlacement(value: QuickEditToolbarPlacement) = viewModelScope.launch {
         container.settingsRepository.setQuickEditToolbarPlacement(value)
     }
@@ -638,6 +644,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     fun setTagFavorite(item: TagDictionaryItem, favorite: Boolean) = viewModelScope.launch {
         container.autocompleteRepository.setFavorite(item, favorite)
     }
+    suspend fun tagDetails(canonical: String): TagDictionaryItem? =
+        container.autocompleteRepository.tagDetails(canonical)
     fun saveTagDetails(item: TagDictionaryItem, korean: String?, aliases: String?, appCategory: String?) = viewModelScope.launch {
         container.autocompleteRepository.saveUserDetails(item, korean, aliases, appCategory)
     }

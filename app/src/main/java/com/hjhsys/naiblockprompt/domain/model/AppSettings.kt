@@ -19,6 +19,8 @@ data class AppSettings(
     val appearanceMode: AppearanceMode = AppearanceMode.SYSTEM,
     val lastUsedSeed: Long? = null,
     val quickEditWeightStep: String = "0.1",
+    val quickEditLongPressMillis: Int = QuickEditPressTiming.DEFAULT_LONG_PRESS_MILLIS,
+    val quickEditRepeatIntervalMillis: Int = QuickEditPressTiming.DEFAULT_REPEAT_INTERVAL_MILLIS,
     val quickEditToolbarPlacement: QuickEditToolbarPlacement = QuickEditToolbarPlacement.BELOW_SELECTION,
     val alternateCharacterColors: Boolean = true,
     val showStickyPromptControls: Boolean = true,
@@ -29,3 +31,15 @@ data class AppSettings(
 @Serializable enum class AppearanceMode { SYSTEM, LIGHT, DARK }
 @Serializable enum class ColorHelperMode { ALWAYS, WHILE_EDITING, OFF }
 @Serializable enum class QuickEditToolbarPlacement { BELOW_SELECTION, BOTTOM }
+
+object QuickEditPressTiming {
+    const val DEFAULT_LONG_PRESS_MILLIS = 450
+    const val DEFAULT_REPEAT_INTERVAL_MILLIS = 250
+    const val MIN_LONG_PRESS_MILLIS = 100
+    const val MAX_LONG_PRESS_MILLIS = 3_000
+    const val MIN_REPEAT_INTERVAL_MILLIS = 50
+    const val MAX_REPEAT_INTERVAL_MILLIS = 2_000
+
+    fun isValidLongPress(value: Int) = value in MIN_LONG_PRESS_MILLIS..MAX_LONG_PRESS_MILLIS
+    fun isValidRepeatInterval(value: Int) = value in MIN_REPEAT_INTERVAL_MILLIS..MAX_REPEAT_INTERVAL_MILLIS
+}

@@ -68,6 +68,7 @@ internal object GenerateNavigationPolicy {
 }
 
 internal val LocalGeneratePagerScrolling = staticCompositionLocalOf { false }
+internal val LocalGeneratePagerSwipeLock = staticCompositionLocalOf<(Boolean) -> Unit> { {} }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -104,6 +105,8 @@ fun GeneratePagerScreen(
     }
     var showExitDialog by rememberSaveable { mutableStateOf(false) }
     var quickEditExitSignal by rememberSaveable { mutableIntStateOf(0) }
+    var pagerSwipeLocked by remember { mutableStateOf(false) }
+    val setPagerSwipeLocked = remember { { locked: Boolean -> pagerSwipeLocked = locked } }
     val activity = LocalContext.current as? Activity
     val imageInput = session?.generationSettings?.imageInput
     val vibeIgnored = imageInput?.mode == ImageInputMode.VIBE_TRANSFER &&
@@ -174,7 +177,7 @@ fun GeneratePagerScreen(
             state = pagerState,
             modifier = Modifier.fillMaxSize(),
             beyondViewportPageCount = 1,
-            userScrollEnabled = true,
+            userScrollEnabled = !pagerSwipeLocked,
         ) { page ->
         key(page) {
         when {
@@ -188,6 +191,7 @@ fun GeneratePagerScreen(
             page == GenerateNavigationPolicy.GENERATE_PAGE -> CompositionLocalProvider(
                 LocalQuickEditExitSignal provides quickEditExitSignal,
                 LocalGeneratePagerScrolling provides pagerState.isScrollInProgress,
+                LocalGeneratePagerSwipeLock provides setPagerSwipeLocked,
             ) {
                 GenerateScreen(
                     session,
