@@ -34,10 +34,14 @@ object HistoryDeletionPolicy {
 }
 
 object HistoryRetentionPolicy {
+    fun records(entries: List<HistoryEntryEntity>, keepCount: Int): List<HistoryEntryEntity> = entries
+        .sortedByDescending { it.createdAt }
+        .take(keepCount.coerceIn(1, 100))
+
     fun entriesToTrim(entries: List<HistoryEntryEntity>, keepNormal: Int): List<HistoryEntryEntity> = entries
-        .filterNot { it.favorite }
         .sortedByDescending { it.createdAt }
         .drop(keepNormal.coerceIn(1, 100))
+        .filterNot { it.favorite }
 }
 
 object HistoryStorageEstimator {
@@ -225,7 +229,6 @@ class LibraryRepository(
         val keep = limit.coerceIn(1, 100)
         HistoryRetentionPolicy.entriesToTrim(historyDao.listAll(), keep).forEach {
             File(it.thumbnailPath).delete()
-            imageStore.delete(it.imagePath)
             historyDao.delete(it)
         }
     }

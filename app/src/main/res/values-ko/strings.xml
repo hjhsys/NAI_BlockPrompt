@@ -158,7 +158,7 @@
     <string name="saved_title">라이브러리</string>
     <string name="saved_empty">저장한 블록과 프리셋이 여기에 표시됩니다.</string>
     <string name="settings_title">설정</string>
-    <string name="settings_history_limit">히스토리 개수</string>
+    <string name="settings_history_limit">기록 보관 개수</string>
     <string name="settings_formatter">포맷터 버튼 표시</string>
     <string name="settings_weight_normalization">생성 전 가중치 닫힘 자동 보정</string>
     <string name="help_weight_normalization_body">완성되지 않은 NovelAI :: 가중치 구문을 생성 시 전송되는 Prompt에서만 닫습니다. 편집 중인 원문은 바꾸지 않습니다.</string>
@@ -268,7 +268,7 @@
     <string name="restore">복원</string>
     <string name="restore_history">히스토리 복원</string>
     <string name="load_from_history">히스토리에서 불러오기</string>
-    <string name="history_all">전체</string>
+    <string name="history_all">기록</string>
     <string name="history_favorites">즐겨찾기</string>
     <string name="history_favorites_empty">즐겨찾기한 생성 기록이 없습니다.</string>
     <string name="add_favorite">즐겨찾기 추가</string>
@@ -289,9 +289,9 @@
     <string name="add_to_base">Base에 추가</string>
     <string name="name">이름</string>
     <string name="save">저장</string>
-    <string name="settings_history_limit_value">히스토리 보관 개수: %1$d</string>
-    <string name="settings_history_storage_estimate">예상 저장 용량: 약 %1$.1f MB (최근 원본 %2$d개의 평균)</string>
-    <string name="settings_history_storage_unavailable">예상 저장 용량은 이미지 크기에 따라 달라집니다. 원본이 더 쌓이면 계산할 수 있습니다.</string>
+    <string name="settings_history_limit_value">기록 보관 개수: %1$d</string>
+    <string name="settings_history_storage_estimate">최근 원본 기준 참고 용량: 약 %1$.1f MB (%2$d개의 평균). 기록에서 정리되어도 원본은 저장 폴더에 남습니다.</string>
+    <string name="settings_history_storage_unavailable">원본 용량은 이미지 크기에 따라 달라집니다. 기록에서 정리되어도 원본은 저장 폴더에 남습니다.</string>
     <string name="duplicate_generation_title">동일한 요청을 다시 생성할까요?</string>
     <string name="duplicate_generation_message">Prompt, 생성 설정, Seed가 직전 성공 기록과 같습니다.</string>
     <string name="generate_anyway">그래도 생성</string>

@@ -866,6 +866,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     }
     fun setHistoryFavorite(item: HistoryEntryEntity, favorite: Boolean) = viewModelScope.launch {
         container.libraryRepository.setHistoryFavorite(item, favorite)
+        if (!favorite) container.libraryRepository.trimHistory(settings.value.historyLimit)
     }
     fun enforceHistoryLimit() = viewModelScope.launch {
         container.libraryRepository.trimHistory(settings.value.historyLimit)

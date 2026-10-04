@@ -73,15 +73,14 @@ fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, isActive
     val history by viewModel.history.collectAsState()
     val subscriptionStatus by viewModel.subscriptionStatus.collectAsState()
     val session by viewModel.session.collectAsState()
+    val settings by viewModel.settings.collectAsState()
     val modelSummary = compactModelName(session?.generationSettings?.modelId)
     val seedSummary = session?.let { stringResource(if (it.generationSettings.seedMode == com.hjhsys.naiblockprompt.domain.model.SeedMode.RANDOM) R.string.seed_status_random else R.string.seed_status_fixed) }
     var favoritesOnly by rememberSaveable { mutableStateOf(false) }
     val allHistoryListState = rememberLazyListState()
     val favoriteHistoryListState = rememberLazyListState()
-    val retainedUnfavorites = remember { mutableStateListOf<String>() }
     LaunchedEffect(isActive) {
         if (!isActive) {
-            retainedUnfavorites.clear()
             viewModel.enforceHistoryLimit()
         }
     }
@@ -245,7 +244,13 @@ fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, isActive
             contentPadding = PaddingValues(start = 16.dp, top = 4.dp, end = 16.dp, bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-        val visibleHistory = if (favoritesOnly) history.filter { it.entity.favorite || it.entity.id in retainedUnfavorites } else history
+        val visibleHistory = if (favoritesOnly) {
+            history.filter { it.entity.favorite }
+        } else {
+            val recordIds = HistoryRetentionPolicy.records(history.map { it.entity }, settings.historyLimit)
+                .mapTo(hashSetOf()) { it.id }
+            history.filter { it.entity.id in recordIds }
+        }
         if (visibleHistory.isEmpty()) item { Text(stringResource(if (favoritesOnly) R.string.history_favorites_empty else R.string.history_empty)) }
         items(visibleHistory, key = { it.entity.id }) { item ->
             val actualSeed = item.snapshot?.generation?.usedSeed?.takeIf(SeedSelection::isValid)
@@ -262,7 +267,6 @@ fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, isActive
                                 Text(item.entity.model ?: "-", Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 IconButton(onClick = {
                                     val favorite = !item.entity.favorite
-                                    if (!favorite && favoritesOnly) retainedUnfavorites.add(item.entity.id) else retainedUnfavorites.remove(item.entity.id)
                                     viewModel.setHistoryFavorite(item.entity, favorite)
                                 }) {
                                     Icon(

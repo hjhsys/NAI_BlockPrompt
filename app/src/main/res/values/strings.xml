@@ -158,7 +158,7 @@
     <string name="saved_title">Library</string>
     <string name="saved_empty">Saved blocks and presets will appear here.</string>
     <string name="settings_title">Settings</string>
-    <string name="settings_history_limit">History limit</string>
+    <string name="settings_history_limit">Record retention limit</string>
     <string name="settings_formatter">Show formatter actions</string>
     <string name="settings_weight_normalization">Normalize weight closings before generation</string>
     <string name="help_weight_normalization_body">Closes unfinished NovelAI :: weight syntax only in the prompt sent for generation. Your editor text is not rewritten.</string>
@@ -268,7 +268,7 @@
     <string name="restore">Restore</string>
     <string name="restore_history">Restore history</string>
     <string name="load_from_history">Load from history</string>
-    <string name="history_all">All</string>
+    <string name="history_all">Records</string>
     <string name="history_favorites">Favorites</string>
     <string name="history_favorites_empty">No favorite generations yet.</string>
     <string name="add_favorite">Add favorite</string>
@@ -289,9 +289,9 @@
     <string name="add_to_base">Add to Base</string>
     <string name="name">Name</string>
     <string name="save">Save</string>
-    <string name="settings_history_limit_value">History limit: %1$d</string>
-    <string name="settings_history_storage_estimate">Estimated storage: about %1$.1f MB (average of %2$d recent originals)</string>
-    <string name="settings_history_storage_unavailable">Estimated storage depends on image size. More saved originals are needed for an estimate.</string>
+    <string name="settings_history_limit_value">Records retained: %1$d</string>
+    <string name="settings_history_storage_estimate">Recent-original reference: about %1$.1f MB (average of %2$d). Originals remain in the save folder after records are trimmed.</string>
+    <string name="settings_history_storage_unavailable">Original size depends on the image. Originals remain in the save folder after records are trimmed.</string>
     <string name="duplicate_generation_title">Generate the same request?</string>
     <string name="duplicate_generation_message">The prompt, settings, and seed match the latest successful generation.</string>
     <string name="generate_anyway">Generate anyway</string>

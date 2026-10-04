@@ -14,7 +14,7 @@ An Android-only Kotlin/Jetpack Compose prompt-block editor and unofficial NovelA
 - **빠른 편집:** Tag/Weight Chunk 선택과 다중 선택, 묶음 이동·삭제·주석·줄바꿈·태그 사전 삽입, 가중치 증감·부호 반전, 태그 정보 확인을 제공합니다. 길게 누르기 판정과 반복 간격, 도구 위치를 설정할 수 있습니다.
 - **생성:** 모델·해상도·Sampler·Steps·Guidance·Seed 설정, Random/Fixed Seed 빠른 전환, Character Positioning의 선택·탭·드래그 배치, Image2Image, Vibe Transfer와 로컬 인코딩 캐시, Precise Reference, Inpaint를 지원합니다. 지원 범위는 모델에 따라 다릅니다.
 - **미리보기와 가져오기:** 생성 전 현재 Prompt를 확인하고, PNG 메타데이터의 Prompt·모델·생성 설정을 미리 본 뒤 전체 또는 일부 Block만 가져올 수 있습니다. Character는 교체하거나 뒤에 추가할 수 있습니다.
-- **이미지/History:** 원본 저장, 썸네일·설정·Seed 보존, 부분 복원, 즐겨찾기, 실패 요청 Retry, 원본 유실 안내를 제공합니다. 두 이미지와 해당 Prompt·생성 설정을 A/B로 비교하고 이미지 비교와 Prompt 비교 사이를 전환할 수 있습니다.
+- **이미지/History:** 원본 저장, 썸네일·설정·Seed 보존, 부분 복원, 즐겨찾기, 실패 요청 Retry, 원본 유실 안내를 제공합니다. `기록`에는 설정한 개수의 최근 생성만 표시하고, 범위를 벗어난 즐겨찾기는 별도 보존합니다. 자동 기록 정리는 저장 폴더의 원본을 삭제하지 않습니다. 두 이미지와 해당 Prompt·생성 설정을 A/B로 비교하고 이미지 비교와 Prompt 비교 사이를 전환할 수 있습니다.
 - **Library:** Blocks / Sets / Presets 저장·검색·폴더 분류·불러오기와 항목별 미리보기 이미지를 지원합니다. 이전 작업은 1-slot Stash로 보관합니다.
 - **Tags:** 201,273개 canonical 태그와 한국어 번역, 별칭·카테고리 검색, 사용자 번역 override, 즐겨찾기, 사용 기록, 미리보기 이미지, 출처 표시, 다중 선택 제외를 지원합니다.
 - **자동완성:** Local / NovelAI / Danbooru 후보를 한 줄에서 출처별로 전환합니다. 입력 위치와 키보드를 고려한 팝업 위치를 상단·하단·유동적으로 설정할 수 있으며, 조회 결과로 확인된 원격 태그만 로컬 DB에 학습합니다.
