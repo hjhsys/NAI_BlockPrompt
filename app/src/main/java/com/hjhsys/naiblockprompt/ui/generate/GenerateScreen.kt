@@ -1,8 +1,12 @@
 package com.hjhsys.naiblockprompt.ui.generate
 
 import android.util.Log
+import android.os.Build
+import android.view.WindowManager
 import androidx.annotation.StringRes
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
@@ -10,9 +14,15 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.items
@@ -40,13 +50,16 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.PopupProperties
 import kotlin.math.atan2
 import kotlin.math.PI
 import androidx.compose.ui.graphics.lerp
@@ -58,6 +71,8 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.buildAnnotatedString
@@ -84,6 +99,7 @@ import com.hjhsys.naiblockprompt.domain.prompt.PromptProcessor
 import com.hjhsys.naiblockprompt.domain.prompt.PromptTokenEstimator
 import com.hjhsys.naiblockprompt.domain.prompt.TokenRange
 import com.hjhsys.naiblockprompt.ui.MainViewModel
+import com.hjhsys.naiblockprompt.ui.TagInsertReturnTarget
 import com.hjhsys.naiblockprompt.ui.GenerationUiState
 import com.hjhsys.naiblockprompt.ui.components.AppTitleBar
 import com.hjhsys.naiblockprompt.ui.components.AppTitleMenuItem
@@ -112,6 +128,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
+import com.hjhsys.naiblockprompt.domain.image.NaiImageMetadata
 import com.hjhsys.naiblockprompt.domain.image.NaiPngMetadataParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -126,14 +143,21 @@ import com.hjhsys.naiblockprompt.ui.database.TagEditDialog
 
 internal val LocalQuickEditExitSignal = staticCompositionLocalOf { 0 }
 
+private class PromptCursorCenterHost(
+    val requestCenter: (Float) -> Unit,
+)
+
 private class StickyPromptToolbarState(
     val blockId: String,
     val label: String,
+    val showToolbar: Boolean,
     val quickEdit: Boolean,
     val canUndo: Boolean,
     val canRedo: Boolean,
     val showFormatter: Boolean,
     val autocomplete: StickyAutocompleteState?,
+    val cursorTopInWindow: Float?,
+    val cursorBottomInWindow: Float?,
     val onUndo: () -> Unit,
     val onRedo: () -> Unit,
     val onToggleQuickEdit: () -> Unit,
@@ -150,8 +174,41 @@ private class StickyAutocompleteState(
     val novelAiFailed: Boolean,
     val danbooruFailed: Boolean,
     val requestStartedAtNanos: Long,
+    val rowScrollStates: AutocompleteRowScrollStates,
+    val selectedSource: AutocompleteDisplaySource,
+    val onSourceChange: (AutocompleteDisplaySource) -> Unit,
     val onSelect: (TagSuggestion) -> Unit,
 )
+
+private enum class AutocompleteDisplaySource(@param:StringRes val label: Int) {
+    LOCAL(R.string.autocomplete_local_row),
+    NOVEL_AI(R.string.autocomplete_nai_row),
+    DANBOORU(R.string.autocomplete_danbooru_row),
+    ;
+
+    fun shifted(delta: Int): AutocompleteDisplaySource {
+        val values = entries
+        return values[(ordinal + delta).mod(values.size)]
+    }
+}
+
+private class AutocompleteRowScrollStates(
+    val wildcards: LazyListState,
+    val local: LazyListState,
+    val novelAi: LazyListState,
+    val danbooru: LazyListState,
+)
+
+@Composable
+private fun rememberAutocompleteRowScrollStates(): AutocompleteRowScrollStates {
+    val wildcards = rememberLazyListState()
+    val local = rememberLazyListState()
+    val novelAi = rememberLazyListState()
+    val danbooru = rememberLazyListState()
+    return remember(wildcards, local, novelAi, danbooru) {
+        AutocompleteRowScrollStates(wildcards, local, novelAi, danbooru)
+    }
+}
 
 private class PromptToolbarHost(
     val viewportTopInWindow: Float,
@@ -161,6 +218,8 @@ private class PromptToolbarHost(
 
 private class QuickEditActionState(
     val blockId: String,
+    val selectionTopInWindow: Float?,
+    val selectionBottomInWindow: Float?,
     val canAdjustWeight: Boolean,
     val canSetWeight: Boolean,
     val canMutate: Boolean,
@@ -169,6 +228,7 @@ private class QuickEditActionState(
     val canShowTagInfo: Boolean,
     val onDecrease: () -> Unit,
     val onIncrease: () -> Unit,
+    val onToggleWeightSign: () -> Unit,
     val onFinishWeightAdjustment: () -> Unit,
     val onWeightPressChanged: (Boolean) -> Unit,
     val onToggleMultiSelect: () -> Unit,
@@ -191,16 +251,27 @@ private val LocalQuickEditToolbarPlacement = staticCompositionLocalOf { QuickEdi
 private val LocalQuickEditLongPressMillis = staticCompositionLocalOf { QuickEditPressTiming.DEFAULT_LONG_PRESS_MILLIS }
 private val LocalQuickEditRepeatIntervalMillis = staticCompositionLocalOf { QuickEditPressTiming.DEFAULT_REPEAT_INTERVAL_MILLIS }
 private val LocalStickyPromptControlsEnabled = staticCompositionLocalOf { true }
+private val LocalPromptEditorOverlayPlacement = staticCompositionLocalOf { PromptEditorOverlayPlacement.DYNAMIC }
+private val LocalPromptListScrolling = staticCompositionLocalOf { false }
+private val LocalPromptCursorCenterHost = staticCompositionLocalOf<PromptCursorCenterHost?> { null }
+private val LocalTagInsertReturnTarget = staticCompositionLocalOf<TagInsertReturnTarget?> { null }
 
 @Composable
 private fun QuickEditActionToolbar(state: QuickEditActionState, modifier: Modifier = Modifier) {
     var showMore by remember(state.blockId) { mutableStateOf(false) }
     val commentDescription = stringResource(R.string.quick_edit_comment)
+    val toggleWeightSignDescription = stringResource(R.string.quick_edit_toggle_weight_sign)
     val longPressMillis = LocalQuickEditLongPressMillis.current
     val repeatIntervalMillis = LocalQuickEditRepeatIntervalMillis.current
     Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(1.dp)) {
         RepeatingIconButton(R.string.quick_edit_decrease, Icons.Default.Remove, state.canAdjustWeight, longPressMillis, repeatIntervalMillis, state.onDecrease, state.onFinishWeightAdjustment, state.onWeightPressChanged)
         RepeatingIconButton(R.string.quick_edit_increase, Icons.Default.Add, state.canAdjustWeight, longPressMillis, repeatIntervalMillis, state.onIncrease, state.onFinishWeightAdjustment, state.onWeightPressChanged)
+        TextButton(
+            onClick = state.onToggleWeightSign,
+            enabled = state.canAdjustWeight,
+            contentPadding = PaddingValues(0.dp),
+            modifier = Modifier.size(36.dp).semantics { contentDescription = toggleWeightSignDescription },
+        ) { Text("±", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
         TextButton(
             onClick = state.onToggleComment,
             enabled = state.canMutate,
@@ -260,6 +331,27 @@ internal fun shouldShowStickyPromptToolbar(
     viewportBottomInWindow.isFinite() &&
     inlineToolbarTopInWindow >= viewportBottomInWindow - thresholdPx
 
+internal fun effectivePromptViewportBottom(
+    viewportTopInWindow: Float,
+    viewportBottomInWindow: Float,
+    imeBottomPx: Int,
+    windowHeightPx: Int,
+): Float {
+    if (!viewportTopInWindow.isFinite() || !viewportBottomInWindow.isFinite()) return viewportBottomInWindow
+    val imeTopInWindow = (windowHeightPx - imeBottomPx.coerceAtLeast(0)).toFloat()
+    return minOf(viewportBottomInWindow, imeTopInWindow).coerceAtLeast(viewportTopInWindow)
+}
+
+internal fun effectivePromptViewportTop(
+    measuredViewportTopInWindow: Float,
+    titleBarBottomInWindow: Float,
+    systemTopInsetPx: Int,
+): Float = maxOf(
+    systemTopInsetPx.coerceAtLeast(0).toFloat(),
+    measuredViewportTopInWindow.takeIf { it.isFinite() } ?: Float.NEGATIVE_INFINITY,
+    titleBarBottomInWindow.takeIf { it.isFinite() } ?: Float.NEGATIVE_INFINITY,
+)
+
 internal fun shouldShowStickyAutocomplete(
     editorTopInWindow: Float,
     editorBottomInWindow: Float,
@@ -271,6 +363,72 @@ internal fun shouldShowStickyAutocomplete(
     viewportBottomInWindow.isFinite() &&
     editorBottomInWindow > viewportTopInWindow &&
     editorTopInWindow < viewportBottomInWindow
+
+internal fun shouldShowInlineAutocomplete(
+    inlineTopInWindow: Float,
+    estimatedHeightPx: Float,
+    viewportTopInWindow: Float,
+    viewportBottomInWindow: Float,
+    marginPx: Float,
+): Boolean = inlineTopInWindow.isFinite() &&
+    estimatedHeightPx > 0f &&
+    viewportTopInWindow.isFinite() &&
+    viewportBottomInWindow.isFinite() &&
+    inlineTopInWindow >= viewportTopInWindow &&
+    inlineTopInWindow + estimatedHeightPx + marginPx <= viewportBottomInWindow
+
+internal object EditorOverlayPlacementPolicy {
+    fun verticalPosition(
+        popupHeight: Int,
+        visibleTop: Int,
+        visibleBottom: Int,
+        margin: Int,
+        cursorTop: Int? = null,
+        cursorBottom: Int? = null,
+        preferBottom: Boolean = false,
+        placement: PromptEditorOverlayPlacement = PromptEditorOverlayPlacement.DYNAMIC,
+    ): Int {
+        val top = visibleTop + margin
+        val bottom = visibleBottom - margin
+        val bottomAligned = (bottom - popupHeight).coerceAtLeast(top)
+        if (placement == PromptEditorOverlayPlacement.TOP) return top
+        if (placement == PromptEditorOverlayPlacement.BOTTOM) return bottomAligned
+        val preferred = if (preferBottom) bottomAligned else top
+        val alternate = if (preferBottom) top else bottomAligned
+        if (cursorTop != null && cursorBottom != null) {
+            fun overlapsCursor(y: Int): Boolean = y < cursorBottom && y + popupHeight > cursorTop
+            if (!overlapsCursor(preferred)) return preferred
+            if (!overlapsCursor(alternate)) return alternate
+            val cursorCenter = (cursorTop + cursorBottom) / 2
+            val topDistance = kotlin.math.abs(top + popupHeight / 2 - cursorCenter)
+            val bottomDistance = kotlin.math.abs(bottomAligned + popupHeight / 2 - cursorCenter)
+            return if (topDistance >= bottomDistance) top else bottomAligned
+        }
+        return preferred
+    }
+}
+
+private class FixedWindowPopupPositionProvider(
+    private val leftInWindow: Int,
+    private val topInWindow: Int,
+    private val margin: Int,
+) : PopupPositionProvider {
+    override fun calculatePosition(
+        anchorBounds: androidx.compose.ui.unit.IntRect,
+        windowSize: IntSize,
+        layoutDirection: LayoutDirection,
+        popupContentSize: IntSize,
+    ): IntOffset = IntOffset(
+        x = leftInWindow.coerceIn(
+            margin,
+            (windowSize.width - popupContentSize.width - margin).coerceAtLeast(margin),
+        ),
+        y = topInWindow.coerceIn(
+            margin,
+            (windowSize.height - popupContentSize.height - margin).coerceAtLeast(margin),
+        ),
+    )
+}
 
 @Composable
 private fun StickyPromptToolbar(state: StickyPromptToolbarState, modifier: Modifier = Modifier) {
@@ -351,12 +509,15 @@ private fun StickyPromptEditorControls(state: StickyPromptToolbarState, modifier
                         novelAiFailed = suggestions.novelAiFailed,
                         danbooruFailed = suggestions.danbooruFailed,
                         requestStartedAtNanos = suggestions.requestStartedAtNanos,
+                        rowScrollStates = suggestions.rowScrollStates,
+                        selectedSource = suggestions.selectedSource,
+                        onSourceChange = suggestions.onSourceChange,
                         onSelect = suggestions.onSelect,
                     )
                 }
             }
         }
-        StickyPromptToolbar(state)
+        if (state.showToolbar) StickyPromptToolbar(state)
     }
 }
 
@@ -382,11 +543,23 @@ fun GenerateScreen(
     }
 
     val firstBlockName = stringResource(R.string.default_block_name, 1)
+    val context = LocalContext.current
+    val overlayDensity = LocalDensity.current
+    val windowConfiguration = LocalConfiguration.current
+    val windowHeightPx = remember(context, windowConfiguration) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            context.getSystemService(WindowManager::class.java).currentWindowMetrics.bounds.height()
+        } else {
+            context.resources.displayMetrics.heightPixels
+        }
+    }
+    val systemTopInsetPx = WindowInsets.statusBars.getTop(overlayDensity)
     val generationState by viewModel.generationState.collectAsStateWithLifecycle()
     val duplicateWarning by viewModel.duplicateWarning.collectAsStateWithLifecycle()
     val lastSentPrompt by viewModel.lastSentPrompt.collectAsStateWithLifecycle()
     var showCharacterTypeDialog by rememberSaveable { mutableStateOf(false) }
     var showLastSentPrompt by rememberSaveable { mutableStateOf(false) }
+    var currentPromptPreview by remember { mutableStateOf<GeneratedPromptSnapshot?>(null) }
     var showDefaultBlockScale by rememberSaveable { mutableStateOf(false) }
     var defaultBlockScaleInput by remember(session.id) { mutableStateOf(session.defaultBlockScale) }
     val hasStash by viewModel.hasStash.collectAsStateWithLifecycle()
@@ -409,9 +582,21 @@ fun GenerateScreen(
         )
     val supportsT5Estimate = session.generationSettings.modelId?.contains("diffusion-4") == true
     var activeTagTarget by remember { mutableStateOf<TagEditorTarget?>(null) }
+    var cursorCenterReturnTarget by remember { mutableStateOf<TagInsertReturnTarget?>(null) }
     var colorTarget by remember { mutableStateOf<TagEditorTarget?>(null) }
     var showColorHelper by rememberSaveable { mutableStateOf(false) }
-    val promptListState = rememberLazyListState()
+    val restoredPromptScrollPosition = remember(viewModel) { viewModel.generatePromptScrollPosition() }
+    val promptListState = rememberLazyListState(
+        initialFirstVisibleItemIndex = restoredPromptScrollPosition.itemIndex,
+        initialFirstVisibleItemScrollOffset = restoredPromptScrollPosition.scrollOffset,
+    )
+    LaunchedEffect(promptListState, viewModel) {
+        snapshotFlow {
+            promptListState.firstVisibleItemIndex to promptListState.firstVisibleItemScrollOffset
+        }.collect { (itemIndex, scrollOffset) ->
+            viewModel.updateGeneratePromptScrollPosition(itemIndex, scrollOffset)
+        }
+    }
     LaunchedEffect(loadUiRevision) {
         if (loadUiRevision > 0) promptListState.scrollToItem(0)
     }
@@ -426,14 +611,44 @@ fun GenerateScreen(
             }
         }
         promptListState.scrollToItem(sectionIndex.coerceAtLeast(0))
+        cursorCenterReturnTarget = target
         activeTagTarget = TagEditorTarget(target.owner, target.polarity, target.blockId, target.cursor)
         viewModel.consumeTagInsertReturnTarget(target.revision)
     }
     var shortcutArea by remember { mutableStateOf(IntSize.Zero) }
     var promptViewportTopInWindow by remember { mutableFloatStateOf(Float.NEGATIVE_INFINITY) }
     var promptViewportBottomInWindow by remember { mutableFloatStateOf(Float.POSITIVE_INFINITY) }
+    var titleBarBottomInWindow by remember { mutableFloatStateOf(Float.NEGATIVE_INFINITY) }
+    val effectivePromptViewportTopInWindow = effectivePromptViewportTop(
+        measuredViewportTopInWindow = promptViewportTopInWindow,
+        titleBarBottomInWindow = titleBarBottomInWindow,
+        systemTopInsetPx = systemTopInsetPx,
+    )
+    val imeBottomPx = WindowInsets.ime.getBottom(overlayDensity)
+    val effectivePromptViewportBottomInWindow = effectivePromptViewportBottom(
+        viewportTopInWindow = effectivePromptViewportTopInWindow,
+        viewportBottomInWindow = promptViewportBottomInWindow,
+        imeBottomPx = imeBottomPx,
+        windowHeightPx = windowHeightPx,
+    )
+    val promptScrollScope = rememberCoroutineScope()
+    val promptCursorCenterHost = remember(
+        promptListState,
+        effectivePromptViewportTopInWindow,
+        effectivePromptViewportBottomInWindow,
+    ) {
+        PromptCursorCenterHost { cursorCenterInWindow ->
+            val viewportCenter = (effectivePromptViewportTopInWindow + effectivePromptViewportBottomInWindow) / 2f
+            if (cursorCenterInWindow.isFinite() && viewportCenter.isFinite()) {
+                promptScrollScope.launch {
+                    promptListState.scrollBy(cursorCenterInWindow - viewportCenter)
+                }
+            }
+        }
+    }
     var stickyPromptToolbar by remember { mutableStateOf<StickyPromptToolbarState?>(null) }
     var bottomQuickEditToolbar by remember { mutableStateOf<QuickEditActionState?>(null) }
+    var editorOverlayStackHeight by remember { mutableIntStateOf(0) }
     var databasePosition by rememberSaveable { mutableStateOf(floatArrayOf(-1f, -1f)) }
     var colorPosition by rememberSaveable { mutableStateOf(floatArrayOf(-1f, -1f)) }
     if (duplicateWarning) AlertDialog(
@@ -454,6 +669,12 @@ fun GenerateScreen(
     }
     if (showLastSentPrompt && lastSentPrompt != null) {
         ProcessedPromptDialog(lastSentPrompt!!) { showLastSentPrompt = false }
+    }
+    currentPromptPreview?.let { preview ->
+        ProcessedPromptDialog(
+            prompt = preview,
+            title = stringResource(R.string.current_prompt_preview_title),
+        ) { currentPromptPreview = null }
     }
     if (showDefaultBlockScale) AlertDialog(
         onDismissRequest = { showDefaultBlockScale = false },
@@ -483,19 +704,30 @@ fun GenerateScreen(
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
-            AppTitleBar(
-                R.string.generate_title,
-                subtitle = stringResource(R.string.generate_status_summary, modelSummary, seedSummary),
-                onSubtitleClick = viewModel::toggleSeedMode,
-                trailingOverline = headerTokenSummary,
-                trailingSubtitle = quotaStatusText(subscriptionStatus),
-                menuItems = listOf(
-                    AppTitleMenuItem(R.string.load_preset, Icons.Default.FolderOpen, onClick = viewModel::beginPresetLoad),
-                    AppTitleMenuItem(R.string.save_preset, Icons.Default.Save, onClick = viewModel::beginPresetSave),
-                    AppTitleMenuItem(R.string.previous_work, Icons.Default.Restore, enabled = hasStash, onClick = viewModel::swapStash),
-                    AppTitleMenuItem(R.string.nav_settings, Icons.Default.Settings, onClick = onOpenSettings),
-                ),
-            )
+            Box(
+                Modifier.onGloballyPositioned { coordinates ->
+                    titleBarBottomInWindow = coordinates.positionInWindow().y + coordinates.size.height
+                },
+            ) {
+                AppTitleBar(
+                    R.string.generate_title,
+                    subtitle = stringResource(R.string.generate_status_summary, modelSummary, seedSummary),
+                    onSubtitleClick = viewModel::toggleSeedMode,
+                    trailingOverline = headerTokenSummary,
+                    trailingSubtitle = quotaStatusText(subscriptionStatus),
+                    menuItems = listOf(
+                        AppTitleMenuItem(R.string.current_prompt_preview, Icons.Default.Description, onClick = {
+                            val preview = viewModel.previewCurrentPrompt()
+                            if (preview != null) currentPromptPreview = preview
+                            else android.widget.Toast.makeText(context, R.string.current_prompt_preview_unavailable, android.widget.Toast.LENGTH_SHORT).show()
+                        }),
+                        AppTitleMenuItem(R.string.load_preset, Icons.Default.FolderOpen, onClick = viewModel::beginPresetLoad),
+                        AppTitleMenuItem(R.string.save_preset, Icons.Default.Save, onClick = viewModel::beginPresetSave),
+                        AppTitleMenuItem(R.string.previous_work, Icons.Default.Restore, enabled = hasStash, onClick = viewModel::swapStash),
+                        AppTitleMenuItem(R.string.nav_settings, Icons.Default.Settings, onClick = onOpenSettings),
+                    ),
+                )
+            }
         },
     ) { innerPadding -> Box(
         Modifier.fillMaxSize().padding(innerPadding)
@@ -507,6 +739,10 @@ fun GenerateScreen(
     ) {
       CompositionLocalProvider(
           LocalStickyPromptControlsEnabled provides appSettings.showStickyPromptControls,
+          LocalPromptEditorOverlayPlacement provides appSettings.promptEditorOverlayPlacement,
+          LocalPromptListScrolling provides promptListState.isScrollInProgress,
+          LocalPromptCursorCenterHost provides promptCursorCenterHost,
+          LocalTagInsertReturnTarget provides cursorCenterReturnTarget,
           LocalQuickEditToolbarPlacement provides appSettings.quickEditToolbarPlacement,
           LocalQuickEditLongPressMillis provides appSettings.quickEditLongPressMillis,
           LocalQuickEditRepeatIntervalMillis provides appSettings.quickEditRepeatIntervalMillis,
@@ -514,7 +750,7 @@ fun GenerateScreen(
               if (state != null) bottomQuickEditToolbar = state
               else if (bottomQuickEditToolbar?.blockId == blockId) bottomQuickEditToolbar = null
           },
-          LocalPromptToolbarHost provides PromptToolbarHost(promptViewportTopInWindow, promptViewportBottomInWindow) { blockId, state ->
+          LocalPromptToolbarHost provides PromptToolbarHost(effectivePromptViewportTopInWindow, effectivePromptViewportBottomInWindow) { blockId, state ->
               if (state != null) stickyPromptToolbar = state
               else if (stickyPromptToolbar?.blockId == blockId) stickyPromptToolbar = null
           },
@@ -663,21 +899,50 @@ fun GenerateScreen(
       }
       val transientBarsVisible = !LocalGeneratePagerScrolling.current && !promptListState.isScrollInProgress
       if (transientBarsVisible) {
-          Column(
-              modifier = Modifier.align(Alignment.BottomCenter).padding(horizontal = 12.dp, vertical = 6.dp),
-              verticalArrangement = Arrangement.spacedBy(4.dp),
-          ) {
-              bottomQuickEditToolbar?.takeIf { appSettings.quickEditToolbarPlacement == QuickEditToolbarPlacement.BOTTOM }?.let { actions ->
-                  Surface(
-                      modifier = Modifier.align(Alignment.CenterHorizontally),
-                      shape = MaterialTheme.shapes.large,
-                      color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                      tonalElevation = 4.dp,
-                      shadowElevation = 7.dp,
-                  ) { QuickEditActionToolbar(actions, Modifier.padding(horizontal = 4.dp, vertical = 2.dp)) }
-              }
-              stickyPromptToolbar?.takeIf { appSettings.showStickyPromptControls }?.let { toolbar ->
-                  StickyPromptEditorControls(state = toolbar)
+          val quickEditActions = bottomQuickEditToolbar
+              ?.takeIf { appSettings.quickEditToolbarPlacement == QuickEditToolbarPlacement.BOTTOM }
+          val promptToolbar = stickyPromptToolbar?.takeIf { appSettings.showStickyPromptControls }
+          if (quickEditActions != null || promptToolbar != null) {
+              val overlayMarginPx = with(overlayDensity) { 6.dp.roundToPx() }
+              val overlayViewportTop = effectivePromptViewportTopInWindow.toInt()
+              val overlayViewportBottom = effectivePromptViewportBottomInWindow.takeIf(Float::isFinite)?.toInt()
+                  ?: shortcutArea.height
+              val targetTop = quickEditActions?.selectionTopInWindow ?: promptToolbar?.cursorTopInWindow
+              val targetBottom = quickEditActions?.selectionBottomInWindow ?: promptToolbar?.cursorBottomInWindow
+              val overlayY = EditorOverlayPlacementPolicy.verticalPosition(
+                  popupHeight = editorOverlayStackHeight,
+                  visibleTop = overlayViewportTop,
+                  visibleBottom = overlayViewportBottom,
+                  margin = overlayMarginPx,
+                  cursorTop = targetTop?.toInt(),
+                  cursorBottom = targetBottom?.toInt(),
+                  preferBottom = imeBottomPx <= 0,
+                  placement = appSettings.promptEditorOverlayPlacement,
+              )
+              val overlayOffsetY = (overlayY - promptViewportTopInWindow.toInt()).coerceAtLeast(0)
+              Column(
+                  modifier = Modifier
+                      .align(Alignment.TopCenter)
+                      .offset { IntOffset(0, overlayOffsetY) }
+                      .padding(
+                          start = 12.dp,
+                          end = 12.dp,
+                      )
+                      .onSizeChanged { editorOverlayStackHeight = it.height },
+                  verticalArrangement = Arrangement.spacedBy(4.dp),
+                  horizontalAlignment = Alignment.CenterHorizontally,
+              ) {
+                  quickEditActions?.let { actions ->
+                      Surface(
+                          shape = MaterialTheme.shapes.large,
+                          color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                          tonalElevation = 4.dp,
+                          shadowElevation = 7.dp,
+                      ) { QuickEditActionToolbar(actions, Modifier.padding(horizontal = 4.dp, vertical = 2.dp)) }
+                  }
+                  promptToolbar?.let { toolbar ->
+                      StickyPromptEditorControls(state = toolbar)
+                  }
               }
           }
       }
@@ -1100,6 +1365,8 @@ private data class TagEditorTarget(val owner: PromptOwner, val polarity: PromptP
 internal data class PromptCompareCandidate(
     val id: String,
     val prompt: GeneratedPromptSnapshot,
+    val imageReference: String,
+    val imageAvailable: Boolean,
     val thumbnailPath: String,
     val dateLabel: String,
     val modelLabel: String?,
@@ -1182,12 +1449,58 @@ private fun GenerationCard(
     var showActions by remember { mutableStateOf(false) }
     var showOriginal by rememberSaveable { mutableStateOf(false) }
     var showDebugPrompt by rememberSaveable { mutableStateOf(false) }
+    var initialImageComparison by remember { mutableStateOf<ImageCompareCandidate?>(null) }
+    var initialPromptComparison by remember { mutableStateOf<PromptCompareCandidate?>(null) }
     val originalAvailable = record?.let { com.hjhsys.naiblockprompt.ui.components.rememberOriginalImageAvailable(it.imagePath) } == true
     if (showActions && record != null) com.hjhsys.naiblockprompt.ui.components.ImageActionsDialog(record.imagePath, viewModel) { showActions = false }
     if (showOriginal && record != null) {
-        ImageViewer(record.imagePath, comparisonCandidates) { showOriginal = false }
+        ImageViewer(
+            reference = record.imagePath,
+            comparisonCandidates = comparisonCandidates,
+            initialComparison = initialImageComparison,
+            onComparePrompts = { candidate ->
+                val comparedPrompt = candidate.prompt ?: return@ImageViewer
+                initialPromptComparison = PromptCompareCandidate(
+                    id = candidate.id,
+                    prompt = comparedPrompt,
+                    imageReference = candidate.reference,
+                    imageAvailable = true,
+                    thumbnailPath = candidate.thumbnailReference,
+                    dateLabel = candidate.dateLabel,
+                    modelLabel = candidate.modelLabel,
+                    promptPreview = candidate.promptPreview,
+                )
+                initialImageComparison = null
+                showOriginal = false
+                showDebugPrompt = true
+            },
+        ) {
+            showOriginal = false
+            initialImageComparison = null
+        }
     }
-    if (showDebugPrompt && debugPrompt != null) ProcessedPromptDialog(debugPrompt, promptComparisonCandidates) { showDebugPrompt = false }
+    if (showDebugPrompt && debugPrompt != null) ProcessedPromptDialog(
+        prompt = debugPrompt,
+        comparisonCandidates = promptComparisonCandidates,
+        initialComparison = initialPromptComparison,
+        onCompareImages = { candidate ->
+            initialImageComparison = ImageCompareCandidate(
+                id = candidate.id,
+                reference = candidate.imageReference,
+                thumbnailReference = candidate.thumbnailPath,
+                dateLabel = candidate.dateLabel,
+                modelLabel = candidate.modelLabel,
+                promptPreview = candidate.promptPreview,
+                prompt = candidate.prompt,
+            )
+            initialPromptComparison = null
+            showDebugPrompt = false
+            showOriginal = true
+        },
+    ) {
+        showDebugPrompt = false
+        initialPromptComparison = null
+    }
     ElevatedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             if (record != null) {
@@ -1197,6 +1510,7 @@ private fun GenerationCard(
                     contentScale = ContentScale.Fit,
                     modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp).clickable {
                         viewModel.selectImageSeed(record.seed)
+                        initialImageComparison = null
                         showOriginal = true
                     },
                 )
@@ -1211,7 +1525,7 @@ private fun GenerationCard(
                     promptSelectionEnabled = onCherryPick != null,
                     onImportPromptSelection = onCherryPick,
                     promptViewEnabled = debugPrompt != null,
-                    onViewPrompt = if (debugPrompt != null) {{ showDebugPrompt = true }} else null,
+                    onViewPrompt = if (debugPrompt != null) {{ initialPromptComparison = null; showDebugPrompt = true }} else null,
                 )
                 if (!originalAvailable) {
                     Text(stringResource(R.string.original_missing), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
@@ -1318,6 +1632,7 @@ fun ResultScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onRestore
                     item.originalExists && item.entity.imagePath != currentResult?.imagePath
                 }.map { item ->
                     ImageCompareCandidate(
+                        id = item.entity.id,
                         reference = item.entity.imagePath,
                         thumbnailReference = item.entity.thumbnailPath,
                         dateLabel = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(item.entity.createdAt)),
@@ -1330,6 +1645,7 @@ fun ResultScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onRestore
                             ?.filter { it.enabled && it.content.isNotBlank() }
                             ?.joinToString(", ") { it.content }
                             .orEmpty(),
+                        prompt = item.snapshot?.generation,
                     )
                 },
                 promptComparisonCandidates = history.mapNotNull { item ->
@@ -1338,6 +1654,8 @@ fun ResultScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onRestore
                     PromptCompareCandidate(
                         id = item.entity.id,
                         prompt = prompt,
+                        imageReference = item.entity.imagePath,
+                        imageAvailable = item.originalExists,
                         thumbnailPath = item.entity.thumbnailPath,
                         dateLabel = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(item.entity.createdAt)),
                         modelLabel = item.entity.model,
@@ -1353,19 +1671,36 @@ fun ResultScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onRestore
 internal fun ProcessedPromptDialog(
     prompt: GeneratedPromptSnapshot,
     comparisonCandidates: List<PromptCompareCandidate> = emptyList(),
+    title: String? = null,
+    initialComparison: PromptCompareCandidate? = null,
+    onCompareImages: ((PromptCompareCandidate) -> Unit)? = null,
     dismiss: () -> Unit,
 ) {
     var showComparePicker by remember(prompt) { mutableStateOf(false) }
-    var compareTarget by remember(prompt) { mutableStateOf<PromptCompareCandidate?>(null) }
-    if (showComparePicker) PromptComparePicker(
-        candidates = comparisonCandidates,
-        dismiss = { showComparePicker = false },
-        select = { compareTarget = it; showComparePicker = false },
-    )
-    compareTarget?.let { target -> PromptComparisonDialog(prompt, target, dismiss = { compareTarget = null }) }
+    var compareTarget by remember(prompt, initialComparison?.id) { mutableStateOf(initialComparison) }
+    if (showComparePicker) {
+        PromptComparePicker(
+            candidates = comparisonCandidates,
+            dismiss = { showComparePicker = false },
+            select = { compareTarget = it; showComparePicker = false },
+        )
+        return
+    }
+    compareTarget?.let { target ->
+        PromptComparisonDialog(
+            first = prompt,
+            secondCandidate = target,
+            onCompareImages = onCompareImages?.takeIf { target.imageAvailable }?.let { switch -> { switch(target) } },
+            dismiss = {
+                if (initialComparison != null) dismiss()
+                else compareTarget = null
+            },
+        )
+        return
+    }
     AlertDialog(
         onDismissRequest = dismiss,
-        title = { Text(stringResource(R.string.prompt_view_title)) },
+        title = { Text(title ?: stringResource(R.string.prompt_view_title)) },
         text = {
             SelectionContainer {
                 Column(
@@ -1450,6 +1785,7 @@ private fun PromptComparePicker(
 private fun PromptComparisonDialog(
     first: GeneratedPromptSnapshot,
     secondCandidate: PromptCompareCandidate,
+    onCompareImages: (() -> Unit)? = null,
     dismiss: () -> Unit,
 ) {
     var showSecond by remember(first, secondCandidate.id) { mutableStateOf(false) }
@@ -1463,7 +1799,19 @@ private fun PromptComparisonDialog(
     Dialog(onDismissRequest = dismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Scaffold(
-                topBar = { TopAppBar(title = { Text(stringResource(R.string.prompt_comparison_title)) }, actions = { IconButton(onClick = dismiss) { Icon(Icons.Default.Close, stringResource(R.string.close)) } }) },
+                topBar = {
+                    TopAppBar(
+                        title = { Text(stringResource(R.string.prompt_comparison_title)) },
+                        actions = {
+                            onCompareImages?.let { switch ->
+                                IconButton(onClick = switch) {
+                                    Icon(Icons.Default.Image, stringResource(R.string.switch_to_image_comparison))
+                                }
+                            }
+                            IconButton(onClick = dismiss) { Icon(Icons.Default.Close, stringResource(R.string.close)) }
+                        },
+                    )
+                },
             ) { padding ->
                 Column(Modifier.fillMaxSize().padding(padding).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2218,6 +2566,8 @@ private fun PromptBlockCard(
     var quickTagDetails by remember(block.id) { mutableStateOf<TagDictionaryItem?>(null) }
     var quickPasteOffset by remember(block.id) { mutableStateOf<Int?>(null) }
     var quickPasteText by remember(block.id) { mutableStateOf<String?>(null) }
+    var quickSelectionTopInWindow by remember(block.id) { mutableStateOf<Float?>(null) }
+    var quickSelectionBottomInWindow by remember(block.id) { mutableStateOf<Float?>(null) }
     var showWeightInput by remember { mutableStateOf(false) }
     var weightInput by remember { mutableStateOf("") }
     var moveTargets by remember { mutableStateOf<List<QuickEditDropTarget>>(emptyList()) }
@@ -2232,6 +2582,30 @@ private fun PromptBlockCard(
     val context = LocalContext.current
     val quickEditScope = rememberCoroutineScope()
     val autocomplete by viewModel.autocomplete.collectAsStateWithLifecycle()
+    val autocompleteScrollStates = rememberAutocompleteRowScrollStates()
+    var autocompleteSourceName by rememberSaveable(block.id) {
+        mutableStateOf(AutocompleteDisplaySource.LOCAL.name)
+    }
+    val selectedAutocompleteSource = runCatching {
+        AutocompleteDisplaySource.valueOf(autocompleteSourceName)
+    }.getOrDefault(AutocompleteDisplaySource.LOCAL)
+    fun selectAutocompleteSource(source: AutocompleteDisplaySource) {
+        autocompleteSourceName = source.name
+    }
+    var rememberedAutocompleteRequest by rememberSaveable(block.id) { mutableStateOf(0L) }
+    LaunchedEffect(autocomplete.blockId, autocomplete.requestStartedAtNanos) {
+        if (autocomplete.blockId == block.id && autocomplete.requestStartedAtNanos > 0L) {
+            if (rememberedAutocompleteRequest > 0L &&
+                rememberedAutocompleteRequest != autocomplete.requestStartedAtNanos
+            ) {
+                autocompleteScrollStates.wildcards.scrollToItem(0)
+                autocompleteScrollStates.local.scrollToItem(0)
+                autocompleteScrollStates.novelAi.scrollToItem(0)
+                autocompleteScrollStates.danbooru.scrollToItem(0)
+            }
+            rememberedAutocompleteRequest = autocomplete.requestStartedAtNanos
+        }
+    }
     val undoableBlocks by viewModel.undoablePromptBlocks.collectAsStateWithLifecycle()
     val redoableBlocks by viewModel.redoablePromptBlocks.collectAsStateWithLifecycle()
     val undoKey = remember(owner, polarity, block.id) { PromptUndoKey(owner, polarity, block.id) }
@@ -2239,12 +2613,20 @@ private fun PromptBlockCard(
     val quickEditToolbarHost = LocalQuickEditToolbarHost.current
     val quickEditToolbarPlacement = LocalQuickEditToolbarPlacement.current
     val stickyPromptControlsEnabled = LocalStickyPromptControlsEnabled.current
+    val promptListScrolling = LocalPromptListScrolling.current
+    val promptCursorCenterHost = LocalPromptCursorCenterHost.current
+    val tagInsertReturnTarget = LocalTagInsertReturnTarget.current
     val pagerScrolling = LocalGeneratePagerScrolling.current
     val setPagerSwipeLocked = LocalGeneratePagerSwipeLock.current
     val density = LocalDensity.current
     var inlineToolbarTopInWindow by remember(block.id) { mutableFloatStateOf(Float.NaN) }
+    var inlineToolbarBottomInWindow by remember(block.id) { mutableFloatStateOf(Float.NaN) }
+    var inlineToolbarLeftInWindow by remember(block.id) { mutableFloatStateOf(Float.NaN) }
+    var inlineToolbarWidthPx by remember(block.id) { mutableIntStateOf(0) }
     var editorTopInWindow by remember(block.id) { mutableFloatStateOf(Float.NaN) }
     var editorBottomInWindow by remember(block.id) { mutableFloatStateOf(Float.NaN) }
+    var editorTextLayout by remember(block.id) { mutableStateOf<TextLayoutResult?>(null) }
+    var cursorCenterRequestRevision by remember(block.id) { mutableIntStateOf(0) }
     var editorValue by remember(block.id) {
         mutableStateOf(TextFieldValue(block.content, TextRange(block.content.length)))
     }
@@ -2382,6 +2764,36 @@ private fun PromptBlockCard(
     }
     val canUndo = !block.locked && undoKey in undoableBlocks
     val canRedo = !block.locked && undoKey in redoableBlocks
+    val editorCursorRect = editorTextLayout?.let { layout ->
+        layout.getCursorRect(editorValue.selection.end.coerceIn(0, layout.layoutInput.text.length))
+    }
+    val editorTextTopPadding = with(density) { 16.dp.roundToPx() }
+    val cursorTopInAnchor = editorCursorRect?.top?.toInt()?.plus(editorTextTopPadding)
+    val cursorBottomInAnchor = editorCursorRect?.bottom?.toInt()?.plus(editorTextTopPadding)
+    val cursorTopInWindow = cursorTopInAnchor?.takeIf { editorTopInWindow.isFinite() }
+        ?.let { editorTopInWindow + it }
+    val cursorBottomInWindow = cursorBottomInAnchor?.takeIf { editorTopInWindow.isFinite() }
+        ?.let { editorTopInWindow + it }
+    val latestCursorCenterInWindow by rememberUpdatedState(
+        if (cursorTopInWindow != null && cursorBottomInWindow != null) {
+            (cursorTopInWindow + cursorBottomInWindow) / 2f
+        } else null,
+    )
+    val latestPromptCursorCenterHost by rememberUpdatedState(promptCursorCenterHost)
+    LaunchedEffect(tagInsertReturnTarget?.revision) {
+        val target = tagInsertReturnTarget ?: return@LaunchedEffect
+        if (target.owner == owner && target.polarity == polarity && target.blockId == block.id) {
+            val cursor = target.cursor.coerceIn(0, editorValue.text.length)
+            editorValue = editorValue.copy(selection = TextRange(cursor))
+            lastEditorSelection = editorValue.selection
+            cursorCenterRequestRevision++
+        }
+    }
+    LaunchedEffect(cursorCenterRequestRevision) {
+        if (cursorCenterRequestRevision <= 0) return@LaunchedEffect
+        delay(320)
+        latestCursorCenterInWindow?.let { latestPromptCursorCenterHost?.requestCenter(it) }
+    }
     val stickyToolbarLabel = "$ownerLabel · ${block.name}"
     val editorVisibleInViewport = toolbarHost?.let { host ->
         shouldShowStickyAutocomplete(
@@ -2391,37 +2803,52 @@ private fun PromptBlockCard(
             viewportBottomInWindow = host.viewportBottomInWindow,
         )
     } == true
-    val stickyAutocomplete = if (!quickEdit && autocomplete.blockId == block.id && editorVisibleInViewport) {
-        StickyAutocompleteState(
-            local = autocomplete.local,
-            novelAi = autocomplete.novelAi,
-            danbooru = autocomplete.danbooru,
-            wildcards = autocomplete.wildcards,
-            loading = autocomplete.loading,
-            novelAiFailed = autocomplete.novelAiFailed,
-            danbooruFailed = autocomplete.danbooruFailed,
-            requestStartedAtNanos = autocomplete.requestStartedAtNanos,
-            onSelect = ::selectAutocompleteSuggestion,
+    val hasAutocompleteContent = autocomplete.loading ||
+        autocomplete.local.isNotEmpty() || autocomplete.novelAi.isNotEmpty() ||
+        autocomplete.danbooru.isNotEmpty() || autocomplete.wildcards.isNotEmpty() ||
+        autocomplete.novelAiFailed || autocomplete.danbooruFailed
+    val estimatedAutocompleteHeightPx = with(density) {
+        44.dp.toPx()
+    }
+    val inlineAutocompleteFits = toolbarHost?.let { host ->
+        shouldShowInlineAutocomplete(
+            inlineTopInWindow = inlineToolbarBottomInWindow,
+            estimatedHeightPx = estimatedAutocompleteHeightPx,
+            viewportTopInWindow = host.viewportTopInWindow,
+            viewportBottomInWindow = host.viewportBottomInWindow,
+            marginPx = with(density) { 4.dp.toPx() },
         )
-    } else null
-    val stickyToolbarState = remember(block.id, stickyToolbarLabel, quickEdit, canUndo, canRedo, showFormatter, autocomplete, editorVisibleInViewport) {
-        StickyPromptToolbarState(
-            blockId = block.id,
-            label = stickyToolbarLabel,
-            quickEdit = quickEdit,
-            canUndo = canUndo,
-            canRedo = canRedo,
-            showFormatter = showFormatter,
-            autocomplete = stickyAutocomplete,
-            onUndo = ::performUndo,
-            onRedo = ::performRedo,
-            onToggleQuickEdit = ::toggleQuickEdit,
-            onFormatMultiline = ::formatMultiline,
-            onFormatSingleLine = ::formatSingleLine,
-        )
+    } == true
+    val showInlineAutocomplete = editorFocused && !quickEdit && !pagerScrolling && !promptListScrolling &&
+        editorVisibleInViewport && autocomplete.blockId == block.id && hasAutocompleteContent && inlineAutocompleteFits &&
+        inlineToolbarLeftInWindow.isFinite() && inlineToolbarWidthPx > 0
+    val stickyAutocomplete = remember(
+        autocomplete,
+        block.id,
+        quickEdit,
+        editorVisibleInViewport,
+        autocompleteScrollStates,
+        selectedAutocompleteSource,
+    ) {
+        if (!quickEdit && autocomplete.blockId == block.id && editorVisibleInViewport) {
+            StickyAutocompleteState(
+                local = autocomplete.local,
+                novelAi = autocomplete.novelAi,
+                danbooru = autocomplete.danbooru,
+                wildcards = autocomplete.wildcards,
+                loading = autocomplete.loading,
+                novelAiFailed = autocomplete.novelAiFailed,
+                danbooruFailed = autocomplete.danbooruFailed,
+                requestStartedAtNanos = autocomplete.requestStartedAtNanos,
+                rowScrollStates = autocompleteScrollStates,
+                selectedSource = selectedAutocompleteSource,
+                onSourceChange = ::selectAutocompleteSource,
+                onSelect = ::selectAutocompleteSuggestion,
+            )
+        } else null
     }
     val stickyThresholdPx = with(density) { 4.dp.toPx() }
-    val showStickyToolbar = stickyPromptControlsEnabled && !pagerScrolling && editorVisibleInViewport && toolbarHost?.let { host ->
+    val showStickyToolbar = stickyPromptControlsEnabled && !pagerScrolling && !promptListScrolling && editorVisibleInViewport && toolbarHost?.let { host ->
         shouldShowStickyPromptToolbar(
             active = editorFocused || quickEdit,
             inlineToolbarTopInWindow = inlineToolbarTopInWindow,
@@ -2429,8 +2856,42 @@ private fun PromptBlockCard(
             thresholdPx = stickyThresholdPx,
         )
     } == true
-    LaunchedEffect(toolbarHost, showStickyToolbar, stickyToolbarState) {
-        toolbarHost?.update(block.id, stickyToolbarState.takeIf { showStickyToolbar })
+    val showFloatingAutocomplete = editorFocused && !quickEdit && !pagerScrolling && !promptListScrolling &&
+        editorVisibleInViewport && autocomplete.blockId == block.id && hasAutocompleteContent && !showInlineAutocomplete
+    val showPromptOverlay = showStickyToolbar || showFloatingAutocomplete
+    val stickyToolbarState = remember(
+        block.id,
+        stickyToolbarLabel,
+        showStickyToolbar,
+        quickEdit,
+        canUndo,
+        canRedo,
+        showFormatter,
+        stickyAutocomplete,
+        showFloatingAutocomplete,
+        cursorTopInWindow,
+        cursorBottomInWindow,
+    ) {
+        StickyPromptToolbarState(
+            blockId = block.id,
+            label = stickyToolbarLabel,
+            showToolbar = showStickyToolbar,
+            quickEdit = quickEdit,
+            canUndo = canUndo,
+            canRedo = canRedo,
+            showFormatter = showFormatter,
+            autocomplete = stickyAutocomplete.takeIf { showFloatingAutocomplete },
+            cursorTopInWindow = cursorTopInWindow,
+            cursorBottomInWindow = cursorBottomInWindow,
+            onUndo = ::performUndo,
+            onRedo = ::performRedo,
+            onToggleQuickEdit = ::toggleQuickEdit,
+            onFormatMultiline = ::formatMultiline,
+            onFormatSingleLine = ::formatSingleLine,
+        )
+    }
+    LaunchedEffect(toolbarHost, showPromptOverlay, stickyToolbarState) {
+        toolbarHost?.update(block.id, stickyToolbarState.takeIf { showPromptOverlay })
     }
     DisposableEffect(toolbarHost, block.id) {
         onDispose { toolbarHost?.update(block.id, null) }
@@ -2703,6 +3164,8 @@ private fun PromptBlockCard(
                 val quickActionState = activeSelection?.let {
                     QuickEditActionState(
                         blockId = block.id,
+                        selectionTopInWindow = quickSelectionTopInWindow,
+                        selectionBottomInWindow = quickSelectionBottomInWindow,
                         canAdjustWeight = canQuickWeight,
                         canSetWeight = canSetQuickWeight,
                         canMutate = !block.locked,
@@ -2711,6 +3174,7 @@ private fun PromptBlockCard(
                         canShowTagInfo = selectedCanonicalTag != null,
                         onDecrease = { applyQuick(PromptQuickEdit.adjustWeight(editorValue.text, quickSelections, quickStep.negate()), weightAdjustment = true) },
                         onIncrease = { applyQuick(PromptQuickEdit.adjustWeight(editorValue.text, quickSelections, quickStep), weightAdjustment = true) },
+                        onToggleWeightSign = { applyQuick(PromptQuickEdit.toggleWeightSign(editorValue.text, quickSelections)) },
                         onFinishWeightAdjustment = ::finishWeightAdjustment,
                         onWeightPressChanged = setPagerSwipeLocked,
                         onToggleMultiSelect = {
@@ -2795,6 +3259,10 @@ private fun PromptBlockCard(
                         onDrop = { target -> applyQuick(PromptQuickEdit.moveMany(editorValue.text, quickSelections, target)) },
                         dragPreview = PromptQuickEdit.selectedText(editorValue.text, quickSelections),
                         showSelectionToolbar = quickEditToolbarPlacement == QuickEditToolbarPlacement.BELOW_SELECTION,
+                        onSelectionBoundsInWindow = { top, bottom ->
+                            quickSelectionTopInWindow = top
+                            quickSelectionBottomInWindow = bottom
+                        },
                         pasteToolbar = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 TextButton(
@@ -2825,41 +3293,58 @@ private fun PromptBlockCard(
                             quickActionState?.let { QuickEditActionToolbar(it) }
                         },
                     )
-                } else OutlinedTextField(
-                    value = editorValue,
-                    onValueChange = { value ->
-                        val previous = editorValue
-                        editorValue = value
-                        lastEditorSelection = value.selection
-                        if (editorFocused) onEditorState(true, value.selection.end)
-                        viewModel.updateBlockContent(
-                            owner,
-                            polarity,
-                            block.id,
-                            value.text,
-                            previous.selection.start,
-                            previous.selection.end,
-                            PromptEditKind.TYPING,
-                        )
-                        viewModel.requestAutocomplete(block.id, autocompleteFragmentForEditor(value))
-                    },
-                    enabled = !block.locked,
-                    label = { Text(stringResource(R.string.prompt_content)) },
-                    minLines = 3,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .onGloballyPositioned { coordinates ->
-                            editorTopInWindow = coordinates.positionInWindow().y
-                            editorBottomInWindow = editorTopInWindow + coordinates.size.height
-                        }
-                        .onFocusChanged {
-                            editorFocused = it.isFocused
-                            onEditorState(it.isFocused, editorValue.selection.end)
+                } else Box {
+                    OutlinedTextField(
+                        value = editorValue,
+                        onValueChange = { value ->
+                            val previous = editorValue
+                            editorValue = value
+                            lastEditorSelection = value.selection
+                            if (previous.text == value.text && previous.selection != value.selection) {
+                                cursorCenterRequestRevision++
+                            }
+                            if (editorFocused) onEditorState(true, value.selection.end)
+                            viewModel.updateBlockContent(
+                                owner,
+                                polarity,
+                                block.id,
+                                value.text,
+                                previous.selection.start,
+                                previous.selection.end,
+                                PromptEditKind.TYPING,
+                            )
+                            viewModel.requestAutocomplete(block.id, autocompleteFragmentForEditor(value))
                         },
-                    visualTransformation = remember(highColor, lowColor, neutralWeightColor, commentColor, randomizerColor) {
-                        PromptVisualTransformation(highColor, lowColor, neutralWeightColor, commentColor, randomizerColor)
-                    },
-                )
+                        enabled = !block.locked,
+                        label = { Text(stringResource(R.string.prompt_content)) },
+                        minLines = 3,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .onGloballyPositioned { coordinates ->
+                                editorTopInWindow = coordinates.positionInWindow().y
+                                editorBottomInWindow = editorTopInWindow + coordinates.size.height
+                            }
+                            .onFocusChanged {
+                                val gainedFocus = it.isFocused && !editorFocused
+                                editorFocused = it.isFocused
+                                onEditorState(it.isFocused, editorValue.selection.end)
+                                if (gainedFocus) cursorCenterRequestRevision++
+                            },
+                        visualTransformation = remember(highColor, lowColor, neutralWeightColor, commentColor, randomizerColor) {
+                            PromptVisualTransformation(highColor, lowColor, neutralWeightColor, commentColor, randomizerColor)
+                        },
+                    )
+                    Text(
+                        text = editorValue.text,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = Color.Transparent,
+                        onTextLayout = { editorTextLayout = it },
+                        modifier = Modifier
+                            .matchParentSize()
+                            .padding(horizontal = 16.dp, vertical = 16.dp)
+                            .clearAndSetSemantics { },
+                    )
+                }
                 if (validation.hasUnclosedWeight) {
                     Text(
                         stringResource(R.string.weight_warning, validation.delimiterCount),
@@ -2876,7 +3361,11 @@ private fun PromptBlockCard(
                 }
                 Row(
                     Modifier.fillMaxWidth().onGloballyPositioned { coordinates ->
-                        inlineToolbarTopInWindow = coordinates.positionInWindow().y
+                        val position = coordinates.positionInWindow()
+                        inlineToolbarTopInWindow = position.y
+                        inlineToolbarBottomInWindow = inlineToolbarTopInWindow + coordinates.size.height
+                        inlineToolbarLeftInWindow = position.x
+                        inlineToolbarWidthPx = coordinates.size.width
                     },
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(2.dp),
@@ -2916,18 +3405,50 @@ private fun PromptBlockCard(
                         ) { Text(stringResource(R.string.format_single_line), style = MaterialTheme.typography.labelSmall, maxLines = 1) }
                     }
                 }
-                if (!quickEdit && autocomplete.blockId == block.id) {
-                    AutocompleteSuggestions(
-                        local = autocomplete.local,
-                        novelAi = autocomplete.novelAi,
-                        danbooru = autocomplete.danbooru,
-                        wildcards = autocomplete.wildcards,
-                        loading = autocomplete.loading,
-                        novelAiFailed = autocomplete.novelAiFailed,
-                        danbooruFailed = autocomplete.danbooruFailed,
-                        requestStartedAtNanos = autocomplete.requestStartedAtNanos,
-                        onSelect = ::selectAutocompleteSuggestion,
-                    )
+                if (showInlineAutocomplete) {
+                    val popupMargin = with(density) { 4.dp.roundToPx() }
+                    Popup(
+                        popupPositionProvider = remember(
+                            inlineToolbarLeftInWindow,
+                            inlineToolbarBottomInWindow,
+                            popupMargin,
+                        ) {
+                            FixedWindowPopupPositionProvider(
+                                leftInWindow = inlineToolbarLeftInWindow.toInt(),
+                                topInWindow = inlineToolbarBottomInWindow.toInt(),
+                                margin = popupMargin,
+                            )
+                        },
+                        properties = PopupProperties(focusable = false, clippingEnabled = true),
+                    ) {
+                        Surface(
+                            modifier = Modifier.width(with(density) { inlineToolbarWidthPx.toDp() }).heightIn(max = 260.dp),
+                            shape = MaterialTheme.shapes.large,
+                            color = MaterialTheme.colorScheme.surfaceContainer,
+                            tonalElevation = 2.dp,
+                            shadowElevation = 3.dp,
+                        ) {
+                            Column(
+                                Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
+                                    .padding(horizontal = 8.dp, vertical = 5.dp),
+                            ) {
+                                AutocompleteSuggestions(
+                                    local = autocomplete.local,
+                                    novelAi = autocomplete.novelAi,
+                                    danbooru = autocomplete.danbooru,
+                                    wildcards = autocomplete.wildcards,
+                                    loading = autocomplete.loading,
+                                    novelAiFailed = autocomplete.novelAiFailed,
+                                    danbooruFailed = autocomplete.danbooruFailed,
+                                    requestStartedAtNanos = autocomplete.requestStartedAtNanos,
+                                    rowScrollStates = autocompleteScrollStates,
+                                    selectedSource = selectedAutocompleteSource,
+                                    onSourceChange = ::selectAutocompleteSource,
+                                    onSelect = ::selectAutocompleteSuggestion,
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2987,12 +3508,14 @@ private fun QuickEditPromptSurface(
     onDrop: (QuickEditDropTarget) -> Unit,
     dragPreview: String,
     showSelectionToolbar: Boolean,
+    onSelectionBoundsInWindow: (Float?, Float?) -> Unit,
     pasteToolbar: @Composable () -> Unit,
     toolbar: @Composable () -> Unit,
 ) {
     // Keep the previous layout until Text publishes the replacement one. Resetting this
     // on every text mutation makes the anchored popup disappear for one composition.
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    var textContentTopInWindow by remember { mutableFloatStateOf(Float.NaN) }
     var dragPosition by remember { mutableStateOf<Offset?>(null) }
     var validDrag by remember { mutableStateOf(false) }
     var dragTargetIndex by remember(moveTargets) { mutableStateOf(if (moveTargets.isEmpty()) 0 else activeMoveTarget.coerceIn(moveTargets.indices)) }
@@ -3015,6 +3538,25 @@ private fun QuickEditPromptSurface(
             }
         }
     }
+    LaunchedEffect(layout, selections, textContentTopInWindow) {
+        val result = layout
+        val layoutLength = result?.layoutInput?.text?.length ?: 0
+        val validSelections = selections.filter {
+            it.range.start in 0 until layoutLength &&
+                it.range.endExclusive in 1..layoutLength &&
+                it.range.start < it.range.endExclusive
+        }
+        if (result == null || !textContentTopInWindow.isFinite() || validSelections.isEmpty()) {
+            onSelectionBoundsInWindow(null, null)
+        } else {
+            val top = validSelections.minOf { result.getBoundingBox(it.range.start).top }
+            val bottom = validSelections.maxOf { result.getBoundingBox(it.range.endExclusive - 1).bottom }
+            onSelectionBoundsInWindow(textContentTopInWindow + top, textContentTopInWindow + bottom)
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose { onSelectionBoundsInWindow(null, null) }
+    }
     Surface(
         shape = MaterialTheme.shapes.extraSmall,
         border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
@@ -3029,6 +3571,9 @@ private fun QuickEditPromptSurface(
                 onTextLayout = { layout = it },
                 modifier = Modifier
                     .fillMaxWidth()
+                    .onGloballyPositioned { coordinates ->
+                        textContentTopInWindow = coordinates.positionInWindow().y + with(density) { 14.dp.toPx() }
+                    }
                     .padding(horizontal = 16.dp, vertical = 14.dp)
                     .drawBehind {
                         val result = layout
@@ -3167,6 +3712,9 @@ private fun AutocompleteSuggestions(
     novelAiFailed: Boolean,
     danbooruFailed: Boolean,
     requestStartedAtNanos: Long,
+    rowScrollStates: AutocompleteRowScrollStates,
+    selectedSource: AutocompleteDisplaySource,
+    onSourceChange: (AutocompleteDisplaySource) -> Unit,
     onSelect: (TagSuggestion) -> Unit,
 ) {
     LaunchedEffect(requestStartedAtNanos, local) {
@@ -3177,19 +3725,71 @@ private fun AutocompleteSuggestions(
             )
         }
     }
-    Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
-        if (wildcards.isNotEmpty()) SuggestionRow(R.string.autocomplete_wildcard_row, wildcards, onSelect)
-        if (local.isNotEmpty()) SuggestionRow(R.string.autocomplete_local_row, local, onSelect)
-        if (loading) LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp))
-        if (novelAi.isNotEmpty()) SuggestionRow(R.string.autocomplete_nai_row, novelAi, onSelect)
-        if (danbooru.isNotEmpty()) SuggestionRow(R.string.autocomplete_danbooru_row, danbooru, onSelect)
-        if (novelAiFailed) Text(stringResource(R.string.autocomplete_nai_failed), color = MaterialTheme.colorScheme.error, fontSize = 11.sp, lineHeight = 13.sp)
-        if (danbooruFailed) Text(stringResource(R.string.autocomplete_danbooru_failed), color = MaterialTheme.colorScheme.error, fontSize = 11.sp, lineHeight = 13.sp)
+    val localSuggestions = remember(wildcards, local) {
+        (wildcards + local).distinctBy { it.tag }
     }
+    val suggestions = when (selectedSource) {
+        AutocompleteDisplaySource.LOCAL -> localSuggestions
+        AutocompleteDisplaySource.NOVEL_AI -> novelAi
+        AutocompleteDisplaySource.DANBOORU -> danbooru
+    }
+    val rowState = when (selectedSource) {
+        AutocompleteDisplaySource.LOCAL -> rowScrollStates.local
+        AutocompleteDisplaySource.NOVEL_AI -> rowScrollStates.novelAi
+        AutocompleteDisplaySource.DANBOORU -> rowScrollStates.danbooru
+    }
+    val failed = when (selectedSource) {
+        AutocompleteDisplaySource.LOCAL -> false
+        AutocompleteDisplaySource.NOVEL_AI -> novelAiFailed
+        AutocompleteDisplaySource.DANBOORU -> danbooruFailed
+    }
+    SuggestionRow(
+        source = selectedSource,
+        suggestions = suggestions,
+        rowState = rowState,
+        loading = loading && selectedSource != AutocompleteDisplaySource.LOCAL,
+        failed = failed,
+        onSourceChange = onSourceChange,
+        onSelect = onSelect,
+    )
 }
 
 @Composable
-private fun SuggestionRow(@StringRes label: Int, suggestions: List<TagSuggestion>, onSelect: (TagSuggestion) -> Unit) {
+private fun SuggestionRow(
+    source: AutocompleteDisplaySource,
+    suggestions: List<TagSuggestion>,
+    rowState: LazyListState,
+    loading: Boolean,
+    failed: Boolean,
+    onSourceChange: (AutocompleteDisplaySource) -> Unit,
+    onSelect: (TagSuggestion) -> Unit,
+) {
+    val setPagerSwipeLocked = LocalGeneratePagerSwipeLock.current
+    val density = LocalDensity.current
+    val swipeThresholdPx = with(density) { 18.dp.toPx() }
+    val sourceDialHeightPx = with(density) { 32.dp.toPx() }
+    val sourceDialScope = rememberCoroutineScope()
+    var sourceDrag by remember { mutableFloatStateOf(0f) }
+    var sourceSettling by remember { mutableStateOf(false) }
+    fun settleSourceDial(direction: Int) {
+        if (sourceSettling) return
+        sourceSettling = true
+        val step = direction.coerceIn(-1, 1)
+        val target = -step * sourceDialHeightPx
+        sourceDialScope.launch {
+            animate(
+                initialValue = sourceDrag,
+                targetValue = target,
+                animationSpec = tween(130),
+            ) { value, _ -> sourceDrag = value }
+            if (step != 0) onSourceChange(source.shifted(step))
+            sourceDrag = 0f
+            sourceSettling = false
+        }
+    }
+    DisposableEffect(setPagerSwipeLocked) {
+        onDispose { setPagerSwipeLocked(false) }
+    }
     // Consume only the horizontal remainder that the suggestion row could not scroll.
     // Without this, an edge swipe is handed to the parent generation pager.
     val pagerEdgeGuard = remember {
@@ -3201,25 +3801,88 @@ private fun SuggestionRow(@StringRes label: Int, suggestions: List<TagSuggestion
                 Velocity(available.x, 0f)
         }
     }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            text = stringResource(label),
-            fontSize = 8.sp,
-            maxLines = 1,
-            softWrap = false,
-            modifier = Modifier.width(34.dp),
-        )
-        CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 32.dp) {
-            LazyRow(
-                modifier = Modifier.nestedScroll(pagerEdgeGuard),
-                horizontalArrangement = Arrangement.spacedBy(3.dp),
-            ) {
-                items(suggestions, key = { "${it.source}:${it.tag}" }) { suggestion ->
-                    SuggestionChip(
-                        onClick = { onSelect(suggestion) },
-                        label = { Text(suggestion.tag.replace('_', ' '), fontSize = 12.sp, maxLines = 1) },
+    Row(Modifier.heightIn(min = 34.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier
+                .width(48.dp)
+                .height(32.dp)
+                .clipToBounds()
+                .clickable(enabled = !sourceSettling) { settleSourceDial(1) }
+                .pointerInput(source, swipeThresholdPx, sourceSettling) {
+                    detectVerticalDragGestures(
+                        onDragStart = {
+                            if (!sourceSettling) sourceDrag = 0f
+                        },
+                        onVerticalDrag = { change, amount ->
+                            if (!sourceSettling) {
+                                change.consume()
+                                sourceDrag = (sourceDrag + amount).coerceIn(-sourceDialHeightPx, sourceDialHeightPx)
+                            }
+                        },
+                        onDragEnd = {
+                            if (!sourceSettling) when {
+                                sourceDrag <= -swipeThresholdPx -> settleSourceDial(1)
+                                sourceDrag >= swipeThresholdPx -> settleSourceDial(-1)
+                                else -> settleSourceDial(0)
+                            }
+                        },
+                        onDragCancel = {
+                            if (!sourceSettling) settleSourceDial(0)
+                        },
                     )
+                },
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            listOf(-1, 0, 1).forEach { relativeStep ->
+                val labelSource = source.shifted(relativeStep)
+                val translation = sourceDrag + relativeStep * sourceDialHeightPx
+                Text(
+                    text = stringResource(labelSource.label),
+                    fontSize = 9.sp,
+                    maxLines = 1,
+                    softWrap = false,
+                    modifier = Modifier.graphicsLayer {
+                        translationY = translation
+                        alpha = (1f - .45f * kotlin.math.abs(translation / sourceDialHeightPx)).coerceIn(.45f, 1f)
+                    },
+                )
+            }
+        }
+        VerticalDivider(Modifier.height(22.dp), color = MaterialTheme.colorScheme.outlineVariant)
+        Spacer(Modifier.width(6.dp))
+        CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 32.dp) {
+            when {
+                suggestions.isNotEmpty() -> LazyRow(
+                    state = rowState,
+                    modifier = Modifier
+                        .nestedScroll(pagerEdgeGuard)
+                        .pointerInput(setPagerSwipeLocked) {
+                            awaitEachGesture {
+                                awaitFirstDown(requireUnconsumed = false)
+                                setPagerSwipeLocked(true)
+                                try {
+                                    waitForUpOrCancellation()
+                                } finally {
+                                    setPagerSwipeLocked(false)
+                                }
+                            }
+                        },
+                    horizontalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    items(suggestions, key = { "${it.source}:${it.tag}" }) { suggestion ->
+                        SuggestionChip(
+                            onClick = { onSelect(suggestion) },
+                            label = { Text(suggestion.tag.replace('_', ' '), fontSize = 12.sp, maxLines = 1) },
+                        )
+                    }
                 }
+                loading -> LinearProgressIndicator(Modifier.weight(1f).height(2.dp))
+                else -> Text(
+                    stringResource(if (failed) R.string.autocomplete_source_unavailable else R.string.autocomplete_no_suggestions),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
             }
         }
     }
@@ -3256,8 +3919,23 @@ private fun GenerationSettingsCard(session: Session, viewModel: MainViewModel, o
         var characterImportMode by rememberSaveable(uri) { mutableStateOf(CharacterImportMode.REPLACE) }
         var includeSettings by rememberSaveable(uri) { mutableStateOf(true) }
         var includeSeed by rememberSaveable(uri) { mutableStateOf(true) }
+        var showMetadataPreview by rememberSaveable(uri) { mutableStateOf(false) }
         val importedBlockName = stringResource(R.string.imported_block_name)
-        AlertDialog(
+        if (showMetadataPreview && metadata != null) {
+            ExternalImageMetadataPreviewDialog(
+                metadata = metadata!!,
+                onImport = {
+                    viewModel.importImageMetadata(metadata!!, importedBlockName, includePrompt, includeNegative, includeCharacters, includeSettings, includeSeed, characterImportMode)
+                    pendingImageUri = null
+                    onMetadataImported()
+                },
+                onCherryPick = {
+                    cherryDraft = PromptCherryPick.fromMetadata(metadata!!, importedBlockName)
+                    pendingImageUri = null
+                },
+                dismiss = { showMetadataPreview = false },
+            )
+        } else AlertDialog(
             onDismissRequest = { pendingImageUri = null },
             title = { Text(stringResource(R.string.choose_image_use)) },
             text = {
@@ -3287,6 +3965,14 @@ private fun GenerationSettingsCard(session: Session, viewModel: MainViewModel, o
                             if (includeCharacters) CharacterImportModePicker(characterImportMode) { characterImportMode = it }
                             MetadataChoice(R.string.import_settings, includeSettings) { includeSettings = it }
                             MetadataChoice(R.string.import_seed, includeSeed) { includeSeed = it }
+                        }
+                        OutlinedButton(
+                            onClick = { showMetadataPreview = true },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Icon(Icons.Default.Description, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text(stringResource(R.string.preview_image_metadata))
                         }
                         Button(onClick = {
                             viewModel.importImageMetadata(metadata!!, importedBlockName, includePrompt, includeNegative, includeCharacters, includeSettings, includeSeed, characterImportMode)
@@ -3484,6 +4170,62 @@ private fun GenerationSettingsCard(session: Session, viewModel: MainViewModel, o
             }
         }
     }
+}
+
+@Composable
+private fun ExternalImageMetadataPreviewDialog(
+    metadata: NaiImageMetadata,
+    onImport: () -> Unit,
+    onCherryPick: () -> Unit,
+    dismiss: () -> Unit,
+) {
+    val unavailable = stringResource(R.string.metadata_value_unavailable)
+    val resolvedModel = NaiGenerationCatalog.resolveModelId(metadata.model)
+    val modelLabel = resolvedModel?.let { modelId ->
+        NaiGenerationCatalog.models.firstOrNull { it.apiId == modelId }?.displayName?.let { "$it ($modelId)" }
+    } ?: metadata.model ?: unavailable
+    val resolution = if (metadata.width != null && metadata.height != null) {
+        "${metadata.width} × ${metadata.height}"
+    } else unavailable
+    AlertDialog(
+        onDismissRequest = dismiss,
+        title = { Text(stringResource(R.string.import_metadata_preview_title)) },
+        text = {
+            SelectionContainer {
+                Column(
+                    Modifier.fillMaxWidth().heightIn(max = 620.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    val generationDetails = listOf(
+                        stringResource(R.string.model_id) to modelLabel,
+                        stringResource(R.string.sampler) to (metadata.sampler ?: unavailable),
+                        stringResource(R.string.resolution) to resolution,
+                        stringResource(R.string.steps) to (metadata.steps?.toString() ?: unavailable),
+                        stringResource(R.string.prompt_guidance) to (metadata.scale?.toString() ?: unavailable),
+                        stringResource(R.string.seed) to (metadata.seed?.toString() ?: unavailable),
+                    ).joinToString("\n") { (label, value) -> "$label: $value" }
+                    DebugPromptSection(stringResource(R.string.generation_details), generationDetails)
+                    DebugPromptSection(stringResource(R.string.restore_base_positive), metadata.prompt.orEmpty())
+                    DebugPromptSection(stringResource(R.string.restore_base_negative), metadata.negativePrompt.orEmpty())
+                    metadata.characterPrompts.forEachIndexed { index, value ->
+                        DebugPromptSection("${stringResource(R.string.character_prompt, index + 1)} · ${stringResource(R.string.positive)}", value)
+                    }
+                    metadata.characterNegativePrompts.forEachIndexed { index, value ->
+                        DebugPromptSection("${stringResource(R.string.character_prompt, index + 1)} · ${stringResource(R.string.negative)}", value)
+                    }
+                    Button(
+                        onClick = onImport,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text(stringResource(R.string.import_metadata)) }
+                    OutlinedButton(
+                        onClick = onCherryPick,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text(stringResource(R.string.cherry_pick_prompts)) }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = dismiss) { Text(stringResource(R.string.confirm)) } },
+    )
 }
 
 @Composable
@@ -3687,7 +4429,7 @@ private fun RepeatingIconButton(
                             currentPressChanged(false)
                         }
                     },
-                )
+                    )
             },
     ) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

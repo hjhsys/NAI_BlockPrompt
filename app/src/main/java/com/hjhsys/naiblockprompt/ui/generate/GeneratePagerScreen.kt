@@ -126,7 +126,12 @@ fun GeneratePagerScreen(
     LaunchedEffect(pagerState) {
         snapshotFlow { pagerState.settledPage }
             .distinctUntilChanged()
-            .collect { page -> if (GenerateNavigationPolicy.shouldDismissQuickEdit(page)) quickEditExitSignal++ }
+            .collect { page ->
+                if (GenerateNavigationPolicy.shouldDismissQuickEdit(page)) {
+                    quickEditExitSignal++
+                    viewModel.clearAutocomplete()
+                }
+            }
     }
     BackHandler {
         if (pagerState.currentPage != GenerateNavigationPolicy.GENERATE_PAGE) scope.launch { pagerState.animateScrollToPage(GenerateNavigationPolicy.GENERATE_PAGE) }

@@ -309,6 +309,43 @@ class PromptQuickEditTest {
         assertTrue(PromptQuickEdit.setWeight(text, selection(text, "-0.1"), BigDecimal.ZERO) is QuickEditResult.Unsupported)
     }
 
+    @Test fun `weight sign toggle preserves absolute value`() {
+        val positive = "1.2::ABC ::"
+        assertEquals(
+            "-1.2::ABC ::",
+            changed(PromptQuickEdit.toggleWeightSign(positive, listOf(selection(positive, "1.2")))),
+        )
+
+        val negative = "-1.2::ABC ::"
+        assertEquals(
+            "1.2::ABC ::",
+            changed(PromptQuickEdit.toggleWeightSign(negative, listOf(selection(negative, "-1.2")))),
+        )
+
+        val unweighted = "ABC, DEF"
+        assertEquals(
+            "-1::ABC ::, DEF",
+            changed(PromptQuickEdit.toggleWeightSign(unweighted, listOf(selection(unweighted, "ABC")))),
+        )
+    }
+
+    @Test fun `weight sign toggle applies to adjacent tags and equal weight groups`() {
+        val unweighted = "ABC, DEF, GHI"
+        assertEquals(
+            "-1::ABC, DEF ::, GHI",
+            changed(PromptQuickEdit.toggleWeightSign(unweighted, listOf(selection(unweighted, "ABC"), selection(unweighted, "DEF")))),
+        )
+
+        val weighted = "0.8::ABC ::, keep, 0.8::DEF ::"
+        val groups = PromptQuickEdit.parse(weighted)
+            .filter { it.type == QuickEditUnitType.WEIGHT_GROUP }
+            .map { PromptQuickEdit.selectionAt(weighted, it.range.start)!! }
+        assertEquals(
+            "-0.8::ABC ::, keep, -0.8::DEF ::",
+            changed(PromptQuickEdit.toggleWeightSign(weighted, groups)),
+        )
+    }
+
     @Test fun `each quick mutation can be one discrete undo step`() {
         val history = PromptUndoHistory()
         val key = PromptUndoKey(PromptOwner.Base, PromptPolarity.POSITIVE, "block")

@@ -214,6 +214,19 @@ object PromptQuickEdit {
         return replace(text, range, "$weight::${text.slice(range)} ::", range.start)
     }
 
+    /** Flips only the sign of the effective weight, preserving its absolute value. */
+    fun toggleWeightSign(text: String, selections: List<QuickEditSelection>): QuickEditResult {
+        val selected = selections.distinctBy { it.range }.sortedBy { it.range.start }
+        if (!canAdjustWeight(text, selected)) return QuickEditResult.Unsupported
+        val current = if (selected.all { it.type == QuickEditUnitType.TAG }) {
+            BigDecimal.ONE
+        } else {
+            selected.firstOrNull()?.weightValue ?: return QuickEditResult.Unsupported
+        }
+        val delta = current.negate().subtract(current)
+        return adjustWeight(text, selected, delta)
+    }
+
     /** Adds one visual line break around a selected semantic bundle without reformatting unrelated text. */
     fun insertLineBreak(text: String, selections: List<QuickEditSelection>, before: Boolean): QuickEditResult {
         val selected = selections.distinctBy { it.range }.sortedBy { it.range.start }

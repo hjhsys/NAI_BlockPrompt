@@ -124,6 +124,7 @@ fun TagDatabaseScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit) {
     var aiToolsExpanded by rememberSaveable { mutableStateOf(false) }
     val aiSelected = remember { mutableStateMapOf<String, TagDictionaryItem>() }
     var showAiExportScope by rememberSaveable { mutableStateOf(false) }
+    var showBulkExcludeConfirm by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         viewModel.translationExport.collect { content ->
@@ -170,6 +171,20 @@ fun TagDatabaseScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit) {
             showAiExportScope = false
             viewModel.prepareTagsForAiExport(scope, aiSelected.values.toList())
         },
+    )
+    if (showBulkExcludeConfirm) AlertDialog(
+        onDismissRequest = { showBulkExcludeConfirm = false },
+        title = { Text(stringResource(R.string.exclude_selected_tags_title)) },
+        text = { Text(stringResource(R.string.exclude_selected_tags_message, aiSelected.size)) },
+        confirmButton = {
+            TextButton(onClick = {
+                viewModel.excludeTags(aiSelected.values.toList())
+                aiSelected.clear()
+                aiSelectionMode = false
+                showBulkExcludeConfirm = false
+            }) { Text(stringResource(R.string.exclude_selected_tags), color = MaterialTheme.colorScheme.error) }
+        },
+        dismissButton = { TextButton(onClick = { showBulkExcludeConfirm = false }) { Text(stringResource(R.string.cancel)) } },
     )
     if (showExportOptions) TranslationExportOptionsDialog(
         onDismiss = { showExportOptions = false },
@@ -276,6 +291,16 @@ fun TagDatabaseScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit) {
                                 Spacer(Modifier.width(4.dp))
                                 Text(stringResource(R.string.copy_for_ai), maxLines = 1)
                             }
+                        }
+                        OutlinedButton(
+                            enabled = aiSelected.isNotEmpty(),
+                            onClick = { showBulkExcludeConfirm = true },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                        ) {
+                            Icon(Icons.Default.Block, null, Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(stringResource(R.string.exclude_selected_tags_with_count, aiSelected.size))
                         }
                     }
                 }
@@ -1066,6 +1091,8 @@ private fun TranslationImportDialog(
     var deferReviewed by remember(preview) { mutableStateOf(true) }
     var selectedDeleteIds by remember(preview) { mutableStateOf(emptySet<String>()) }
     var confirmDeletion by remember(preview) { mutableStateOf(false) }
+    var excludedExpanded by remember(preview) { mutableStateOf(preview.excludedCandidates.size <= 8) }
+    var reviewExpanded by remember(preview) { mutableStateOf(preview.reviewCount <= 8) }
     if (confirmDeletion) {
         AlertDialog(
             onDismissRequest = { confirmDeletion = false },
@@ -1090,12 +1117,19 @@ private fun TranslationImportDialog(
                 if (preview.newCategories.isNotEmpty()) {
                     Text(stringResource(R.string.translation_import_new_categories, preview.newCategories.joinToString(", ")))
                 }
-                preview.excludedCandidates.forEach { candidate ->
-                    Text(
-                        "${candidate.row.tag} · ${candidate.row.exclusionReasonCode}: ${candidate.row.exclusionReasonText}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
+                if (preview.excludedCandidates.isNotEmpty()) {
+                    ImportPreviewExpandableHeader(
+                        title = stringResource(R.string.translation_import_excluded_details, preview.excludedCandidates.size),
+                        expanded = excludedExpanded,
+                        onToggle = { excludedExpanded = !excludedExpanded },
                     )
+                    if (excludedExpanded) preview.excludedCandidates.forEach { candidate ->
+                        Text(
+                            "${candidate.row.tag} · ${candidate.row.exclusionReasonCode}: ${candidate.row.exclusionReasonText}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(overwrite, { overwrite = it })
@@ -1107,19 +1141,25 @@ private fun TranslationImportDialog(
                         Text(stringResource(R.string.translation_defer_reviewed))
                     }
                     HorizontalDivider()
-                    Text(stringResource(R.string.translation_delete_candidates), style = MaterialTheme.typography.titleSmall)
-                    Text(stringResource(R.string.translation_delete_hint), style = MaterialTheme.typography.bodySmall)
-                    preview.validRows.filter { it.row.needsReview }.forEach { candidate ->
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(
-                                checked = candidate.tagId in selectedDeleteIds,
-                                enabled = candidate.canDelete,
-                                onCheckedChange = { checked -> selectedDeleteIds = if (checked) selectedDeleteIds + candidate.tagId else selectedDeleteIds - candidate.tagId },
-                            )
-                            Column(Modifier.weight(1f)) {
-                                Text(candidate.row.tag, style = MaterialTheme.typography.bodyMedium)
-                                Text(stringResource(if (!candidate.canDelete) R.string.translation_delete_protected else if (candidate.row.isTypo) R.string.translation_typo_flagged else R.string.translation_review_only), style = MaterialTheme.typography.labelSmall)
-                                candidate.row.typoReason?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                    ImportPreviewExpandableHeader(
+                        title = stringResource(R.string.translation_delete_candidates_with_count, preview.reviewCount),
+                        expanded = reviewExpanded,
+                        onToggle = { reviewExpanded = !reviewExpanded },
+                    )
+                    if (reviewExpanded) {
+                        Text(stringResource(R.string.translation_delete_hint), style = MaterialTheme.typography.bodySmall)
+                        preview.validRows.filter { it.row.needsReview }.forEach { candidate ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(
+                                    checked = candidate.tagId in selectedDeleteIds,
+                                    enabled = candidate.canDelete,
+                                    onCheckedChange = { checked -> selectedDeleteIds = if (checked) selectedDeleteIds + candidate.tagId else selectedDeleteIds - candidate.tagId },
+                                )
+                                Column(Modifier.weight(1f)) {
+                                    Text(candidate.row.tag, style = MaterialTheme.typography.bodyMedium)
+                                    Text(stringResource(if (!candidate.canDelete) R.string.translation_delete_protected else if (candidate.row.isTypo) R.string.translation_typo_flagged else R.string.translation_review_only), style = MaterialTheme.typography.labelSmall)
+                                    candidate.row.typoReason?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                                }
                             }
                         }
                     }
@@ -1135,6 +1175,20 @@ private fun TranslationImportDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
     )
+}
+
+@Composable
+private fun ImportPreviewExpandableHeader(title: String, expanded: Boolean, onToggle: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+        Icon(
+            if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+            contentDescription = stringResource(if (expanded) R.string.collapse else R.string.expand),
+        )
+    }
 }
 
 @Composable

@@ -24,6 +24,7 @@ data class AppSettings(
     val quickEditToolbarPlacement: QuickEditToolbarPlacement = QuickEditToolbarPlacement.BELOW_SELECTION,
     val alternateCharacterColors: Boolean = true,
     val showStickyPromptControls: Boolean = true,
+    val promptEditorOverlayPlacement: PromptEditorOverlayPlacement = PromptEditorOverlayPlacement.DYNAMIC,
     val showExclusionConfirmationHelp: Boolean = true,
 )
 
@@ -31,6 +32,7 @@ data class AppSettings(
 @Serializable enum class AppearanceMode { SYSTEM, LIGHT, DARK }
 @Serializable enum class ColorHelperMode { ALWAYS, WHILE_EDITING, OFF }
 @Serializable enum class QuickEditToolbarPlacement { BELOW_SELECTION, BOTTOM }
+@Serializable enum class PromptEditorOverlayPlacement { TOP, BOTTOM, DYNAMIC }
 
 object QuickEditPressTiming {
     const val DEFAULT_LONG_PRESS_MILLIS = 450

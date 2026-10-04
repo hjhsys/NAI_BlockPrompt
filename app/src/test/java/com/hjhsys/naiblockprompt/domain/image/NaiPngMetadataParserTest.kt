@@ -21,6 +21,26 @@ class NaiPngMetadataParserTest {
 
     @Test fun `non png has no metadata`() = assertNull(NaiPngMetadataParser.parse("jpeg".toByteArray()))
 
+    @Test fun `comment api model takes precedence over display source`() {
+        val png = png(
+            "Description" to "1girl",
+            "Source" to "NovelAI Diffusion V5 Full",
+            "Comment" to """{"model":"nai-diffusion-5-full","seed":42}""",
+        )
+
+        assertEquals("nai-diffusion-5-full", NaiPngMetadataParser.parse(png)?.model)
+    }
+
+    @Test fun `reads current NovelAI model name before hashed source`() {
+        val png = png(
+            "Description" to "1girl",
+            "Source" to "NovelAI Diffusion V5 0ADF9AB7",
+            "Comment" to """{"model_name":"NovelAI Diffusion V5","model_hash":"0ADF9AB7","seed":42}""",
+        )
+
+        assertEquals("NovelAI Diffusion V5", NaiPngMetadataParser.parse(png)?.model)
+    }
+
     @Test fun `detects external reference metadata without claiming to restore its image`() {
         val png = png(
             "Description" to "1girl",

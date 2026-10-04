@@ -14,6 +14,31 @@ object NaiGenerationCatalog {
         NaiCatalogOption("nai-diffusion-furry-3", "NovelAI Diffusion Furry V3"),
     )
 
+    fun resolveModelId(metadataValue: String?): String? {
+        val value = metadataValue?.trim()?.takeIf(String::isNotEmpty) ?: return null
+        val baseValue = value
+            .replace(Regex("(?i)(?:-inpainting| inpainting)$"), "")
+            .replace(Regex("(?i)\\s+[0-9a-f]{8}$"), "")
+        val candidates = listOf(value, baseValue).distinct()
+        val exact = models.firstOrNull { option ->
+            candidates.any { candidate ->
+                option.apiId.equals(candidate, ignoreCase = true) ||
+                    option.displayName.equals(candidate, ignoreCase = true)
+            }
+        }?.apiId
+        if (exact != null) return exact
+
+        return when (baseValue.lowercase()) {
+            "novelai diffusion v5" -> "nai-diffusion-5-full"
+            "novelai diffusion v5 curated" -> "nai-diffusion-5-curated"
+            "novelai diffusion v4.5" -> "nai-diffusion-4-5-full"
+            "novelai diffusion v4.5 curated" -> "nai-diffusion-4-5-curated"
+            "novelai diffusion v4" -> "nai-diffusion-4-full"
+            "novelai diffusion v4 curated" -> "nai-diffusion-4-curated-preview"
+            else -> null
+        }
+    }
+
     fun parameterVersion(modelId: String): Int = if (modelId.startsWith("nai-diffusion-5-")) 4 else 3
 
     fun supportsSelectableNoiseSchedule(modelId: String?): Boolean =

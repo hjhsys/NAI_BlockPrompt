@@ -9,6 +9,7 @@ import com.hjhsys.naiblockprompt.domain.model.AppearanceMode
 import com.hjhsys.naiblockprompt.domain.model.ColorHelperMode
 import com.hjhsys.naiblockprompt.domain.model.QuickEditToolbarPlacement
 import com.hjhsys.naiblockprompt.domain.model.QuickEditPressTiming
+import com.hjhsys.naiblockprompt.domain.model.PromptEditorOverlayPlacement
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.first
@@ -38,6 +39,7 @@ class SettingsRepository(private val context: Context) {
         val quickEditToolbarPlacement = stringPreferencesKey("quick_edit_toolbar_placement")
         val alternateCharacterColors = booleanPreferencesKey("alternate_character_colors")
         val showStickyPromptControls = booleanPreferencesKey("show_sticky_prompt_controls")
+        val promptEditorOverlayPlacement = stringPreferencesKey("prompt_editor_overlay_placement")
         val showExclusionConfirmationHelp = booleanPreferencesKey("show_exclusion_confirmation_help")
     }
 
@@ -71,6 +73,9 @@ class SettingsRepository(private val context: Context) {
                 ?: QuickEditToolbarPlacement.BELOW_SELECTION,
             alternateCharacterColors = prefs[Keys.alternateCharacterColors] ?: true,
             showStickyPromptControls = prefs[Keys.showStickyPromptControls] ?: true,
+            promptEditorOverlayPlacement = prefs[Keys.promptEditorOverlayPlacement]
+                ?.let { runCatching { PromptEditorOverlayPlacement.valueOf(it) }.getOrNull() }
+                ?: PromptEditorOverlayPlacement.DYNAMIC,
             showExclusionConfirmationHelp = prefs[Keys.showExclusionConfirmationHelp] ?: true,
         )
     }
@@ -117,6 +122,9 @@ class SettingsRepository(private val context: Context) {
     suspend fun setShowStickyPromptControls(value: Boolean) = context.settingsDataStore.edit {
         it[Keys.showStickyPromptControls] = value
     }
+    suspend fun setPromptEditorOverlayPlacement(value: PromptEditorOverlayPlacement) = context.settingsDataStore.edit {
+        it[Keys.promptEditorOverlayPlacement] = value.name
+    }
     suspend fun setShowExclusionConfirmationHelp(value: Boolean) = context.settingsDataStore.edit {
         it[Keys.showExclusionConfirmationHelp] = value
     }
@@ -144,6 +152,7 @@ class SettingsRepository(private val context: Context) {
         setQuickEditToolbarPlacement(settings.quickEditToolbarPlacement)
         setAlternateCharacterColors(settings.alternateCharacterColors)
         setShowStickyPromptControls(settings.showStickyPromptControls)
+        setPromptEditorOverlayPlacement(settings.promptEditorOverlayPlacement)
         setShowExclusionConfirmationHelp(settings.showExclusionConfirmationHelp)
     }
 

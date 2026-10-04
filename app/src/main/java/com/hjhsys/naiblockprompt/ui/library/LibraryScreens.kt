@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -75,6 +76,8 @@ fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, isActive
     val modelSummary = compactModelName(session?.generationSettings?.modelId)
     val seedSummary = session?.let { stringResource(if (it.generationSettings.seedMode == com.hjhsys.naiblockprompt.domain.model.SeedMode.RANDOM) R.string.seed_status_random else R.string.seed_status_fixed) }
     var favoritesOnly by rememberSaveable { mutableStateOf(false) }
+    val allHistoryListState = rememberLazyListState()
+    val favoriteHistoryListState = rememberLazyListState()
     val retainedUnfavorites = remember { mutableStateListOf<String>() }
     LaunchedEffect(isActive) {
         if (!isActive) {
@@ -86,6 +89,8 @@ fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, isActive
     var cherryPick by remember { mutableStateOf<PromptCherryPickDraft?>(null) }
     var promptToView by remember { mutableStateOf<HistoryItem?>(null) }
     var viewerReference by remember { mutableStateOf<String?>(null) }
+    var initialImageComparison by remember { mutableStateOf<ImageCompareCandidate?>(null) }
+    var initialPromptComparison by remember { mutableStateOf<PromptCompareCandidate?>(null) }
     var actionImage by remember { mutableStateOf<HistoryItem?>(null) }
     var deleteCandidate by remember { mutableStateOf<HistoryItem?>(null) }
     var deleteOriginal by remember { mutableStateOf(false) }
@@ -101,28 +106,69 @@ fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, isActive
         selectedItem.snapshot?.generation?.let { prompt ->
             ProcessedPromptDialog(
                 prompt = prompt,
+                initialComparison = initialPromptComparison,
+                onCompareImages = { candidate ->
+                    initialImageComparison = ImageCompareCandidate(
+                        id = candidate.id,
+                        reference = candidate.imageReference,
+                        thumbnailReference = candidate.thumbnailPath,
+                        dateLabel = candidate.dateLabel,
+                        modelLabel = candidate.modelLabel,
+                        promptPreview = candidate.promptPreview,
+                        prompt = candidate.prompt,
+                    )
+                    initialPromptComparison = null
+                    viewerReference = selectedItem.entity.imagePath
+                    promptToView = null
+                },
                 comparisonCandidates = history.mapNotNull { item ->
                     val candidatePrompt = item.snapshot?.generation ?: return@mapNotNull null
                     if (item.entity.id == selectedItem.entity.id) return@mapNotNull null
                     PromptCompareCandidate(
                         id = item.entity.id,
                         prompt = candidatePrompt,
+                        imageReference = item.entity.imagePath,
+                        imageAvailable = item.originalExists,
                         thumbnailPath = item.entity.thumbnailPath,
                         dateLabel = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(item.entity.createdAt)),
                         modelLabel = item.entity.model,
                         promptPreview = (listOf(candidatePrompt.basePositive) + candidatePrompt.characterPositive).filter(String::isNotBlank).joinToString(", "),
                     )
                 },
-            ) { promptToView = null }
+            ) {
+                promptToView = null
+                initialPromptComparison = null
+            }
         } ?: selectedItem.snapshot?.session?.let { SessionPromptDialog(it) { promptToView = null } }
     }
     viewerReference?.let { reference ->
         ImageViewer(
             reference = reference,
+            initialComparison = initialImageComparison,
+            onComparePrompts = { candidate ->
+                val baseItem = history.firstOrNull { it.entity.imagePath == reference }
+                val candidatePrompt = candidate.prompt
+                if (baseItem != null && candidatePrompt != null) {
+                    initialPromptComparison = PromptCompareCandidate(
+                        id = candidate.id,
+                        prompt = candidatePrompt,
+                        imageReference = candidate.reference,
+                        imageAvailable = true,
+                        thumbnailPath = candidate.thumbnailReference,
+                        dateLabel = candidate.dateLabel,
+                        modelLabel = candidate.modelLabel,
+                        promptPreview = candidate.promptPreview,
+                    )
+                    initialImageComparison = null
+                    promptToView = baseItem
+                    viewerReference = null
+                }
+            },
             comparisonCandidates = history.filter { item ->
                 item.originalExists && item.entity.imagePath != reference
             }.map { item ->
                 ImageCompareCandidate(
+                    id = item.entity.id,
                     reference = item.entity.imagePath,
                     thumbnailReference = item.entity.thumbnailPath,
                     dateLabel = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(item.entity.createdAt)),
@@ -135,9 +181,13 @@ fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, isActive
                         ?.filter { it.enabled && it.content.isNotBlank() }
                         ?.joinToString(", ") { it.content }
                         .orEmpty(),
+                    prompt = item.snapshot?.generation,
                 )
             },
-        ) { viewerReference = null }
+        ) {
+            viewerReference = null
+            initialImageComparison = null
+        }
     }
     deleteCandidate?.let { item ->
         AlertDialog(
@@ -167,18 +217,34 @@ fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, isActive
         trailingOverline = headerTokenSummary,
         trailingSubtitle = quotaStatusText(subscriptionStatus),
     ) }) { padding ->
-    LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(selected = !favoritesOnly, onClick = { favoritesOnly = false }, label = { Text(stringResource(R.string.history_all)) })
+    Column(Modifier.fillMaxSize().padding(padding)) {
+        CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 32.dp) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                FilterChip(
+                    selected = !favoritesOnly,
+                    onClick = { favoritesOnly = false },
+                    label = { Text(stringResource(R.string.history_all)) },
+                    modifier = Modifier.height(32.dp),
+                )
                 FilterChip(
                     selected = favoritesOnly,
                     onClick = { favoritesOnly = true },
                     label = { Text(stringResource(R.string.history_favorites)) },
-                    leadingIcon = { Icon(Icons.Default.Favorite, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    leadingIcon = { Icon(Icons.Default.Favorite, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                    modifier = Modifier.height(32.dp),
                 )
             }
         }
+        LazyColumn(
+            Modifier.fillMaxWidth().weight(1f),
+            state = if (favoritesOnly) favoriteHistoryListState else allHistoryListState,
+            contentPadding = PaddingValues(start = 16.dp, top = 4.dp, end = 16.dp, bottom = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
         val visibleHistory = if (favoritesOnly) history.filter { it.entity.favorite || it.entity.id in retainedUnfavorites } else history
         if (visibleHistory.isEmpty()) item { Text(stringResource(if (favoritesOnly) R.string.history_favorites_empty else R.string.history_empty)) }
         items(visibleHistory, key = { it.entity.id }) { item ->
@@ -188,6 +254,7 @@ fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, isActive
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         AsyncImage(File(item.entity.thumbnailPath), stringResource(R.string.generated_image), Modifier.size(104.dp).clickable(enabled = item.originalExists) {
                             viewModel.selectImageSeed(actualSeed)
+                            initialImageComparison = null
                             viewerReference = item.entity.imagePath
                         }, contentScale = ContentScale.Crop)
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -232,12 +299,12 @@ fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, isActive
                             { cherryPick = PromptCherryPick.fromSession(source) }
                         },
                         promptViewEnabled = item.snapshot != null,
-                        onViewPrompt = item.snapshot?.let { { promptToView = item } },
+                        onViewPrompt = item.snapshot?.let { { initialPromptComparison = null; promptToView = item } },
                     )
                 }
             }
         }
-    } }
+    } } }
 }
 
 @Composable

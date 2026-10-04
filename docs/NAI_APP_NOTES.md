@@ -1,8 +1,9 @@
 # NAI Mobile App
 
-> 이 파일은 오프라인 참고용 로컬 스냅샷입니다. 최신 제품 요구사항의 단일 기준은
-> [Main Project Document](https://docs.google.com/document/d/1MaEP_W8AMXoTPj6aB5DGFnceK7fdPrv9UUyQhv4WPts/edit?usp=sharing)이며,
-> 내용이 충돌하면 Google Docs를 우선합니다.
+> **보관 문서:** 초기 설계와 1.0 개발 과정의 결정 기록입니다. 현재 앱의 모든 기능과 완료 상태를
+> 반영하지 않으며, 최신 동작은 앱 소스·테스트·`README.md`·릴리스 노트를 기준으로 확인합니다.
+> 과거 [Main Project Document](https://docs.google.com/document/d/1MaEP_W8AMXoTPj6aB5DGFnceK7fdPrv9UUyQhv4WPts/edit?usp=sharing)도
+> 같은 목적의 설계 기록으로만 유지합니다.
 
 NovelAI Image Generation을 모바일에서 간단하고 빠르게 사용할 수 있도록 하는 앱입니다.
 

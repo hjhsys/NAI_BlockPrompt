@@ -8,21 +8,23 @@ An Android-only Kotlin/Jetpack Compose prompt-block editor and unofficial NovelA
 
 ## 현재 상태와 기능
 
-버전 **1.0**. [GitHub Releases](https://github.com/hjhsys/NAI_BlockPrompt/releases)에서 서명된 APK를 받을 수 있습니다. 비공식 개인 프로젝트이며 중요한 데이터는 별도 백업을 권장합니다.
+현재 소스 버전은 **1.1**입니다. [GitHub Releases](https://github.com/hjhsys/NAI_BlockPrompt/releases)에서 공개된 최신 서명 APK를 받을 수 있습니다. 비공식 개인 프로젝트이며 중요한 데이터는 별도 백업을 권장합니다.
 
-- **Generate:** Base / Character별 Positive·Negative, Block 추가·정렬·잠금·접기·ON/OFF, Character 전체 접기, Text Rendering, 주석, 가중치 강조·보정, 한 줄씩/합쳐서 정리, Prompt Undo와 빠른 Tag/Chunk 편집.
-- **생성:** 모델·해상도·Sampler·Steps·Guidance·Seed 설정, Random/Fixed Seed 빠른 전환, Character Positioning, Image2Image, Vibe Transfer와 로컬 인코딩 캐시, Precise Reference, Inpaint. 지원 범위는 모델에 따라 다릅니다.
-- **이미지/History:** PNG 메타데이터 선택 가져오기, 원본 저장, 썸네일·설정·Seed 보존, 부분 복원, 즐겨찾기, 실패 요청 Retry, 원본 유실 안내.
-- **Library:** Blocks / Sets / Presets 저장·검색·폴더 분류·불러오기. 이전 작업은 1-slot Stash로 보관합니다.
-- **Tags:** 201,273개 canonical 태그와 한국어 번역, 별칭·카테고리 검색, 사용자 번역 override, 즐겨찾기, 사용 기록, 미리보기 이미지, 출처 표시.
-- **자동완성:** NovelAI / Danbooru / Both. API 응답에서 확인된 태그를 조회만으로 학습합니다. 에디터의 임의 입력·붙여넣기를 신규 태그로 등록하지 않습니다.
+- **Prompt 편집:** Base / Character별 Positive·Negative, Character 전체 생성 ON/OFF, Block 추가·정렬·잠금·접기·분리·결합·복사·붙여넣기, Text Rendering, 주석, 가중치 강조·보정, 한 줄씩/합쳐서 정리, Undo/Redo를 지원합니다.
+- **빠른 편집:** Tag/Weight Chunk 선택과 다중 선택, 묶음 이동·삭제·주석·줄바꿈·태그 사전 삽입, 가중치 증감·부호 반전, 태그 정보 확인을 제공합니다. 길게 누르기 판정과 반복 간격, 도구 위치를 설정할 수 있습니다.
+- **생성:** 모델·해상도·Sampler·Steps·Guidance·Seed 설정, Random/Fixed Seed 빠른 전환, Character Positioning의 선택·탭·드래그 배치, Image2Image, Vibe Transfer와 로컬 인코딩 캐시, Precise Reference, Inpaint를 지원합니다. 지원 범위는 모델에 따라 다릅니다.
+- **미리보기와 가져오기:** 생성 전 현재 Prompt를 확인하고, PNG 메타데이터의 Prompt·모델·생성 설정을 미리 본 뒤 전체 또는 일부 Block만 가져올 수 있습니다. Character는 교체하거나 뒤에 추가할 수 있습니다.
+- **이미지/History:** 원본 저장, 썸네일·설정·Seed 보존, 부분 복원, 즐겨찾기, 실패 요청 Retry, 원본 유실 안내를 제공합니다. 두 이미지와 해당 Prompt·생성 설정을 A/B로 비교하고 이미지 비교와 Prompt 비교 사이를 전환할 수 있습니다.
+- **Library:** Blocks / Sets / Presets 저장·검색·폴더 분류·불러오기와 항목별 미리보기 이미지를 지원합니다. 이전 작업은 1-slot Stash로 보관합니다.
+- **Tags:** 201,273개 canonical 태그와 한국어 번역, 별칭·카테고리 검색, 사용자 번역 override, 즐겨찾기, 사용 기록, 미리보기 이미지, 출처 표시, 다중 선택 제외를 지원합니다.
+- **자동완성:** Local / NovelAI / Danbooru 후보를 한 줄에서 출처별로 전환합니다. 입력 위치와 키보드를 고려한 팝업 위치를 상단·하단·유동적으로 설정할 수 있으며, 조회 결과로 확인된 원격 태그만 로컬 DB에 학습합니다.
 - **Wildcards:** `__name__` 자동완성, 후보 편집, TXT Import, 폴더 이름 분류, Seed 기반 후보 선택, 중첩 참조 보호, History 원문/선택 결과 복원.
 - **Color Helper:** 색상환·HSV·HEX, 복사·입력 보조, 색상 즐겨찾기, 사용 횟수·추가 날짜 정렬. DB·색상 바로가기는 각각 드래그해서 옮길 수 있습니다.
 - **설정:** 밝게/어둡게/시스템 테마, 한국어·영어 UI, 선택 가능한 실험적 토큰 추정, Help, 사용자 데이터 백업 및 태그 DB 공유.
 
 ## 처음 사용하기
 
-1. Releases의 `BlockPrompt-1.0.apk`를 설치하거나 Android Studio에서 직접 빌드합니다.
+1. Releases의 최신 APK를 설치하거나 Android Studio에서 직접 빌드합니다.
 2. Settings의 NovelAI 연결 항목에 본인의 API/Persistent Token을 등록합니다.
 3. Generate에서 모델과 설정을 선택하고 Base / Character 프롬프트를 작성합니다.
 4. Generate를 눌러 생성하고 Result / History에서 결과를 확인합니다.
@@ -49,7 +51,7 @@ ZIP 저장 후 클립보드에는 태그 원문 대신 외부 AI에 붙여넣을
 - 생성 후 저장 재시도용 이미지는 메모리에 보존되므로 프로세스 종료 후에는 유지되지 않습니다.
 - 토큰은 공식 계산값이 아닌 실험적 추정치입니다. 표시를 끌 수 있으며 생성을 차단하지 않습니다.
 - Anlas 안내는 모든 설정 조합의 총 비용을 보장하지 않습니다.
-- Wildcard TXT Export, 전용 폴더 관리, Redo는 미제공입니다. Prompt Undo와 Quick Edit는 제공하지만 모든 Android 기본 텍스트 편집 동작을 대체하지는 않습니다.
+- Wildcard TXT Export와 전용 폴더 관리는 미제공입니다. Prompt Undo/Redo와 Quick Edit는 제공하지만 모든 Android 기본 텍스트 편집 동작을 대체하지는 않습니다.
 - Inpaint는 V5 Full 실기기에서 웹 호환 마스크 전처리·합성 경로를 확인했습니다. V4.5 Full과 다양한 해상도·마스크 모양은 추가 실기기 회귀 검증이 필요합니다.
 - 단위 테스트와 별도로 실제 기기의 DB migration·백업 왕복·백그라운드 복원·모델별 생성 검증이 필요합니다.
 
@@ -81,17 +83,18 @@ Release 빌드는 로컬 환경변수 `BLOCKPROMPT_KEYSTORE`, `BLOCKPROMPT_STORE
 
 Token은 Android Keystore로 암호화하여 로컬에 저장합니다. 생성에 필요한 프롬프트와 이미지는 NovelAI로, 자동완성 검색어는 선택한 제공자(NovelAI/Danbooru)로 전송됩니다. 공개하는 로그·백업·스크린샷에서 인증 정보와 개인 데이터를 제외하세요.
 
-- [최신 제품 요구사항 (Google Docs)](https://docs.google.com/document/d/1MaEP_W8AMXoTPj6aB5DGFnceK7fdPrv9UUyQhv4WPts/edit?usp=sharing)
-- [로컬 요구사항 스냅샷](docs/NAI_APP_NOTES.md)
+- [과거 설계 기록 (Google Docs)](https://docs.google.com/document/d/1MaEP_W8AMXoTPj6aB5DGFnceK7fdPrv9UUyQhv4WPts/edit?usp=sharing)
+- [과거 설계·개발 기록](docs/NAI_APP_NOTES.md)
 - [NovelAI API 조사 기록](docs/NAI_IMAGE_API_SPIKE.md)
 - [NovelAI 이미지 API 연동 실전 가이드](docs/novelai-integration-guide/README.md)
 - [1.0 릴리스 노트](docs/releases/1.0.md)
+- [1.1 릴리스 노트](docs/releases/1.1.md)
 - [태그 번들 생성 도구](tools/tag_db/README.md)
 - [개발 규칙](AGENTS.md)
 
 Kotlin / Jetpack Compose / Room / DataStore / OkHttp / Coil / Android Keystore를 사용합니다. `data/`는 저장·통신, `domain/`은 프롬프트 처리와 모델, `ui/`는 화면을 담당합니다. UI 문구는 Android string resources에서 관리합니다.
 
-오픈소스 공개가 지속적인 기능 추가나 번역 수정 요청 처리를 보장하지는 않습니다. 변경 공유 시 재현 절차와 범위를 명확히 하고, 인증 정보·개인 데이터·재배포 권한이 불명확한 자료를 제외해주세요. 기본 번역 수정은 canonical tag를 기준으로 검증하고 기존 사용자 override를 보존해야 합니다. 현재 '번역 수정분만 JSONL로 내보내기' 전용 기능은 없습니다.
+이 저장소는 개인 개발·유지보수를 기준으로 합니다. 공개되어 있어도 지속적인 기능 추가, 지원 또는 외부 기여 검토를 보장하지 않습니다. 현재 '번역 수정분만 JSONL로 내보내기' 전용 기능은 없습니다.
 
 ## License
 

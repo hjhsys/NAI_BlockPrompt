@@ -95,6 +95,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     val blockClipboard: StateFlow<PromptBlock?> = _blockClipboard.asStateFlow()
     private val _loadUiRevision = MutableStateFlow(0L)
     val loadUiRevision: StateFlow<Long> = _loadUiRevision.asStateFlow()
+    private var generatePromptScrollPosition = GeneratePromptScrollPosition()
     private val _savedWorkflow = MutableStateFlow<SavedWorkflow?>(null)
     val savedWorkflow: StateFlow<SavedWorkflow?> = _savedWorkflow.asStateFlow()
     private val _autocomplete = MutableStateFlow(AutocompleteUiState())
@@ -415,7 +416,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             }
         val importedSession = ExternalPromptImport.apply(current, blockName, metadata.prompt, metadata.negativePrompt, importedCharacters, includePrompt, includeNegative, includeCharacters, characterMode)
         val old = current.generationSettings
-        val importedModel = metadata.model?.takeIf { id -> NaiGenerationCatalog.models.any { it.apiId == id } }
+        val importedModel = NaiGenerationCatalog.resolveModelId(metadata.model)
         val importedSampler = metadata.sampler?.takeIf { id -> NaiGenerationCatalog.samplers.any { it.apiId == id } }
         val generationSettings = old.copy(
             modelId = if (includeSettings) importedModel ?: old.modelId else old.modelId,
@@ -478,6 +479,9 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     }
     fun setShowStickyPromptControls(value: Boolean) = viewModelScope.launch {
         container.settingsRepository.setShowStickyPromptControls(value)
+    }
+    fun setPromptEditorOverlayPlacement(value: PromptEditorOverlayPlacement) = viewModelScope.launch {
+        container.settingsRepository.setPromptEditorOverlayPlacement(value)
     }
     fun setColorHelperMode(value: ColorHelperMode) = viewModelScope.launch { container.settingsRepository.setColorHelperMode(value) }
     fun toggleFavoriteColor(hex: String) = viewModelScope.launch {
@@ -662,6 +666,10 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         container.autocompleteRepository.excludeTag(item.canonicalTag)
         clearAutocomplete()
     }
+    fun excludeTags(items: Collection<TagDictionaryItem>) = viewModelScope.launch {
+        container.autocompleteRepository.excludeTags(items.map(TagDictionaryItem::canonicalTag))
+        clearAutocomplete()
+    }
     fun restoreExcludedTag(item: ExcludedTagItem) = viewModelScope.launch {
         container.autocompleteRepository.restoreExcludedTag(item.canonicalTag)
         clearAutocomplete()
@@ -741,6 +749,16 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     fun consumeTagInsertReturnTarget(revision: Long) {
         if (_tagInsertReturnTarget.value?.revision == revision) _tagInsertReturnTarget.value = null
     }
+
+    fun generatePromptScrollPosition(): GeneratePromptScrollPosition = generatePromptScrollPosition
+
+    fun updateGeneratePromptScrollPosition(itemIndex: Int, scrollOffset: Int) {
+        generatePromptScrollPosition = GeneratePromptScrollPosition(
+            itemIndex = itemIndex.coerceAtLeast(0),
+            scrollOffset = scrollOffset.coerceAtLeast(0),
+        )
+    }
+
     fun cancelTagInsert() {
         tagInsertTarget = null
         _tagInsertAvailable.value = false
@@ -1018,6 +1036,23 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
+    fun previewCurrentPrompt(): GeneratedPromptSnapshot? {
+        val current = _session.value ?: return null
+        val wildcardValues = wildcards.value.associate { item ->
+            item.name to item.valuesText.lines().filter(String::isNotBlank)
+        }
+        return when (val prepared = requestMapper.prepare(
+            current,
+            settings.value.normalizeWeightClosings,
+            wildcardValues,
+            includeTextRendering = settings.value.useTextRendering,
+        )) {
+            is PrepareGenerationResult.Invalid -> null
+            is PrepareGenerationResult.Ready ->
+                HistorySnapshotFactory.from(prepared.generation, prepared.generation.usedSeed).generation
+        }
+    }
+
     fun confirmDuplicateGeneration() {
         _duplicateWarning.value = false
         duplicateGeneration?.also(::execute)
@@ -1283,6 +1318,11 @@ data class TagInsertReturnTarget(
     val polarity: PromptPolarity,
     val blockId: String,
     val cursor: Int,
+)
+
+data class GeneratePromptScrollPosition(
+    val itemIndex: Int = 0,
+    val scrollOffset: Int = 0,
 )
 
 private data class DictionarySearch(

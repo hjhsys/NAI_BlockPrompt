@@ -49,7 +49,7 @@ object NaiPngMetadataParser {
         val negative = comment.string("uc") ?: comment.string("negative_prompt")
         if (prompt == null && comment == null) return null
         return NaiImageMetadata(
-            prompt, negative, text["Source"] ?: comment.string("model"), comment.long("seed"),
+            prompt, negative, comment.string("model") ?: comment.string("model_name") ?: text["Source"], comment.long("seed"),
             comment.int("width"), comment.int("height"), comment.string("sampler"), comment.int("steps"), comment.float("scale"),
             comment.characterCaptions("v4_prompt"), comment.characterCaptions("v4_negative_prompt"),
             comment.characterPositions(),

@@ -1,10 +1,9 @@
 # NAI_BlockPrompt Development Instructions
 
 ## Source of truth
-- Read the latest [Main Project Document](https://docs.google.com/document/d/1MaEP_W8AMXoTPj6aB5DGFnceK7fdPrv9UUyQhv4WPts/edit?usp=sharing) before making architectural or functional decisions.
-- The Google Doc is the authoritative functional specification and single source of truth.
-- `docs/NAI_APP_NOTES.md` is a local snapshot for offline reference. If it conflicts with the Google Doc, follow the Google Doc.
-- Do not silently remove, simplify, or reinterpret documented requirements.
+- The current app source, tests, string resources, `README.md`, and release notes describe the maintained behavior.
+- The former [Main Project Document](https://docs.google.com/document/d/1MaEP_W8AMXoTPj6aB5DGFnceK7fdPrv9UUyQhv4WPts/edit?usp=sharing) and `docs/NAI_APP_NOTES.md` are archived design history. Consult them only when historical context is useful; they are not required reading and do not override the current implementation.
+- Preserve established user-facing behavior unless the requested change intentionally replaces it.
 - If implementation details are unspecified, choose a reasonable Android-native solution and document the choice.
 
 ## Platform
@@ -22,7 +21,7 @@
 - Prompt Blocks are the main differentiating feature.
 - Block boundaries are an editing abstraction only; API output must preserve NovelAI-compatible prompt behavior as closely as possible.
 - Korean is the primary UI language, but all UI strings must use Android string resources so additional languages can be added without modifying app logic.
-- Keep the project friendly to open-source contributions.
+- Keep the project straightforward for solo maintenance. External contributions are optional, not a primary workflow requirement.
 
 ## Development rules
 - Build and test after meaningful changes.

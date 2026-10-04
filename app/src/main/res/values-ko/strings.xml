@@ -84,6 +84,8 @@
     <string name="settings_alternate_character_colors">캐릭터 배경색 번갈아 표시</string>
     <string name="settings_alternate_character_colors_hint">캐릭터 영역을 두 가지 은은한 중성 배경색으로 번갈아 구분합니다.</string>
     <string name="image_compare">이미지 두 장 비교</string>
+    <string name="switch_to_prompt_comparison">Prompt 비교로 전환</string>
+    <string name="switch_to_image_comparison">이미지 비교로 전환</string>
     <string name="image_compare_choose">B 이미지 선택</string>
     <string name="image_compare_prompt_unavailable">Prompt 미리보기 없음</string>
     <string name="resolution">해상도</string>
@@ -199,6 +201,8 @@
     <string name="autocomplete_failed">일부 자동완성 결과를 불러오지 못했습니다.</string>
     <string name="autocomplete_nai_failed">NAI 자동완성을 불러오지 못했습니다. Token과 네트워크를 확인하세요.</string>
     <string name="autocomplete_danbooru_failed">Danbooru 자동완성을 불러오지 못했습니다. danbooru.donmai.us 네트워크 접속을 확인하세요.</string>
+    <string name="autocomplete_source_unavailable">사용 불가</string>
+    <string name="autocomplete_no_suggestions">추천 없음</string>
     <string name="settings_saved">설정은 자동으로 저장됩니다.</string>
     <string name="crash_log_share">크래시 로그 공유</string>
     <string name="crash_log_share_subject">NAI Block Prompt 크래시 로그</string>
@@ -402,6 +406,8 @@
     <string name="translation_import_unknown">DB에 없는 태그: %1$d개</string>
     <string name="translation_import_review">검토 필요 표시: %1$d개</string>
     <string name="translation_import_new_categories">새 카테고리 제안(자동 생성 안 함): %1$s</string>
+    <string name="translation_import_excluded_details">제외 후보 (%1$d개)</string>
+    <string name="translation_delete_candidates_with_count">오타/검토 후보 (%1$d개)</string>
     <string name="overwrite_existing_user_translation">기존 사용자 번역과 카테고리 덮어쓰기</string>
     <string name="apply_import">적용</string>
     <string name="translation_export_options">내보낼 태그 선택</string>
@@ -572,6 +578,10 @@
     <string name="excluded_batch_confirm">확정 %1$d</string>
     <string name="excluded_batch_unconfirm">미확정 %1$d</string>
     <string name="excluded_batch_restore">제외 해제 %1$d</string>
+    <string name="exclude_selected_tags_title">선택한 태그를 제외할까요?</string>
+    <string name="exclude_selected_tags_message">선택한 %1$d개 태그를 태그 검색과 자동완성에서 숨깁니다.</string>
+    <string name="exclude_selected_tags">제외</string>
+    <string name="exclude_selected_tags_with_count">선택 항목 제외 (%1$d)</string>
     <string name="select_tags_for_ai">AI 번역할 Tag 선택</string>
     <string name="ai_translation_selected_count">선택: %1$d개</string>
     <string name="clear_selection">전체 해제</string>
@@ -628,8 +638,14 @@
     <string name="settings_quick_edit_toolbar_placement">빠른 편집 도구 위치</string>
     <string name="quick_edit_toolbar_below_selection">선택 태그 아래</string>
     <string name="quick_edit_toolbar_bottom">화면 하단 고정</string>
-    <string name="settings_sticky_prompt_controls">프롬프트 편집 도구 하단 고정</string>
-    <string name="settings_sticky_prompt_controls_hint">입력 중인 블록의 도구가 화면 밖으로 나가면 자동완성과 Undo/빠른 편집 도구를 화면 아래에 표시합니다.</string>
+    <string name="settings_sticky_prompt_controls">프롬프트 편집 도구 팝업</string>
+    <string name="settings_sticky_prompt_controls_hint">입력 중인 블록의 도구가 화면 밖으로 나가면 자동완성과 Undo/빠른 편집 도구를 팝업으로 표시합니다.</string>
+    <string name="settings_prompt_editor_overlay_placement">자동완성·Undo 팝업 위치</string>
+    <string name="prompt_editor_overlay_top">상단 고정</string>
+    <string name="prompt_editor_overlay_bottom">하단 고정</string>
+    <string name="prompt_editor_overlay_dynamic">유동적</string>
+    <string name="settings_prompt_editor_overlay_placement_hint">유동적은 커서와 키보드를 피해 위치를 바꿉니다. 고정은 보이는 화면의 선택한 가장자리에 표시합니다.</string>
+    <string name="quick_edit_toggle_weight_sign">가중치 부호 반전</string>
     <string name="settings_quick_edit_weight_step_hint">기본값 0.1. 0보다 큰 소수를 입력할 수 있습니다.</string>
     <string name="cut">잘라내기</string>
     <string name="quick_edit_copy">복사</string>
@@ -668,6 +684,12 @@
     <string name="move_selected">이동</string>
     <string name="view_prompt">Prompt 보기</string>
     <string name="prompt_view_title">생성에 사용한 Prompt</string>
+    <string name="current_prompt_preview">작성 Prompt 미리보기</string>
+    <string name="current_prompt_preview_title">현재 작성 Prompt 미리보기</string>
+    <string name="current_prompt_preview_unavailable">미리보기 전에 필수 생성 설정을 입력해 주세요.</string>
+    <string name="preview_image_metadata">Prompt 및 설정 미리보기</string>
+    <string name="import_metadata_preview_title">이미지의 Prompt 및 설정</string>
+    <string name="metadata_value_unavailable">포함되지 않음</string>
     <string name="previous">이전</string>
     <string name="next">다음</string>
     <string name="positive_short">P</string>

@@ -188,6 +188,7 @@ fun NaiBlockPromptApp(container: AppContainer) {
                     quickEditToolbarPlacement = settings.quickEditToolbarPlacement,
                     alternateCharacterColors = settings.alternateCharacterColors,
                     showStickyPromptControls = settings.showStickyPromptControls,
+                    promptEditorOverlayPlacement = settings.promptEditorOverlayPlacement,
                     blockScaleEnabled = session?.blockScaleEnabled ?: false,
                     defaultBlockScale = session?.defaultBlockScale ?: "1.0",
                     showExclusionConfirmationHelp = settings.showExclusionConfirmationHelp,
@@ -209,6 +210,7 @@ fun NaiBlockPromptApp(container: AppContainer) {
                     onQuickEditToolbarPlacementChange = viewModel::setQuickEditToolbarPlacement,
                     onAlternateCharacterColorsChange = viewModel::setAlternateCharacterColors,
                     onShowStickyPromptControlsChange = viewModel::setShowStickyPromptControls,
+                    onPromptEditorOverlayPlacementChange = viewModel::setPromptEditorOverlayPlacement,
                     onBlockScaleChange = viewModel::updateBlockScale,
                     onShowExclusionConfirmationHelpChange = viewModel::setShowExclusionConfirmationHelp,
                     onHistoryLimitChange = viewModel::setHistoryLimit,
@@ -269,6 +271,7 @@ private fun SettingsScreen(
     quickEditToolbarPlacement: com.hjhsys.naiblockprompt.domain.model.QuickEditToolbarPlacement,
     alternateCharacterColors: Boolean,
     showStickyPromptControls: Boolean,
+    promptEditorOverlayPlacement: com.hjhsys.naiblockprompt.domain.model.PromptEditorOverlayPlacement,
     blockScaleEnabled: Boolean,
     defaultBlockScale: String,
     showExclusionConfirmationHelp: Boolean,
@@ -290,6 +293,7 @@ private fun SettingsScreen(
     onQuickEditToolbarPlacementChange: (com.hjhsys.naiblockprompt.domain.model.QuickEditToolbarPlacement) -> Unit,
     onAlternateCharacterColorsChange: (Boolean) -> Unit,
     onShowStickyPromptControlsChange: (Boolean) -> Unit,
+    onPromptEditorOverlayPlacementChange: (com.hjhsys.naiblockprompt.domain.model.PromptEditorOverlayPlacement) -> Unit,
     onBlockScaleChange: (Boolean, String) -> Unit,
     onShowExclusionConfirmationHelpChange: (Boolean) -> Unit,
     onHistoryLimitChange: (Int) -> Unit,
@@ -450,6 +454,30 @@ private fun SettingsScreen(
             onShowStickyPromptControlsChange,
             R.string.settings_sticky_prompt_controls_hint,
         )
+        if (showStickyPromptControls) {
+            Text(stringResource(R.string.settings_prompt_editor_overlay_placement), style = MaterialTheme.typography.titleMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                com.hjhsys.naiblockprompt.domain.model.PromptEditorOverlayPlacement.entries.forEach { placement ->
+                    FilterChip(
+                        selected = promptEditorOverlayPlacement == placement,
+                        onClick = { onPromptEditorOverlayPlacementChange(placement) },
+                        label = {
+                            Text(stringResource(when (placement) {
+                                com.hjhsys.naiblockprompt.domain.model.PromptEditorOverlayPlacement.TOP -> R.string.prompt_editor_overlay_top
+                                com.hjhsys.naiblockprompt.domain.model.PromptEditorOverlayPlacement.BOTTOM -> R.string.prompt_editor_overlay_bottom
+                                com.hjhsys.naiblockprompt.domain.model.PromptEditorOverlayPlacement.DYNAMIC -> R.string.prompt_editor_overlay_dynamic
+                            }))
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+            Text(
+                stringResource(R.string.settings_prompt_editor_overlay_placement_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         var blockScaleDraft by rememberSaveable(defaultBlockScale) { mutableStateOf(defaultBlockScale) }
         SettingSwitch(
             R.string.use_block_scale,

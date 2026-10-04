@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.CompareArrows
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ElevatedCard
@@ -58,6 +59,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil3.compose.AsyncImage
 import com.hjhsys.naiblockprompt.R
+import com.hjhsys.naiblockprompt.domain.model.GeneratedPromptSnapshot
 import java.io.File
 import kotlin.math.min
 import kotlin.math.max
@@ -96,11 +98,13 @@ internal fun imageReferenceModel(reference: String): Any {
 }
 
 data class ImageCompareCandidate(
+    val id: String,
     val reference: String,
     val thumbnailReference: String,
     val dateLabel: String,
     val modelLabel: String?,
     val promptPreview: String,
+    val prompt: GeneratedPromptSnapshot? = null,
 )
 
 @Composable
@@ -174,6 +178,8 @@ private fun ImageComparisonPicker(
 fun ImageViewer(
     reference: String,
     comparisonCandidates: List<ImageCompareCandidate> = emptyList(),
+    initialComparison: ImageCompareCandidate? = null,
+    onComparePrompts: ((ImageCompareCandidate) -> Unit)? = null,
     onDismiss: () -> Unit,
 ) {
     var mode by remember(reference) { mutableStateOf(ImageViewerMode.CONTEXTUAL) }
@@ -184,8 +190,9 @@ fun ImageViewer(
     var panX by remember(reference) { mutableFloatStateOf(0f) }
     var panY by remember(reference) { mutableFloatStateOf(0f) }
     var chooseComparison by remember(reference) { mutableStateOf(false) }
-    var comparisonReference by remember(reference) { mutableStateOf<String?>(null) }
-    var showingComparison by remember(reference) { mutableStateOf(false) }
+    var comparisonCandidate by remember(reference, initialComparison?.id) { mutableStateOf(initialComparison) }
+    val comparisonReference = comparisonCandidate?.reference
+    var showingComparison by remember(reference, initialComparison?.id) { mutableStateOf(initialComparison != null) }
     val displayedReference = if (showingComparison) comparisonReference ?: reference else reference
     val fullscreen = mode == ImageViewerMode.FULLSCREEN
     val maximumZoom = ImageViewerPolicy.maximumOriginalPixelZoom(viewportSize, sourceSize)
@@ -214,7 +221,7 @@ fun ImageViewer(
                 candidates = comparisonCandidates,
                 onBack = { chooseComparison = false },
                 onSelect = { candidate ->
-                    comparisonReference = candidate.reference
+                    comparisonCandidate = candidate
                     showingComparison = true
                     chooseComparison = false
                 },
@@ -307,6 +314,11 @@ fun ImageViewer(
                     if (comparisonReference == null && comparisonCandidates.isNotEmpty()) {
                         IconButton(onClick = { chooseComparison = true }) {
                             Icon(Icons.Default.CompareArrows, contentDescription = stringResource(R.string.image_compare))
+                        }
+                    }
+                    if (comparisonCandidate?.prompt != null && onComparePrompts != null) {
+                        IconButton(onClick = { onComparePrompts(comparisonCandidate!!) }) {
+                            Icon(Icons.Default.Description, contentDescription = stringResource(R.string.switch_to_prompt_comparison))
                         }
                     }
                     if (comparisonReference != null) {

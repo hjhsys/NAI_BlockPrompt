@@ -84,6 +84,8 @@
     <string name="settings_alternate_character_colors">Alternate character backgrounds</string>
     <string name="settings_alternate_character_colors_hint">Use two subtle neutral backgrounds in alternating character sections.</string>
     <string name="image_compare">Compare two images</string>
+    <string name="switch_to_prompt_comparison">Switch to prompt comparison</string>
+    <string name="switch_to_image_comparison">Switch to image comparison</string>
     <string name="image_compare_choose">Choose image B</string>
     <string name="image_compare_prompt_unavailable">No prompt preview</string>
     <string name="resolution">Resolution</string>
@@ -199,6 +201,8 @@
     <string name="autocomplete_failed">Some suggestions could not be loaded.</string>
     <string name="autocomplete_nai_failed">NAI suggestions are unavailable. Check your token or network.</string>
     <string name="autocomplete_danbooru_failed">Danbooru suggestions are unavailable. Check network access to danbooru.donmai.us.</string>
+    <string name="autocomplete_source_unavailable">Unavailable</string>
+    <string name="autocomplete_no_suggestions">No suggestions</string>
     <string name="settings_saved">Settings are saved automatically.</string>
     <string name="crash_log_share">Share crash log</string>
     <string name="crash_log_share_subject">NAI Block Prompt crash log</string>
@@ -402,6 +406,8 @@
     <string name="translation_import_unknown">Unknown tags: %1$d</string>
     <string name="translation_import_review">Marked for review: %1$d</string>
     <string name="translation_import_new_categories">Suggested categories (not created automatically): %1$s</string>
+    <string name="translation_import_excluded_details">Exclusion candidates (%1$d)</string>
+    <string name="translation_delete_candidates_with_count">Typo / review candidates (%1$d)</string>
     <string name="overwrite_existing_user_translation">Overwrite existing user translations and categories</string>
     <string name="apply_import">Apply</string>
     <string name="translation_export_options">Select tags to export</string>
@@ -572,6 +578,10 @@
     <string name="excluded_batch_confirm">Confirm %1$d</string>
     <string name="excluded_batch_unconfirm">Unconfirm %1$d</string>
     <string name="excluded_batch_restore">Restore %1$d</string>
+    <string name="exclude_selected_tags_title">Exclude selected tags?</string>
+    <string name="exclude_selected_tags_message">The %1$d selected tags will be hidden from tag search and autocomplete.</string>
+    <string name="exclude_selected_tags">Exclude</string>
+    <string name="exclude_selected_tags_with_count">Exclude selected (%1$d)</string>
     <string name="select_tags_for_ai">Select tags for AI translation</string>
     <string name="ai_translation_selected_count">Selected: %1$d</string>
     <string name="clear_selection">Clear</string>
@@ -629,7 +639,13 @@
     <string name="quick_edit_toolbar_below_selection">Below selected tag</string>
     <string name="quick_edit_toolbar_bottom">Fixed at bottom</string>
     <string name="settings_sticky_prompt_controls">Floating prompt editing tools</string>
-    <string name="settings_sticky_prompt_controls_hint">Show autocomplete and Undo/Quick edit controls at the bottom when the active block tools scroll off screen.</string>
+    <string name="settings_sticky_prompt_controls_hint">Show autocomplete and Undo/Quick edit controls as a popup when the active block tools scroll off screen.</string>
+    <string name="settings_prompt_editor_overlay_placement">Autocomplete and Undo popup position</string>
+    <string name="prompt_editor_overlay_top">Fixed top</string>
+    <string name="prompt_editor_overlay_bottom">Fixed bottom</string>
+    <string name="prompt_editor_overlay_dynamic">Dynamic</string>
+    <string name="settings_prompt_editor_overlay_placement_hint">Dynamic placement avoids the cursor and keyboard. Fixed placement always uses the selected edge of the visible area.</string>
+    <string name="quick_edit_toggle_weight_sign">Invert weight sign</string>
     <string name="settings_quick_edit_weight_step_hint">Default 0.1. Decimal values greater than zero are supported.</string>
     <string name="cut">Cut</string>
     <string name="quick_edit_copy">Copy</string>
@@ -668,6 +684,12 @@
     <string name="move_selected">Move</string>
     <string name="view_prompt">View prompt</string>
     <string name="prompt_view_title">Prompt used for generation</string>
+    <string name="current_prompt_preview">Preview current prompt</string>
+    <string name="current_prompt_preview_title">Current prompt preview</string>
+    <string name="current_prompt_preview_unavailable">Complete the required generation settings before previewing.</string>
+    <string name="preview_image_metadata">Preview prompt and settings</string>
+    <string name="import_metadata_preview_title">Prompt and settings in image</string>
+    <string name="metadata_value_unavailable">Not included</string>
     <string name="previous">Previous</string>
     <string name="next">Next</string>
     <string name="positive_short">P</string>

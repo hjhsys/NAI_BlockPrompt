@@ -100,6 +100,14 @@ class AutocompleteRepository(
         tagDao.upsertTagExclusion(entity)
     }
 
+    suspend fun excludeTags(canonicalTags: Collection<String>) {
+        canonicalTags
+            .map(TagExclusionPolicy::canonical)
+            .filter(String::isNotBlank)
+            .distinct()
+            .forEach { excludeTag(it) }
+    }
+
     suspend fun restoreExcludedTag(canonicalTag: String) {
         tagDao.deleteTagExclusion(TagExclusionPolicy.canonical(canonicalTag))
     }
