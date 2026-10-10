@@ -46,6 +46,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import android.content.Intent
 import com.hjhsys.naiblockprompt.data.diagnostics.CrashLogStore
 import com.hjhsys.naiblockprompt.data.library.HistoryStorageEstimator
@@ -315,6 +316,7 @@ private fun SettingsScreen(
     var showTagReset by rememberSaveable { mutableStateOf(false) }
     var tagResetAcknowledged by rememberSaveable { mutableStateOf(false) }
     val context = LocalContext.current
+    val resources = LocalResources.current
     val crashLogStore = remember(context) { CrashLogStore(context.applicationContext) }
     var crashLogAvailable by remember { mutableStateOf(crashLogStore.read() != null) }
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -336,9 +338,9 @@ private fun SettingsScreen(
             runCatching {
                 requireNotNull(context.contentResolver.openOutputStream(it)).use { output -> output.write(file.bytes) }
             }.onSuccess {
-                android.widget.Toast.makeText(context, context.getString(R.string.backup_export_succeeded), android.widget.Toast.LENGTH_SHORT).show()
+                android.widget.Toast.makeText(context, resources.getString(R.string.backup_export_succeeded), android.widget.Toast.LENGTH_SHORT).show()
             }.onFailure {
-                android.widget.Toast.makeText(context, context.getString(R.string.backup_export_failed), android.widget.Toast.LENGTH_LONG).show()
+                android.widget.Toast.makeText(context, resources.getString(R.string.backup_export_failed), android.widget.Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -627,10 +629,10 @@ private fun SettingsScreen(
                     context.startActivity(Intent.createChooser(
                         Intent(Intent.ACTION_SEND).apply {
                             type = "text/plain"
-                            putExtra(Intent.EXTRA_SUBJECT, context.getString(R.string.crash_log_share_subject))
+                            putExtra(Intent.EXTRA_SUBJECT, resources.getString(R.string.crash_log_share_subject))
                             putExtra(Intent.EXTRA_TEXT, report)
                         },
-                        context.getString(R.string.crash_log_share),
+                        resources.getString(R.string.crash_log_share),
                     ))
                 },
                 modifier = Modifier.weight(1f),

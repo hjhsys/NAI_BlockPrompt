@@ -6,7 +6,10 @@ import com.hjhsys.naiblockprompt.BuildConfig
 import java.io.File
 import java.io.PrintWriter
 import java.io.StringWriter
-import java.time.Instant
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 
 class CrashLogStore(private val context: Context) {
     private val crashFile: File
@@ -30,7 +33,7 @@ class CrashLogStore(private val context: Context) {
         }.toString()
         val report = buildString {
             appendLine("NAI Block Prompt crash report")
-            appendLine("Time (UTC): ${Instant.now()}")
+            appendLine("Time (UTC): ${currentUtcTimestamp()}")
             appendLine("App: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
             appendLine("Android: ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})")
             appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL}")
@@ -49,6 +52,11 @@ class CrashLogStore(private val context: Context) {
     companion object {
         private const val FILE_NAME = "last_crash.txt"
         private const val MAX_REPORT_CHARS = 200_000
+
+        private fun currentUtcTimestamp(): String =
+            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
+                timeZone = TimeZone.getTimeZone("UTC")
+            }.format(Date())
 
         internal fun redactSecrets(text: String): String = text
             .replace(Regex("(?i)(authorization\\s*[:=]\\s*bearer\\s+)[^\\s,;]+"), "$1<REDACTED>")

@@ -120,9 +120,26 @@ class LibraryRepository(
         ))
     }
 
-    suspend fun createFolder(name: String, kind: SavedFolderKind, order: Int) {
+    suspend fun createFolder(name: String, kind: SavedFolderKind, order: Int): SavedFolderEntity {
         val now = System.currentTimeMillis()
-        savedDao.upsertFolder(SavedFolderEntity(UUID.randomUUID().toString(), name, kind.name, order, now, now))
+        val folder = SavedFolderEntity(UUID.randomUUID().toString(), name, kind.name, order, now, now)
+        savedDao.upsertFolder(folder)
+        return folder
+    }
+
+    suspend fun ensureFolders(names: Collection<String>, kind: SavedFolderKind) {
+        val existing = savedDao.listFolders()
+        val existingNames = existing.filter { it.kind == kind.name }.map { it.name.lowercase() }.toSet()
+        val missingNames = names.map(String::trim)
+            .filter(String::isNotBlank)
+            .distinctBy(String::lowercase)
+            .filterNot { it.lowercase() in existingNames }
+        if (missingNames.isEmpty()) return
+        val now = System.currentTimeMillis()
+        val startOrder = existing.count { it.kind == kind.name }
+        savedDao.upsertFolders(missingNames.mapIndexed { index, name ->
+            SavedFolderEntity(UUID.randomUUID().toString(), name, kind.name, startOrder + index, now, now)
+        })
     }
 
     suspend fun deleteBlock(item: SavedBlockEntity) {
@@ -136,6 +153,8 @@ class LibraryRepository(
     suspend fun movePresets(items: List<PresetEntity>, folderId: String?) = savedDao.upsertPresets(items.map { it.copy(folderId = folderId, updatedAt = System.currentTimeMillis()) })
     suspend fun moveSets(items: List<SavedSetEntity>, folderId: String?) = savedDao.upsertSets(items.map { it.copy(folderId = folderId, updatedAt = System.currentTimeMillis()) })
     suspend fun deleteFolder(item: SavedFolderEntity) = savedDao.deleteFolder(item)
+    suspend fun renameFolder(item: SavedFolderEntity, name: String) =
+        savedDao.upsertFolder(item.copy(name = name, updatedAt = System.currentTimeMillis()))
     suspend fun deletePreset(item: PresetEntity) {
         savedDao.deletePreset(item)
         item.thumbnailPath?.let(::File)?.delete()
@@ -188,6 +207,7 @@ class LibraryRepository(
             SavedFolderKind.BLOCK -> savedDao.setBlockThumbnail(id, path, now)
             SavedFolderKind.SET -> savedDao.setSetThumbnail(id, path, now)
             SavedFolderKind.PRESET -> savedDao.setPresetThumbnail(id, path, now)
+            SavedFolderKind.WILDCARD -> Unit
         }
     }
 

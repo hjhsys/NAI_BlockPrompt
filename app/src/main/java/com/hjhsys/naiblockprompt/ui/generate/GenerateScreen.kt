@@ -99,6 +99,7 @@ import com.hjhsys.naiblockprompt.domain.prompt.PromptProcessor
 import com.hjhsys.naiblockprompt.domain.prompt.PromptTokenEstimator
 import com.hjhsys.naiblockprompt.domain.prompt.TokenRange
 import com.hjhsys.naiblockprompt.ui.MainViewModel
+import com.hjhsys.naiblockprompt.ui.RestoreOptions
 import com.hjhsys.naiblockprompt.ui.TagInsertReturnTarget
 import com.hjhsys.naiblockprompt.ui.GenerationUiState
 import com.hjhsys.naiblockprompt.ui.components.AppTitleBar
@@ -111,6 +112,7 @@ import com.hjhsys.naiblockprompt.ui.components.quotaStatusText
 import com.hjhsys.naiblockprompt.ui.components.ImageCardActions
 import com.hjhsys.naiblockprompt.ui.components.ImageViewer
 import com.hjhsys.naiblockprompt.ui.components.ImageCompareCandidate
+import com.hjhsys.naiblockprompt.ui.components.imageReferenceModel
 import com.hjhsys.naiblockprompt.data.network.nai.NaiApiFailure
 import com.hjhsys.naiblockprompt.domain.generation.MissingGenerationField
 import com.hjhsys.naiblockprompt.domain.generation.NaiCatalogOption
@@ -128,6 +130,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import com.hjhsys.naiblockprompt.domain.image.NaiImageMetadata
 import com.hjhsys.naiblockprompt.domain.image.NaiPngMetadataParser
 import kotlinx.coroutines.Dispatchers
@@ -137,6 +140,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import com.hjhsys.naiblockprompt.domain.autocomplete.PromptAutocomplete
 import com.hjhsys.naiblockprompt.domain.autocomplete.PromptFragment
+import com.hjhsys.naiblockprompt.domain.autocomplete.SuggestionSource
 import com.hjhsys.naiblockprompt.domain.autocomplete.TagSuggestion
 import com.hjhsys.naiblockprompt.ui.library.RestoreDialog
 import com.hjhsys.naiblockprompt.ui.database.TagEditDialog
@@ -184,10 +188,12 @@ private enum class AutocompleteDisplaySource(@param:StringRes val label: Int) {
     LOCAL(R.string.autocomplete_local_row),
     NOVEL_AI(R.string.autocomplete_nai_row),
     DANBOORU(R.string.autocomplete_danbooru_row),
+    WILDCARD(R.string.autocomplete_wildcard_row),
     ;
 
     fun shifted(delta: Int): AutocompleteDisplaySource {
-        val values = entries
+        if (this == WILDCARD) return WILDCARD
+        val values = entries.filterNot { it == WILDCARD }
         return values[(ordinal + delta).mod(values.size)]
     }
 }
@@ -1004,6 +1010,7 @@ private fun ColorHelperSheet(
     var showFavoriteList by rememberSaveable { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
+    val resources = LocalResources.current
     fun currentHex(): String = String.format("#%06X", android.graphics.Color.HSVToColor(floatArrayOf(hue, saturation, value)) and 0xFFFFFF)
     fun syncHex() { hexInput = currentHex(); invalidHex = false }
     fun applyHex(raw: String) {
@@ -1074,7 +1081,7 @@ private fun ColorHelperSheet(
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
                   FilledTonalIconButton(onClick = {
                     val hex = currentHex(); clipboard.setText(AnnotatedString(hex)); onUsed(hex)
-                    android.widget.Toast.makeText(context, context.getString(R.string.color_copied, hex), android.widget.Toast.LENGTH_SHORT).show()
+                    android.widget.Toast.makeText(context, resources.getString(R.string.color_copied, hex), android.widget.Toast.LENGTH_SHORT).show()
                   }) { Icon(Icons.Default.ContentCopy, stringResource(R.string.copy_color)) }
                   Text(stringResource(R.string.copy_color), style = MaterialTheme.typography.labelSmall)
                 }
@@ -1458,6 +1465,7 @@ private fun GenerationCard(
             reference = record.imagePath,
             comparisonCandidates = comparisonCandidates,
             initialComparison = initialImageComparison,
+            startFullscreen = true,
             onComparePrompts = { candidate ->
                 val comparedPrompt = candidate.prompt ?: return@ImageViewer
                 initialPromptComparison = PromptCompareCandidate(
@@ -1566,6 +1574,7 @@ fun ResultScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onRestore
     val history by viewModel.history.collectAsStateWithLifecycle()
     val subscriptionStatus by viewModel.subscriptionStatus.collectAsStateWithLifecycle()
     val session by viewModel.session.collectAsStateWithLifecycle()
+    val appSettings by viewModel.settings.collectAsStateWithLifecycle()
     val modelSummary = compactModelName(session?.generationSettings?.modelId)
     val seedSummary = session?.let { stringResource(if (it.generationSettings.seedMode == SeedMode.RANDOM) R.string.seed_status_random else R.string.seed_status_fixed) }
     val resultHistory = currentResult?.let { result -> history.firstOrNull { it.entity.imagePath == result.imagePath } }
@@ -1588,7 +1597,7 @@ fun ResultScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onRestore
     var restore by remember { mutableStateOf<com.hjhsys.naiblockprompt.data.library.HistoryItem?>(null) }
     var cherryPick by remember { mutableStateOf<PromptCherryPickDraft?>(null) }
     restore?.let { item ->
-        RestoreDialog(item, dismiss = { restore = null }) { options ->
+        RestoreDialog(item, RestoreOptions.from(appSettings.promptImportPreferences), dismiss = { restore = null }) { options ->
             viewModel.restoreHistory(item, options)
             restore = null
             onRestored()
@@ -1759,7 +1768,7 @@ private fun PromptComparePicker(
                         ElevatedCard(Modifier.fillMaxWidth().clickable { select(candidate) }) {
                             Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                                 AsyncImage(
-                                    model = File(candidate.thumbnailPath),
+                                    model = imageReferenceModel(candidate.thumbnailPath),
                                     contentDescription = stringResource(R.string.generated_image),
                                     modifier = Modifier.size(92.dp),
                                     contentScale = ContentScale.Crop,
@@ -2580,6 +2589,7 @@ private fun PromptBlockCard(
     val focusManager = LocalFocusManager.current
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
+    val resources = LocalResources.current
     val quickEditScope = rememberCoroutineScope()
     val autocomplete by viewModel.autocomplete.collectAsStateWithLifecycle()
     val autocompleteScrollStates = rememberAutocompleteRowScrollStates()
@@ -3081,13 +3091,13 @@ private fun PromptBlockCard(
                                 when {
                                     !selection.collapsed -> android.widget.Toast.makeText(
                                         context,
-                                        context.getString(R.string.split_block_selection_error),
+                                        resources.getString(R.string.split_block_selection_error),
                                         android.widget.Toast.LENGTH_SHORT,
                                     ).show()
                                     PromptProcessor.splitAtTopLevelBoundary(editorValue.text, selection.end) == null ->
                                         android.widget.Toast.makeText(
                                             context,
-                                            context.getString(R.string.split_block_boundary_error),
+                                            resources.getString(R.string.split_block_boundary_error),
                                             android.widget.Toast.LENGTH_SHORT,
                                         ).show()
                                     else -> viewModel.splitBlockAtCursor(
@@ -3109,7 +3119,7 @@ private fun PromptBlockCard(
                                 if (previousBlock?.enabled != block.enabled) {
                                     android.widget.Toast.makeText(
                                         context,
-                                        context.getString(R.string.merge_block_enabled_mismatch),
+                                        resources.getString(R.string.merge_block_enabled_mismatch),
                                         android.widget.Toast.LENGTH_SHORT,
                                     ).show()
                                 } else {
@@ -3725,29 +3735,30 @@ private fun AutocompleteSuggestions(
             )
         }
     }
-    val localSuggestions = remember(wildcards, local) {
-        (wildcards + local).distinctBy { it.tag }
-    }
-    val suggestions = when (selectedSource) {
-        AutocompleteDisplaySource.LOCAL -> localSuggestions
+    val effectiveSource = if (wildcards.isNotEmpty()) AutocompleteDisplaySource.WILDCARD else selectedSource
+    val suggestions = when (effectiveSource) {
+        AutocompleteDisplaySource.LOCAL -> local
         AutocompleteDisplaySource.NOVEL_AI -> novelAi
         AutocompleteDisplaySource.DANBOORU -> danbooru
+        AutocompleteDisplaySource.WILDCARD -> wildcards
     }
-    val rowState = when (selectedSource) {
+    val rowState = when (effectiveSource) {
         AutocompleteDisplaySource.LOCAL -> rowScrollStates.local
         AutocompleteDisplaySource.NOVEL_AI -> rowScrollStates.novelAi
         AutocompleteDisplaySource.DANBOORU -> rowScrollStates.danbooru
+        AutocompleteDisplaySource.WILDCARD -> rowScrollStates.wildcards
     }
-    val failed = when (selectedSource) {
+    val failed = when (effectiveSource) {
         AutocompleteDisplaySource.LOCAL -> false
         AutocompleteDisplaySource.NOVEL_AI -> novelAiFailed
         AutocompleteDisplaySource.DANBOORU -> danbooruFailed
+        AutocompleteDisplaySource.WILDCARD -> false
     }
     SuggestionRow(
-        source = selectedSource,
+        source = effectiveSource,
         suggestions = suggestions,
         rowState = rowState,
-        loading = loading && selectedSource != AutocompleteDisplaySource.LOCAL,
+        loading = loading && effectiveSource != AutocompleteDisplaySource.LOCAL && effectiveSource != AutocompleteDisplaySource.WILDCARD,
         failed = failed,
         onSourceChange = onSourceChange,
         onSelect = onSelect,
@@ -3872,7 +3883,13 @@ private fun SuggestionRow(
                     items(suggestions, key = { "${it.source}:${it.tag}" }) { suggestion ->
                         SuggestionChip(
                             onClick = { onSelect(suggestion) },
-                            label = { Text(suggestion.tag.replace('_', ' '), fontSize = 12.sp, maxLines = 1) },
+                            label = {
+                                Text(
+                                    if (suggestion.source == SuggestionSource.WILDCARD) suggestion.tag else suggestion.tag.replace('_', ' '),
+                                    fontSize = 12.sp,
+                                    maxLines = 1,
+                                )
+                            },
                         )
                     }
                 }
@@ -3891,6 +3908,7 @@ private fun SuggestionRow(
 @Composable
 private fun GenerationSettingsCard(session: Session, viewModel: MainViewModel, onMetadataImported: () -> Unit) {
     val settings = session.generationSettings
+    val appSettings by viewModel.settings.collectAsStateWithLifecycle()
     var cherryDraft by remember { mutableStateOf<PromptCherryPickDraft?>(null) }
     var activeSlider by rememberSaveable { mutableStateOf<Int?>(null) }
     var advancedExpanded by rememberSaveable { mutableStateOf(false) }
@@ -3913,12 +3931,13 @@ private fun GenerationSettingsCard(session: Session, viewModel: MainViewModel, o
                 runCatching { context.contentResolver.openInputStream(Uri.parse(uri))?.use { NaiPngMetadataParser.parse(it.readBytes()) } }.getOrNull()
             }
         }
-        var includePrompt by rememberSaveable(uri) { mutableStateOf(true) }
-        var includeNegative by rememberSaveable(uri) { mutableStateOf(true) }
-        var includeCharacters by rememberSaveable(uri) { mutableStateOf(true) }
-        var characterImportMode by rememberSaveable(uri) { mutableStateOf(CharacterImportMode.REPLACE) }
-        var includeSettings by rememberSaveable(uri) { mutableStateOf(true) }
-        var includeSeed by rememberSaveable(uri) { mutableStateOf(true) }
+        val importDefaults = appSettings.promptImportPreferences
+        var includePrompt by rememberSaveable(uri, importDefaults) { mutableStateOf(importDefaults.basePositive) }
+        var includeNegative by rememberSaveable(uri, importDefaults) { mutableStateOf(importDefaults.baseNegative) }
+        var includeCharacters by rememberSaveable(uri, importDefaults) { mutableStateOf(importDefaults.characters) }
+        var characterImportMode by rememberSaveable(uri, importDefaults) { mutableStateOf(if (importDefaults.appendCharacters) CharacterImportMode.APPEND else CharacterImportMode.REPLACE) }
+        var includeSettings by rememberSaveable(uri, importDefaults) { mutableStateOf(importDefaults.settings) }
+        var includeSeed by rememberSaveable(uri, importDefaults) { mutableStateOf(importDefaults.seed) }
         var showMetadataPreview by rememberSaveable(uri) { mutableStateOf(false) }
         val importedBlockName = stringResource(R.string.imported_block_name)
         if (showMetadataPreview && metadata != null) {

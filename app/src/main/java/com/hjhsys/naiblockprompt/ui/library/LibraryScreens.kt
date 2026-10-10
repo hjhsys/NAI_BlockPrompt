@@ -35,6 +35,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import android.widget.Toast
@@ -53,6 +54,8 @@ import com.hjhsys.naiblockprompt.ui.generate.compactModelName
 import com.hjhsys.naiblockprompt.ui.components.ImageCardActions
 import com.hjhsys.naiblockprompt.ui.components.ImageViewer
 import com.hjhsys.naiblockprompt.ui.components.ImageCompareCandidate
+import com.hjhsys.naiblockprompt.ui.components.FolderChoice
+import com.hjhsys.naiblockprompt.ui.components.FolderSelectionDialog
 import com.hjhsys.naiblockprompt.domain.editor.BaseSetImportSelection
 import com.hjhsys.naiblockprompt.domain.editor.PromptOwner
 import com.hjhsys.naiblockprompt.domain.editor.PromptCherryPick
@@ -70,6 +73,15 @@ import kotlinx.coroutines.launch
 
 @Composable
 fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, isActive: Boolean = true, onRestored: () -> Unit, headerTokenSummary: String? = null) {
+    var showGallery by rememberSaveable { mutableStateOf(false) }
+    if (showGallery) {
+        GeneratedGalleryScreen(
+            viewModel = viewModel,
+            onBack = { showGallery = false },
+            onImported = { showGallery = false; onRestored() },
+        )
+        return
+    }
     val history by viewModel.history.collectAsState()
     val subscriptionStatus by viewModel.subscriptionStatus.collectAsState()
     val session by viewModel.session.collectAsState()
@@ -95,7 +107,13 @@ fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, isActive
     var deleteOriginal by remember { mutableStateOf(false) }
     var deleteFailed by remember { mutableStateOf(false) }
     actionImage?.let { item -> com.hjhsys.naiblockprompt.ui.components.ImageActionsDialog(item.entity.imagePath, viewModel) { actionImage = null } }
-    restore?.let { item -> RestoreDialog(item, { restore = null }) { options -> viewModel.restoreHistory(item, options); restore = null; onRestored() } }
+    restore?.let { item ->
+        RestoreDialog(
+            item = item,
+            initialOptions = RestoreOptions.from(settings.promptImportPreferences),
+            dismiss = { restore = null },
+        ) { options -> viewModel.restoreHistory(item, options); restore = null; onRestored() }
+    }
     cherryPick?.let { draft -> session?.let { current ->
         PromptCherryPickDialog(current, draft, dismiss = { cherryPick = null }) { blocks, selected, destination ->
             viewModel.appendCherryPickedSelection(blocks, selected, destination)
@@ -236,6 +254,10 @@ fun HistoryScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, isActive
                     leadingIcon = { Icon(Icons.Default.Favorite, contentDescription = null, modifier = Modifier.size(16.dp)) },
                     modifier = Modifier.height(32.dp),
                 )
+                Spacer(Modifier.weight(1f))
+                IconButton(onClick = { showGallery = true }, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Default.Folder, stringResource(R.string.gallery_open), modifier = Modifier.size(20.dp))
+                }
             }
         }
         LazyColumn(
@@ -341,14 +363,15 @@ private fun PromptViewSection(title: String, value: String) {
 }
 
 @Composable
-internal fun RestoreDialog(item: HistoryItem, dismiss: () -> Unit, confirm: (RestoreOptions) -> Unit) {
-    var settings by rememberSaveable { mutableStateOf(true) }
-    var basePositive by rememberSaveable { mutableStateOf(true) }
-    var baseNegative by rememberSaveable { mutableStateOf(true) }
-    var characters by rememberSaveable { mutableStateOf(true) }; var seed by rememberSaveable { mutableStateOf(true) }
-    var inputImage by rememberSaveable { mutableStateOf(false) }
-    var wildcardOriginal by rememberSaveable { mutableStateOf(true) }
-    var characterMode by rememberSaveable { mutableStateOf(CharacterImportMode.REPLACE) }
+internal fun RestoreDialog(item: HistoryItem, initialOptions: RestoreOptions, dismiss: () -> Unit, confirm: (RestoreOptions) -> Unit) {
+    var settings by rememberSaveable(item.entity.id, initialOptions) { mutableStateOf(initialOptions.settings) }
+    var basePositive by rememberSaveable(item.entity.id, initialOptions) { mutableStateOf(initialOptions.basePositive) }
+    var baseNegative by rememberSaveable(item.entity.id, initialOptions) { mutableStateOf(initialOptions.baseNegative) }
+    var characters by rememberSaveable(item.entity.id, initialOptions) { mutableStateOf(initialOptions.characters) }
+    var seed by rememberSaveable(item.entity.id, initialOptions) { mutableStateOf(initialOptions.seed) }
+    var inputImage by rememberSaveable(item.entity.id, initialOptions) { mutableStateOf(initialOptions.inputImage) }
+    var wildcardOriginal by rememberSaveable(item.entity.id, initialOptions) { mutableStateOf(initialOptions.wildcardOriginal) }
+    var characterMode by rememberSaveable(item.entity.id, initialOptions) { mutableStateOf(initialOptions.characterMode) }
     val hasWildcard = item.snapshot?.session?.let { snapshot ->
         (snapshot.base.prompts.positiveBlocks + snapshot.base.prompts.negativeBlocks + snapshot.characters.flatMap { it.prompts.positiveBlocks + it.prompts.negativeBlocks }).any { "__" in it.content }
     } == true
@@ -420,6 +443,7 @@ fun SavedScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onWorkflow
     val tab = pagerState.currentPage
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
+    val resources = LocalResources.current
     var search by rememberSaveable { mutableStateOf("") }
     var searchScope by rememberSaveable { mutableStateOf(SavedSearchScope.TITLE_ONLY) }
     var searchMenuExpanded by remember { mutableStateOf(false) }
@@ -433,7 +457,6 @@ fun SavedScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onWorkflow
     var movingBlock by remember { mutableStateOf<com.hjhsys.naiblockprompt.data.local.entity.SavedBlockEntity?>(null) }
     var movingPreset by remember { mutableStateOf<com.hjhsys.naiblockprompt.data.local.entity.PresetEntity?>(null) }
     var movingSet by remember { mutableStateOf<com.hjhsys.naiblockprompt.data.local.entity.SavedSetEntity?>(null) }
-    var deletingFolder by remember { mutableStateOf<SavedFolderEntity?>(null) }
     var selectionMode by remember { mutableStateOf(false) }
     var selectedIds by remember { mutableStateOf(emptySet<String>()) }
     var bulkMove by remember { mutableStateOf(false) }
@@ -508,77 +531,97 @@ fun SavedScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onWorkflow
         selectedIds = emptySet()
     }
     if (folderDialog) NameDialog(R.string.new_folder, { folderDialog = false }) { viewModel.createFolder(it, folderKind); folderDialog = false }
-    if (folderSelector) AlertDialog(
-        onDismissRequest = { folderSelector = false },
-        title = { Text(stringResource(R.string.select_folder_filter)) },
-        text = {
-            LazyColumn(Modifier.heightIn(max = 420.dp)) {
-                if (!isSaveWorkflow) item {
-                    ListItem(
-                        headlineContent = { Text(stringResource(R.string.all_folders)) },
-                        leadingContent = { Icon(Icons.Default.Home, null) },
-                        trailingContent = { if (folderFilter == "ALL") Icon(Icons.Default.Check, null) },
-                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                        modifier = Modifier.clickable { folderFilter = "ALL"; folderSelector = false },
-                    )
-                }
-                if (!isSaveWorkflow) item {
-                    ListItem(
-                        headlineContent = { Text(stringResource(when (tab) { 0 -> R.string.library_root_blocks; 1 -> R.string.library_root_sets; else -> R.string.library_root_presets })) },
-                        leadingContent = { Icon(Icons.Default.Folder, null) },
-                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                        modifier = Modifier.clickable { folderFilter = "ALL"; folderSelector = false },
-                    )
-                }
-                item {
-                    ListItem(
-                        headlineContent = { Text(stringResource(R.string.no_folder)) },
-                        leadingContent = { Icon(Icons.Default.SubdirectoryArrowRight, null) },
-                        trailingContent = { if (folderFilter == "NONE") Icon(Icons.Default.Check, null) },
-                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                        modifier = Modifier.padding(start = 24.dp).clickable { folderFilter = "NONE"; folderSelector = false },
-                    )
-                }
-                items(visibleFolders, key = { it.id }) { folder ->
-                    Row(Modifier.fillMaxWidth().padding(start = 24.dp), verticalAlignment = Alignment.CenterVertically) {
-                        ListItem(
-                            headlineContent = { Text(folder.name) },
-                            leadingContent = { Icon(Icons.Default.SubdirectoryArrowRight, null) },
-                            trailingContent = { if (folderFilter == folder.id) Icon(Icons.Default.Check, null) },
-                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                            modifier = Modifier.weight(1f).clickable { folderFilter = folder.id; folderSelector = false },
-                        )
-                        IconButton(onClick = { folderSelector = false; deletingFolder = folder }) { Icon(Icons.Default.DeleteOutline, stringResource(R.string.delete)) }
-                    }
-                }
-            }
-        },
-        confirmButton = {},
-        dismissButton = { TextButton(onClick = { folderSelector = false }) { Text(stringResource(R.string.cancel)) } },
-    )
+    val assignmentRootLabel = stringResource(when (folderKind) {
+        SavedFolderKind.BLOCK -> R.string.library_root_blocks
+        SavedFolderKind.SET -> R.string.library_root_sets
+        SavedFolderKind.PRESET -> R.string.library_root_presets
+        SavedFolderKind.WILDCARD -> R.string.wildcards_tab
+    })
+    val folderItemCounts = when (folderKind) {
+        SavedFolderKind.BLOCK -> blocks.mapNotNull { it.folderId }
+        SavedFolderKind.SET -> sets.mapNotNull { it.entity.folderId }
+        SavedFolderKind.PRESET -> presets.mapNotNull { it.entity.folderId }
+        SavedFolderKind.WILDCARD -> emptyList()
+    }.groupingBy { it }.eachCount()
+    val assignmentFolders = visibleFolders.map { FolderChoice(it.id, it.name, folderItemCounts[it.id] ?: 0) }
+    if (folderSelector) {
+        FolderSelectionDialog(
+            rootLabel = assignmentRootLabel,
+            folders = assignmentFolders,
+            selectedId = folderFilter.takeUnless { it == "ALL" || it == "NONE" },
+            onSelect = { folderFilter = it ?: "NONE"; folderSelector = false },
+            onCreateFolder = { name -> viewModel.createFolder(name, folderKind) { folder -> folderFilter = folder.id; folderSelector = false } },
+            onDismiss = { folderSelector = false },
+            showAll = !isSaveWorkflow,
+            allSelected = folderFilter == "ALL",
+            onSelectAll = { folderFilter = "ALL"; folderSelector = false },
+            onDeleteFolder = { choice ->
+                visibleFolders.firstOrNull { it.id == choice.id }?.let(viewModel::deleteFolder)
+                if (folderFilter == choice.id) folderFilter = if (isSaveWorkflow) "NONE" else "ALL"
+            },
+            onRenameFolder = { choice, name -> visibleFolders.firstOrNull { it.id == choice.id }?.let { viewModel.renameFolder(it, name) } },
+            noFolderSelected = folderFilter == "NONE",
+        )
+    }
     if (overwriteWorkflow) AlertDialog(onDismissRequest = { overwriteWorkflow = false }, title = { Text(stringResource(R.string.overwrite_title)) }, text = { Text(stringResource(R.string.overwrite_message, workflowName.trim())) }, confirmButton = { Button(onClick = { overwriteWorkflow = false; when (workflow) { is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SavePreset -> viewModel.finishPresetSave(workflowName, selectedSaveFolderId); is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveSet -> viewModel.finishSetSave(workflowName, selectedSaveFolderId); else -> viewModel.finishBlockSave(workflowName, selectedSaveFolderId) }; onWorkflowFinished() }) { Text(stringResource(R.string.overwrite)) } }, dismissButton = { TextButton(onClick = { overwriteWorkflow = false }) { Text(stringResource(R.string.cancel)) } })
-    deletingFolder?.let { folder -> AlertDialog(onDismissRequest = { deletingFolder = null }, title = { Text(stringResource(R.string.delete_folder_title)) }, text = { Text(stringResource(R.string.delete_folder_message, folder.name)) }, confirmButton = { TextButton(onClick = { viewModel.deleteFolder(folder); if (folderFilter == folder.id) folderFilter = "ALL"; deletingFolder = null }) { Text(stringResource(R.string.delete), color = MaterialTheme.colorScheme.error) } }, dismissButton = { TextButton(onClick = { deletingFolder = null }) { Text(stringResource(R.string.cancel)) } }) }
-    movingBlock?.let { block -> AlertDialog(onDismissRequest = { movingBlock = null }, title = { Text(stringResource(R.string.choose_folder)) }, text = { Column { TextButton(onClick = { viewModel.moveSavedBlock(block, null); movingBlock = null }) { Text(stringResource(R.string.no_folder)) }; visibleFolders.forEach { folder -> TextButton(onClick = { viewModel.moveSavedBlock(block, folder.id); movingBlock = null }) { Text(folder.name) } } } }, confirmButton = {}) }
-    movingPreset?.let { preset -> AlertDialog(onDismissRequest = { movingPreset = null }, title = { Text(stringResource(R.string.choose_folder)) }, text = { Column { TextButton(onClick = { viewModel.movePreset(preset, null); movingPreset = null }) { Text(stringResource(R.string.no_folder)) }; visibleFolders.forEach { folder -> TextButton(onClick = { viewModel.movePreset(preset, folder.id); movingPreset = null }) { Text(folder.name) } } } }, confirmButton = {}) }
-    movingSet?.let { set -> AlertDialog(onDismissRequest = { movingSet = null }, title = { Text(stringResource(R.string.choose_folder)) }, text = { Column { TextButton(onClick = { viewModel.moveSavedSet(set, null); movingSet = null }) { Text(stringResource(R.string.no_folder)) }; visibleFolders.forEach { folder -> TextButton(onClick = { viewModel.moveSavedSet(set, folder.id); movingSet = null }) { Text(folder.name) } } } }, confirmButton = {}) }
-    if (bulkMove) AlertDialog(
-        onDismissRequest = { bulkMove = false },
-        title = { Text(stringResource(R.string.choose_folder)) },
-        text = { Column {
-            fun move(folderId: String?) {
-                when (tab) {
-                    0 -> viewModel.moveSavedBlocks(blocks.filter { it.id in selectedIds }, folderId)
-                    1 -> viewModel.moveSavedSets(sets.map { it.entity }.filter { it.id in selectedIds }, folderId)
-                    else -> viewModel.movePresets(presets.map { it.entity }.filter { it.id in selectedIds }, folderId)
-                }
-                bulkMove = false; selectionMode = false; selectedIds = emptySet()
+    movingBlock?.let { block ->
+        FolderSelectionDialog(
+            rootLabel = assignmentRootLabel,
+            folders = assignmentFolders,
+            selectedId = block.folderId,
+            onSelect = { viewModel.moveSavedBlock(block, it); movingBlock = null },
+            onCreateFolder = { name -> viewModel.createFolder(name, folderKind) { folder -> viewModel.moveSavedBlock(block, folder.id); movingBlock = null } },
+            onDismiss = { movingBlock = null },
+            onDeleteFolder = { choice -> visibleFolders.firstOrNull { it.id == choice.id }?.let(viewModel::deleteFolder) },
+            onRenameFolder = { choice, name -> visibleFolders.firstOrNull { it.id == choice.id }?.let { viewModel.renameFolder(it, name) } },
+        )
+    }
+    movingPreset?.let { preset ->
+        FolderSelectionDialog(
+            rootLabel = assignmentRootLabel,
+            folders = assignmentFolders,
+            selectedId = preset.folderId,
+            onSelect = { viewModel.movePreset(preset, it); movingPreset = null },
+            onCreateFolder = { name -> viewModel.createFolder(name, folderKind) { folder -> viewModel.movePreset(preset, folder.id); movingPreset = null } },
+            onDismiss = { movingPreset = null },
+            onDeleteFolder = { choice -> visibleFolders.firstOrNull { it.id == choice.id }?.let(viewModel::deleteFolder) },
+            onRenameFolder = { choice, name -> visibleFolders.firstOrNull { it.id == choice.id }?.let { viewModel.renameFolder(it, name) } },
+        )
+    }
+    movingSet?.let { set ->
+        FolderSelectionDialog(
+            rootLabel = assignmentRootLabel,
+            folders = assignmentFolders,
+            selectedId = set.folderId,
+            onSelect = { viewModel.moveSavedSet(set, it); movingSet = null },
+            onCreateFolder = { name -> viewModel.createFolder(name, folderKind) { folder -> viewModel.moveSavedSet(set, folder.id); movingSet = null } },
+            onDismiss = { movingSet = null },
+            onDeleteFolder = { choice -> visibleFolders.firstOrNull { it.id == choice.id }?.let(viewModel::deleteFolder) },
+            onRenameFolder = { choice, name -> visibleFolders.firstOrNull { it.id == choice.id }?.let { viewModel.renameFolder(it, name) } },
+        )
+    }
+    if (bulkMove) {
+        fun moveSelected(folderId: String?) {
+            when (tab) {
+                0 -> viewModel.moveSavedBlocks(blocks.filter { it.id in selectedIds }, folderId)
+                1 -> viewModel.moveSavedSets(sets.map { it.entity }.filter { it.id in selectedIds }, folderId)
+                else -> viewModel.movePresets(presets.map { it.entity }.filter { it.id in selectedIds }, folderId)
             }
-            TextButton(onClick = { move(null) }) { Text(stringResource(R.string.no_folder)) }
-            visibleFolders.forEach { folder -> TextButton(onClick = { move(folder.id) }) { Text(folder.name) } }
-        } },
-        confirmButton = {},
-        dismissButton = { TextButton(onClick = { bulkMove = false }) { Text(stringResource(R.string.cancel)) } },
-    )
+            bulkMove = false
+            selectionMode = false
+            selectedIds = emptySet()
+        }
+        FolderSelectionDialog(
+            rootLabel = assignmentRootLabel,
+            folders = assignmentFolders,
+            selectedId = null,
+            onSelect = ::moveSelected,
+            onCreateFolder = { name -> viewModel.createFolder(name, folderKind) { folder -> moveSelected(folder.id) } },
+            onDismiss = { bulkMove = false },
+            onDeleteFolder = { choice -> visibleFolders.firstOrNull { it.id == choice.id }?.let(viewModel::deleteFolder) },
+            onRenameFolder = { choice, name -> visibleFolders.firstOrNull { it.id == choice.id }?.let { viewModel.renameFolder(it, name) } },
+        )
+    }
     val submitSave = {
         when (val active = workflow) {
             is com.hjhsys.naiblockprompt.ui.SavedWorkflow.SaveBlock -> {
@@ -653,7 +696,7 @@ fun SavedScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onWorkflow
             OutlinedButton(onClick = { folderSelector = true }, modifier = Modifier.weight(1f)) {
                 Icon(Icons.Default.FolderOpen, null)
                 Spacer(Modifier.width(6.dp))
-                Text(when (folderFilter) { "ALL" -> stringResource(R.string.all_folders); "NONE" -> stringResource(R.string.no_folder); else -> visibleFolders.firstOrNull { it.id == folderFilter }?.name ?: stringResource(R.string.all_folders) }, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(when (folderFilter) { "ALL" -> assignmentRootLabel; "NONE" -> stringResource(R.string.no_folder); else -> visibleFolders.firstOrNull { it.id == folderFilter }?.name ?: assignmentRootLabel }, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.weight(1f))
                 Icon(Icons.Default.ArrowDropDown, null)
             }
@@ -694,7 +737,7 @@ fun SavedScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit, onWorkflow
                             }
                             Row {
                                 if (workflow is com.hjhsys.naiblockprompt.ui.SavedWorkflow.LoadBlock) Button(onClick = { viewModel.finishBlockLoad(block); onWorkflowFinished() }) { Text(stringResource(R.string.load)) }
-                                else TextButton(onClick = { clipboard.setText(AnnotatedString(block.content)); Toast.makeText(context, context.getString(R.string.copied), Toast.LENGTH_SHORT).show() }) { Text(stringResource(R.string.copy)) }
+                                else TextButton(onClick = { clipboard.setText(AnnotatedString(block.content)); Toast.makeText(context, resources.getString(R.string.copied), Toast.LENGTH_SHORT).show() }) { Text(stringResource(R.string.copy)) }
                                 TextButton(onClick = { movingBlock = block }) { Text(visibleFolders.firstOrNull { it.id == block.folderId }?.name ?: stringResource(R.string.no_folder)) }
                                 IconButton(onClick = { viewModel.deleteSavedBlock(block) }) { Icon(Icons.Default.Delete, stringResource(R.string.delete)) }
                             }

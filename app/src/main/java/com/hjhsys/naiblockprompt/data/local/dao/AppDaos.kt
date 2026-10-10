@@ -70,6 +70,41 @@ interface HistoryDao {
     @Query("UPDATE history_entries SET favorite = :favorite WHERE id = :id")
     suspend fun setFavorite(id: String, favorite: Boolean)
     @Delete suspend fun delete(entity: HistoryEntryEntity)
+    @Query("SELECT * FROM history_entries WHERE imagePath = :imagePath LIMIT 1")
+    suspend fun findByImagePath(imagePath: String): HistoryEntryEntity?
+}
+
+@Dao
+interface GalleryDao {
+    @Query("""
+        SELECT * FROM gallery_images
+        WHERE folderKey = :folderKey
+          AND createdAt BETWEEN :startAt AND :endAt
+          AND (:searchTag = '' OR searchTags LIKE '%' || :searchTag || '%')
+          AND (:model = '' OR model = :model)
+          AND (:sampler = '' OR sampler = :sampler)
+          AND (:steps IS NULL OR steps = :steps)
+          AND (:scale IS NULL OR ABS(scale - :scale) < 0.0001)
+          AND (:guidanceRescale IS NULL OR ABS(guidanceRescale - :guidanceRescale) < 0.0001)
+        ORDER BY createdAt DESC
+    """)
+    fun observeFiltered(folderKey: String, startAt: Long, endAt: Long, searchTag: String, model: String, sampler: String, steps: Int?, scale: Float?, guidanceRescale: Float?): Flow<List<GalleryImageEntity>>
+
+    @Query("SELECT DISTINCT model FROM gallery_images WHERE folderKey = :folderKey AND model IS NOT NULL AND model != '' ORDER BY model")
+    fun observeModels(folderKey: String): Flow<List<String>>
+    @Query("SELECT DISTINCT sampler FROM gallery_images WHERE folderKey = :folderKey AND sampler IS NOT NULL AND sampler != '' ORDER BY sampler")
+    fun observeSamplers(folderKey: String): Flow<List<String>>
+    @Query("SELECT MIN(createdAt) AS oldest, MAX(createdAt) AS newest FROM gallery_images WHERE folderKey = :folderKey")
+    fun observeDateBounds(folderKey: String): Flow<GalleryDateBounds>
+    @Query("SELECT * FROM gallery_images WHERE folderKey = :folderKey")
+    suspend fun listForFolder(folderKey: String): List<GalleryImageEntity>
+    @Upsert suspend fun upsert(entity: GalleryImageEntity)
+    @Upsert suspend fun upsertAll(entities: List<GalleryImageEntity>)
+    @Query("UPDATE gallery_images SET scanToken = :scanToken WHERE uri = :uri")
+    suspend fun markSeen(uri: String, scanToken: Long)
+    @Query("DELETE FROM gallery_images WHERE folderKey = :folderKey AND scanToken != :scanToken")
+    suspend fun deleteNotSeen(folderKey: String, scanToken: Long)
+    @Delete suspend fun delete(entity: GalleryImageEntity)
 }
 
 @Dao
@@ -80,6 +115,12 @@ interface TagDao {
     @Upsert suspend fun upsertWildcards(entities: List<WildcardEntity>)
     @Upsert suspend fun upsertWildcard(entity: WildcardEntity)
     @Delete suspend fun deleteWildcard(entity: WildcardEntity)
+    @Delete suspend fun deleteWildcards(entities: List<WildcardEntity>)
+    @Query("UPDATE wildcards SET folder = NULL, updatedAt = :updatedAt WHERE folder = :folder")
+    suspend fun clearWildcardFolder(folder: String, updatedAt: Long)
+
+    @Query("UPDATE wildcards SET folder = :newFolder, updatedAt = :updatedAt WHERE folder = :oldFolder")
+    suspend fun renameWildcardFolder(oldFolder: String, newFolder: String, updatedAt: Long)
     // Bundled tags are reproducible from the app asset. Export only bundled rows with
     // user activity plus non-bundled/discovered rows; source flags are also present on
     // the bundled catalog and would otherwise serialize the entire catalog.

@@ -40,9 +40,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import android.app.Activity
+import androidx.activity.compose.LocalActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.hjhsys.naiblockprompt.R
 import com.hjhsys.naiblockprompt.domain.model.AppSettings
@@ -107,7 +106,7 @@ fun GeneratePagerScreen(
     var quickEditExitSignal by rememberSaveable { mutableIntStateOf(0) }
     var pagerSwipeLocked by remember { mutableStateOf(false) }
     val setPagerSwipeLocked = remember { { locked: Boolean -> pagerSwipeLocked = locked } }
-    val activity = LocalContext.current as? Activity
+    val activity = LocalActivity.current
     val imageInput = session?.generationSettings?.imageInput
     val vibeIgnored = imageInput?.mode == ImageInputMode.VIBE_TRANSFER &&
         session.generationSettings.modelId?.let { !VibeTransferRequestMapper.isSupported(it) } == true
@@ -177,7 +176,8 @@ fun GeneratePagerScreen(
                 }
             }
         },
-    ) { actionPadding -> Box(Modifier.fillMaxSize().padding(actionPadding).consumeWindowInsets(actionPadding)) {
+    ) { actionPadding -> CompositionLocalProvider(LocalGeneratePagerSwipeLock provides setPagerSwipeLocked) {
+        Box(Modifier.fillMaxSize().padding(actionPadding).consumeWindowInsets(actionPadding)) {
         HorizontalPager(
             state = pagerState,
             modifier = Modifier.fillMaxSize(),
@@ -224,19 +224,19 @@ fun GeneratePagerScreen(
         }
         }
         }
-        if (pagerState.currentPage > GenerateNavigationPolicy.SETTINGS_PAGE) {
+        if (!pagerSwipeLocked && pagerState.currentPage > GenerateNavigationPolicy.SETTINGS_PAGE) {
             val previousLabel = pageLabel(pagerState.currentPage - 1)
             EdgePageHint(Alignment.CenterStart, Icons.Default.ChevronLeft, previousLabel) {
                 scope.launch { pagerState.animateScrollToPage(pagerState.currentPage - 1) }
             }
         }
-        if (pagerState.currentPage < GenerateNavigationPolicy.PAGE_COUNT - 1) {
+        if (!pagerSwipeLocked && pagerState.currentPage < GenerateNavigationPolicy.PAGE_COUNT - 1) {
             val nextLabel = pageLabel(pagerState.currentPage + 1)
             EdgePageHint(Alignment.CenterEnd, Icons.Default.ChevronRight, nextLabel) {
                 scope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1) }
             }
         }
-    } }
+    } } }
 }
 
 private fun pageLabel(page: Int): Int = when (page) {

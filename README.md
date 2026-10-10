@@ -8,17 +8,17 @@ An Android-only Kotlin/Jetpack Compose prompt-block editor and unofficial NovelA
 
 ## 현재 상태와 기능
 
-현재 소스 버전은 **1.1**입니다. [GitHub Releases](https://github.com/hjhsys/NAI_BlockPrompt/releases)에서 공개된 최신 서명 APK를 받을 수 있습니다. 비공식 개인 프로젝트이며 중요한 데이터는 별도 백업을 권장합니다.
+현재 소스 버전은 **1.2**입니다. [GitHub Releases](https://github.com/hjhsys/NAI_BlockPrompt/releases)에서 공개된 최신 서명 APK를 받을 수 있습니다. 비공식 개인 프로젝트이며 중요한 데이터는 별도 백업을 권장합니다.
 
 - **Prompt 편집:** Base / Character별 Positive·Negative, Character 전체 생성 ON/OFF, Block 추가·정렬·잠금·접기·분리·결합·복사·붙여넣기, Text Rendering, 주석, 가중치 강조·보정, 한 줄씩/합쳐서 정리, Undo/Redo를 지원합니다.
 - **빠른 편집:** Tag/Weight Chunk 선택과 다중 선택, 묶음 이동·삭제·주석·줄바꿈·태그 사전 삽입, 가중치 증감·부호 반전, 태그 정보 확인을 제공합니다. 길게 누르기 판정과 반복 간격, 도구 위치를 설정할 수 있습니다.
 - **생성:** 모델·해상도·Sampler·Steps·Guidance·Seed 설정, Random/Fixed Seed 빠른 전환, Character Positioning의 선택·탭·드래그 배치, Image2Image, Vibe Transfer와 로컬 인코딩 캐시, Precise Reference, Inpaint를 지원합니다. 지원 범위는 모델에 따라 다릅니다.
 - **미리보기와 가져오기:** 생성 전 현재 Prompt를 확인하고, PNG 메타데이터의 Prompt·모델·생성 설정을 미리 본 뒤 전체 또는 일부 Block만 가져올 수 있습니다. Character는 교체하거나 뒤에 추가할 수 있습니다.
-- **이미지/History:** 원본 저장, 썸네일·설정·Seed 보존, 부분 복원, 즐겨찾기, 실패 요청 Retry, 원본 유실 안내를 제공합니다. `기록`에는 설정한 개수의 최근 생성만 표시하고, 범위를 벗어난 즐겨찾기는 별도 보존합니다. 자동 기록 정리는 저장 폴더의 원본을 삭제하지 않습니다. 두 이미지와 해당 Prompt·생성 설정을 A/B로 비교하고 이미지 비교와 Prompt 비교 사이를 전환할 수 있습니다.
+- **이미지/History:** 원본 저장, 썸네일·설정·Seed 보존, 부분 복원, 즐겨찾기, 실패 요청 Retry, 원본 유실 안내를 제공합니다. `기록`에는 설정한 개수의 최근 생성만 표시하고, 범위를 벗어난 즐겨찾기는 별도 보존합니다. 자동 기록 정리는 저장 폴더의 원본을 삭제하지 않습니다. 두 이미지와 해당 Prompt·생성 설정을 A/B로 비교하고 이미지 비교와 Prompt 비교 사이를 전환할 수 있습니다. History의 폴더 버튼에서는 생성 폴더 전체를 날짜별 갤러리로 보고 PNG 태그·기간·모델·Sampler로 필터링할 수 있습니다.
 - **Library:** Blocks / Sets / Presets 저장·검색·폴더 분류·불러오기와 항목별 미리보기 이미지를 지원합니다. 이전 작업은 1-slot Stash로 보관합니다.
 - **Tags:** 201,273개 canonical 태그와 한국어 번역, 별칭·카테고리 검색, 사용자 번역 override, 즐겨찾기, 사용 기록, 미리보기 이미지, 출처 표시, 다중 선택 제외를 지원합니다.
 - **자동완성:** Local / NovelAI / Danbooru 후보를 한 줄에서 출처별로 전환합니다. 입력 위치와 키보드를 고려한 팝업 위치를 상단·하단·유동적으로 설정할 수 있으며, 조회 결과로 확인된 원격 태그만 로컬 DB에 학습합니다.
-- **Wildcards:** `__name__` 자동완성, 후보 편집, TXT Import, 폴더 이름 분류, Seed 기반 후보 선택, 중첩 참조 보호, History 원문/선택 결과 복원.
+- **Wildcards:** `__name__` 자동완성, 별명 검색, 후보 편집, TXT Import, 폴더 생성·이름 변경·분류, 다중 선택 삭제, 생성마다 다시 뽑는 후보 선택, 중첩 참조 보호, History 원문/선택 결과 복원.
 - **Color Helper:** 색상환·HSV·HEX, 복사·입력 보조, 색상 즐겨찾기, 사용 횟수·추가 날짜 정렬. DB·색상 바로가기는 각각 드래그해서 옮길 수 있습니다.
 - **설정:** 밝게/어둡게/시스템 테마, 한국어·영어 UI, 선택 가능한 실험적 토큰 추정, Help, 사용자 데이터 백업 및 태그 DB 공유.
 
@@ -51,9 +51,10 @@ ZIP 저장 후 클립보드에는 태그 원문 대신 외부 AI에 붙여넣을
 - 생성 후 저장 재시도용 이미지는 메모리에 보존되므로 프로세스 종료 후에는 유지되지 않습니다.
 - 토큰은 공식 계산값이 아닌 실험적 추정치입니다. 표시를 끌 수 있으며 생성을 차단하지 않습니다.
 - Anlas 안내는 모든 설정 조합의 총 비용을 보장하지 않습니다.
-- Wildcard TXT Export와 전용 폴더 관리는 미제공입니다. Prompt Undo/Redo와 Quick Edit는 제공하지만 모든 Android 기본 텍스트 편집 동작을 대체하지는 않습니다.
+- Wildcard TXT Export는 미제공입니다. Prompt Undo/Redo와 Quick Edit는 제공하지만 모든 Android 기본 텍스트 편집 동작을 대체하지는 않습니다.
 - Inpaint는 V5 Full 실기기에서 웹 호환 마스크 전처리·합성 경로를 확인했습니다. V4.5 Full과 다양한 해상도·마스크 모양은 추가 실기기 회귀 검증이 필요합니다.
 - 단위 테스트와 별도로 실제 기기의 DB migration·백업 왕복·백그라운드 복원·모델별 생성 검증이 필요합니다.
+- 생성 폴더 갤러리의 태그·생성 설정 검색은 PNG에 포함된 NovelAI metadata를 색인합니다. JPEG/WebP 또는 metadata가 없는 PNG는 날짜별 열람은 가능하지만 Prompt 태그 검색 대상에는 포함되지 않습니다.
 
 ## 빌드와 테스트
 
@@ -89,6 +90,8 @@ Token은 Android Keystore로 암호화하여 로컬에 저장합니다. 생성�
 - [NovelAI 이미지 API 연동 실전 가이드](docs/novelai-integration-guide/README.md)
 - [1.0 릴리스 노트](docs/releases/1.0.md)
 - [1.1 릴리스 노트](docs/releases/1.1.md)
+- [1.2 릴리스 노트](docs/releases/1.2.md)
+- [인터넷 소개글 초안](docs/INTRODUCTION_DRAFT.md)
 - [태그 번들 생성 도구](tools/tag_db/README.md)
 - [개발 규칙](AGENTS.md)
 

@@ -12,6 +12,7 @@ import com.hjhsys.naiblockprompt.domain.model.*
 import com.hjhsys.naiblockprompt.data.generation.*
 import com.hjhsys.naiblockprompt.data.network.nai.*
 import com.hjhsys.naiblockprompt.data.library.*
+import com.hjhsys.naiblockprompt.data.gallery.*
 import com.hjhsys.naiblockprompt.data.local.entity.*
 import com.hjhsys.naiblockprompt.domain.generation.*
 import kotlinx.coroutines.FlowPreview
@@ -42,6 +43,14 @@ import com.hjhsys.naiblockprompt.domain.tags.AiTranslationExportScope
 import com.hjhsys.naiblockprompt.domain.model.TagExclusionFilter
 import com.hjhsys.naiblockprompt.domain.image.NaiImageMetadata
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.Calendar
+
+sealed interface GalleryScanUiState {
+    data object Idle : GalleryScanUiState
+    data object Scanning : GalleryScanUiState
+    data class Complete(val result: GalleryScanResult) : GalleryScanUiState
+    data class Failed(val message: String?) : GalleryScanUiState
+}
 
 @OptIn(FlowPreview::class, ExperimentalCoroutinesApi::class)
 class MainViewModel(private val container: AppContainer) : ViewModel() {
@@ -161,6 +170,68 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         SharingStarted.WhileSubscribed(5_000),
         AppSettings(),
     )
+
+    private val _galleryFilter = MutableStateFlow(GalleryFilterState())
+    val galleryFilter = _galleryFilter.asStateFlow()
+    private val _galleryScanState = MutableStateFlow<GalleryScanUiState>(GalleryScanUiState.Idle)
+    val galleryScanState = _galleryScanState.asStateFlow()
+    private fun galleryFolderKey(settings: AppSettings) = container.galleryRepository.folderKey(settings.imageSaveTreeUri)
+    private fun galleryTimeBounds(filter: GalleryFilterState): Pair<Long, Long> {
+        if (filter.period == GalleryPeriod.ALL) return 0L to Long.MAX_VALUE
+        if (filter.period == GalleryPeriod.CUSTOM) return filter.customStartAt to filter.customEndAt
+        val start = Calendar.getInstance().apply {
+            if (filter.period == GalleryPeriod.MONTH) add(Calendar.MONTH, -1) else add(Calendar.YEAR, -1)
+        }.timeInMillis
+        return start to Long.MAX_VALUE
+    }
+    val galleryImages = combine(settings, _galleryFilter) { appSettings, filter -> appSettings to filter }
+        .flatMapLatest { (appSettings, filter) ->
+            val (start, end) = galleryTimeBounds(filter)
+            container.galleryRepository.images(GalleryQuery(
+                folderKey = galleryFolderKey(appSettings), startAt = start, endAt = end,
+                tag = filter.tag, tagMatch = filter.tagMatch, model = filter.model, sampler = filter.sampler,
+                steps = filter.steps, scale = filter.scale, guidanceRescale = filter.guidanceRescale,
+            ))
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val galleryModels = settings.flatMapLatest { container.galleryRepository.models(galleryFolderKey(it)) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val gallerySamplers = settings.flatMapLatest { container.galleryRepository.samplers(galleryFolderKey(it)) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val galleryDateBounds = settings.flatMapLatest { container.galleryRepository.dateBounds(galleryFolderKey(it)) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), GalleryDateBounds(null, null))
+
+    fun setGalleryTag(value: String) { _galleryFilter.value = _galleryFilter.value.copy(tag = value) }
+    fun setGalleryTagMatch(value: GalleryTagMatch) { _galleryFilter.value = _galleryFilter.value.copy(tagMatch = value) }
+    fun requestGalleryTagAutocomplete(value: String) {
+        setGalleryTag(value)
+        if (value.length >= 2) requestAutocomplete(GALLERY_AUTOCOMPLETE_ID, PromptFragment(value, 0, value.length)) else clearAutocomplete()
+    }
+    fun chooseGalleryTag(value: String) {
+        setGalleryTag(value.replace('_', ' '))
+        clearAutocomplete()
+    }
+    fun setGalleryPeriod(value: GalleryPeriod, startAt: Long = 0L, endAt: Long = Long.MAX_VALUE) {
+        _galleryFilter.value = _galleryFilter.value.copy(period = value, customStartAt = startAt, customEndAt = endAt)
+    }
+    fun setGalleryModel(value: String) { _galleryFilter.value = _galleryFilter.value.copy(model = value) }
+    fun setGallerySampler(value: String) { _galleryFilter.value = _galleryFilter.value.copy(sampler = value) }
+    fun setGallerySteps(value: String) { _galleryFilter.value = _galleryFilter.value.copy(steps = value.filter(Char::isDigit)) }
+    fun setGalleryScale(value: String) { _galleryFilter.value = _galleryFilter.value.copy(scale = value.filter { it.isDigit() || it == '.' }) }
+    fun setGalleryGuidanceRescale(value: String) { _galleryFilter.value = _galleryFilter.value.copy(guidanceRescale = value.filter { it.isDigit() || it == '.' }) }
+    fun clearGalleryGenerationFilters() { _galleryFilter.value = _galleryFilter.value.copy(model = "", sampler = "", steps = "", scale = "", guidanceRescale = "") }
+    fun scanGallery() = viewModelScope.launch {
+        if (_galleryScanState.value is GalleryScanUiState.Scanning) return@launch
+        _galleryScanState.value = GalleryScanUiState.Scanning
+        _galleryScanState.value = runCatching { container.galleryRepository.scan(settings.value.imageSaveTreeUri) }
+            .fold({ GalleryScanUiState.Complete(it) }, { GalleryScanUiState.Failed(it.message) })
+    }
+    fun deleteGalleryImage(item: GalleryImageEntity, result: (Boolean) -> Unit = {}) = viewModelScope.launch {
+        result(container.galleryRepository.delete(item))
+    }
+    fun deleteGalleryImages(items: Collection<GalleryImageEntity>, result: (Int) -> Unit = {}) = viewModelScope.launch {
+        result(container.galleryRepository.deleteAll(items))
+    }
+    fun galleryMetadata(item: GalleryImageEntity): NaiImageMetadata = container.galleryRepository.metadata(item)
 
     init {
         viewModelScope.launch { _session.value = container.sessionRepository.restoreOrCreate() }
@@ -402,6 +473,19 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         characterMode: CharacterImportMode = CharacterImportMode.REPLACE,
     ) {
         val current = _session.value ?: return
+        val previousImportPreferences = settings.value.promptImportPreferences
+        viewModelScope.launch {
+            container.settingsRepository.setPromptImportPreferences(
+                previousImportPreferences.copy(
+                    basePositive = includePrompt,
+                    baseNegative = includeNegative,
+                    characters = includeCharacters,
+                    settings = includeSettings,
+                    seed = includeSeed,
+                    appendCharacters = characterMode == CharacterImportMode.APPEND,
+                ),
+            )
+        }
         fun blocks(value: String?) = value?.let { listOf(PromptBlock(name = blockName, content = it, scaleMode = BlockScaleMode.CUSTOM, customScale = "1.0")) }.orEmpty()
         val importedCharacters = metadata.characterPrompts.mapIndexed { index, positive ->
                 CharacterPrompt(
@@ -541,8 +625,13 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
                 Log.d("AutocompletePerf", "inputToLocalStartMs=${(System.nanoTime() - requestStartedAtNanos) / 1_000_000.0} chars=${fragment.text.length}")
             }
             if (fragment.text.startsWith("__")) {
-                val prefix = fragment.text.removePrefix("__").lowercase()
-                val matches = wildcards.value.filter { it.name.lowercase().startsWith(prefix) }.take(12).map {
+                val matches = wildcards.value.filter {
+                    com.hjhsys.naiblockprompt.domain.autocomplete.WildcardAutocomplete.matches(
+                        it.name,
+                        it.aliasesText,
+                        fragment.text,
+                    )
+                }.take(12).map {
                     TagSuggestion("__${it.name}__", com.hjhsys.naiblockprompt.domain.autocomplete.SuggestionSource.WILDCARD)
                 }
                 if (isCurrentRequest()) {
@@ -598,9 +687,9 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     fun sortDictionary(sort: TagDictionarySort) { tagDictionarySort.value = sort }
     fun filterExcludedTags(filter: TagExclusionFilter) { tagExclusionFilter.value = filter }
     fun addTagCategory(name: String) = viewModelScope.launch { container.autocompleteRepository.addCategory(name) }
-    fun saveWildcard(id: String?, name: String, valuesText: String, folder: String? = null) = viewModelScope.launch {
+    fun saveWildcard(id: String?, name: String, valuesText: String, folder: String? = null, aliasesText: String = "") = viewModelScope.launch {
         try {
-            container.autocompleteRepository.saveWildcard(id, name, valuesText, folder)
+            container.autocompleteRepository.saveWildcard(id, name, valuesText, folder, aliasesText)
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             throw cancelled
         } catch (_: Exception) {
@@ -608,6 +697,17 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
     fun deleteWildcard(item: WildcardEntity) = viewModelScope.launch { container.autocompleteRepository.deleteWildcard(item) }
+    fun deleteWildcards(items: List<WildcardEntity>) = viewModelScope.launch { container.autocompleteRepository.deleteWildcards(items) }
+    fun deleteWildcardFolder(folder: String, savedFolder: SavedFolderEntity? = null) = viewModelScope.launch {
+        container.autocompleteRepository.deleteWildcardFolder(folder)
+        savedFolder?.let { container.libraryRepository.deleteFolder(it) }
+    }
+    fun renameWildcardFolder(folder: SavedFolderEntity, newName: String) = viewModelScope.launch {
+        val trimmedName = newName.trim()
+        if (trimmedName.isBlank() || trimmedName == folder.name) return@launch
+        container.autocompleteRepository.renameWildcardFolder(folder.name, trimmedName)
+        container.libraryRepository.renameFolder(folder, trimmedName)
+    }
     fun setTagThumbnail(item: TagDictionaryItem, uri: android.net.Uri) = viewModelScope.launch { container.autocompleteRepository.setThumbnail(item, uri) }
     fun setTagThumbnailFromFile(item: TagDictionaryItem, path: String) = viewModelScope.launch { container.autocompleteRepository.setThumbnailFromFile(item, path) }
     fun removeTagThumbnail(item: TagDictionaryItem) = viewModelScope.launch { container.autocompleteRepository.removeThumbnail(item) }
@@ -839,8 +939,20 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         val current = _session.value ?: return
         viewModelScope.launch { container.libraryRepository.savePreset(name.trim().ifBlank { "Preset" }, current) }
     }
-    fun createFolder(name: String, kind: SavedFolderKind) = viewModelScope.launch {
-        if (name.isNotBlank()) container.libraryRepository.createFolder(name.trim(), kind, savedFolders.value.count { it.kind == kind.name })
+    fun createFolder(name: String, kind: SavedFolderKind, onCreated: (SavedFolderEntity) -> Unit = {}) = viewModelScope.launch {
+        if (name.isNotBlank()) {
+            val folder = container.libraryRepository.createFolder(name.trim(), kind, savedFolders.value.count { it.kind == kind.name })
+            onCreated(folder)
+        }
+    }
+    fun ensureWildcardFolders(names: Collection<String>) = viewModelScope.launch {
+        container.libraryRepository.ensureFolders(names, SavedFolderKind.WILDCARD)
+    }
+    fun renameFolder(folder: SavedFolderEntity, newName: String) = viewModelScope.launch {
+        val trimmedName = newName.trim()
+        if (trimmedName.isNotBlank() && trimmedName != folder.name) {
+            container.libraryRepository.renameFolder(folder, trimmedName)
+        }
     }
     fun deleteSavedBlock(item: SavedBlockEntity) = viewModelScope.launch { container.libraryRepository.deleteBlock(item) }
     fun moveSavedBlock(item: SavedBlockEntity, folderId: String?) = viewModelScope.launch { container.libraryRepository.moveBlock(item, folderId) }
@@ -880,8 +992,8 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
     fun restoreHistory(item: HistoryItem, options: RestoreOptions) {
         val source = item.snapshot?.session ?: return
-        val resolved = item.snapshot.generation
         val current = _session.value ?: return
+        viewModelScope.launch { container.settingsRepository.setPromptImportPreferences(options.toImportPreferences()) }
         var generationSettings = if (options.settings) {
             source.generationSettings.copy(imageInput = if (options.inputImage) source.generationSettings.imageInput else current.generationSettings.imageInput)
         } else {
@@ -893,37 +1005,17 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         } else if (options.settings) {
             generationSettings = generationSettings.copy(seedMode = current.generationSettings.seedMode, seed = current.generationSettings.seed)
         }
-        val restoreOriginal = options.wildcardOriginal || resolved == null
-        val restoredBase = if (restoreOriginal) source.base else source.base.copy(
-            prompts = PromptPair(
-                positiveBlocks = resolvedBlocks(source.base.prompts.positiveBlocks, resolved.basePositive),
-                negativeBlocks = resolvedBlocks(source.base.prompts.negativeBlocks, resolved.baseNegative),
-            ),
-            textRendering = TextRenderingState(),
-        )
-        var resolvedCharacterIndex = 0
-        val restoredCharacters = if (restoreOriginal) source.characters else source.characters.sortedBy { it.order }.map { character ->
-            if (!character.enabled) character else {
-                val index = resolvedCharacterIndex++
-                character.copy(
-                    prompts = PromptPair(
-                        positiveBlocks = resolvedBlocks(character.prompts.positiveBlocks, resolved.characterPositive.getOrElse(index) { "" }),
-                        negativeBlocks = resolvedBlocks(character.prompts.negativeBlocks, resolved.characterNegative.getOrElse(index) { "" }),
-                    ),
-                    textRendering = TextRenderingState(),
-                )
-            }
-        }
+        // Older history rows have no per-block resolved snapshot. Falling back to the original
+        // editor session preserves block boundaries and prevents the final joined prompt's block
+        // scale wrapper (for example 0.7::...::) from being imported as literal block content.
+        val promptSource = if (options.wildcardOriginal) source else item.snapshot.resolvedSession ?: source
         val baseSelection = BaseSetImportSelection(options.basePositive, options.baseNegative)
         replaceWithStash(current.copy(
-            base = BaseSetImport.applyOrKeep(current.base, restoredBase, baseSelection),
-            characters = if (options.characters) CharacterImport.apply(current.characters, restoredCharacters, options.characterMode) else current.characters,
+            base = BaseSetImport.applyOrKeep(current.base, promptSource.base, baseSelection),
+            characters = if (options.characters) CharacterImport.apply(current.characters, promptSource.characters, options.characterMode) else current.characters,
             generationSettings = generationSettings,
         ))
     }
-
-    private fun resolvedBlocks(source: List<PromptBlock>, content: String): List<PromptBlock> =
-        listOf((source.firstOrNull() ?: PromptBlock(name = "Resolved prompt")).copy(content = content, enabled = true, locked = false, order = 0))
 
     fun restorePreset(item: PresetItem) { item.session?.let(::replaceWithStash) }
     fun swapStash() {
@@ -1149,6 +1241,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     companion object {
+        private const val GALLERY_AUTOCOMPLETE_ID = "__gallery_search__"
         fun factory(container: AppContainer) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T = MainViewModel(container) as T
@@ -1221,7 +1314,31 @@ data class RestoreOptions(
     val inputImage: Boolean = false,
     val wildcardOriginal: Boolean = true,
     val characterMode: CharacterImportMode = CharacterImportMode.REPLACE,
-)
+) {
+    fun toImportPreferences() = PromptImportPreferences(
+        basePositive = basePositive,
+        baseNegative = baseNegative,
+        characters = characters,
+        settings = settings,
+        seed = seed,
+        inputImage = inputImage,
+        wildcardOriginal = wildcardOriginal,
+        appendCharacters = characterMode == CharacterImportMode.APPEND,
+    )
+
+    companion object {
+        fun from(preferences: PromptImportPreferences) = RestoreOptions(
+            settings = preferences.settings,
+            basePositive = preferences.basePositive,
+            baseNegative = preferences.baseNegative,
+            characters = preferences.characters,
+            seed = preferences.seed,
+            inputImage = preferences.inputImage,
+            wildcardOriginal = preferences.wildcardOriginal,
+            characterMode = if (preferences.appendCharacters) CharacterImportMode.APPEND else CharacterImportMode.REPLACE,
+        )
+    }
+}
 
 sealed interface SavedWorkflow {
     data class SaveBlock(val block: PromptBlock) : SavedWorkflow

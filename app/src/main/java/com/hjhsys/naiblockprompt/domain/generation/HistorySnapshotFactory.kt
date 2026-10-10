@@ -9,6 +9,7 @@ object HistorySnapshotFactory {
         val parameters = generation.request.parameters
         return SessionSnapshot(
             session = generation.sourceSession.copy(generationSettings = settings),
+            resolvedSession = generation.resolvedSession.copy(generationSettings = settings),
             generation = GeneratedPromptSnapshot(
                 basePositive = parameters.v4Prompt.caption.baseCaption,
                 baseNegative = parameters.v4NegativePrompt.caption.baseCaption,

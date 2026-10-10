@@ -12,8 +12,9 @@ import com.hjhsys.naiblockprompt.data.local.entity.*
         TagEntity::class, TagAliasEntity::class, BaseTranslationEntity::class, UserTagOverrideEntity::class, UserTagCategoryEntity::class,
         TagExclusionEntity::class,
         WildcardEntity::class,
+        GalleryImageEntity::class,
     ],
-    version = 16,
+    version = 19,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -21,4 +22,5 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun savedDao(): SavedDao
     abstract fun historyDao(): HistoryDao
     abstract fun tagDao(): TagDao
+    abstract fun galleryDao(): GalleryDao
 }

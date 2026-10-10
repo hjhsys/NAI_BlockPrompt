@@ -3,8 +3,11 @@ package com.hjhsys.naiblockprompt.domain.image
 import com.hjhsys.naiblockprompt.domain.model.CharacterPosition
 import kotlinx.serialization.json.*
 import java.io.ByteArrayInputStream
+import java.io.DataInputStream
+import java.io.InputStream
 import java.util.zip.InflaterInputStream
 
+@kotlinx.serialization.Serializable
 data class NaiImageMetadata(
     val prompt: String?,
     val negativePrompt: String?,
@@ -15,6 +18,8 @@ data class NaiImageMetadata(
     val sampler: String?,
     val steps: Int?,
     val scale: Float?,
+    val guidanceRescale: Float? = null,
+    val noiseSchedule: String? = null,
     val characterPrompts: List<String> = emptyList(),
     val characterNegativePrompts: List<String> = emptyList(),
     val characterPositions: List<CharacterPosition?> = emptyList(),
@@ -24,24 +29,33 @@ data class NaiImageMetadata(
 object NaiPngMetadataParser {
     private val signature = byteArrayOf(-119, 80, 78, 71, 13, 10, 26, 10)
 
-    fun parse(bytes: ByteArray): NaiImageMetadata? {
-        if (bytes.size < 12 || !bytes.copyOfRange(0, 8).contentEquals(signature)) return null
+    fun parse(bytes: ByteArray): NaiImageMetadata? = parse(ByteArrayInputStream(bytes))
+
+    fun parse(input: InputStream): NaiImageMetadata? {
+        val stream = DataInputStream(input)
+        val actualSignature = ByteArray(8)
+        if (!stream.readFullyOrFalse(actualSignature) || !actualSignature.contentEquals(signature)) return null
         val text = linkedMapOf<String, String>()
-        var offset = 8
-        while (offset + 12 <= bytes.size) {
-            val length = readInt(bytes, offset)
-            if (length < 0 || offset + 12L + length > bytes.size) break
-            val type = bytes.copyOfRange(offset + 4, offset + 8).toString(Charsets.ISO_8859_1)
-            val data = bytes.copyOfRange(offset + 8, offset + 8 + length)
+        while (true) {
+            val length = runCatching { stream.readInt() }.getOrNull() ?: break
+            if (length < 0) return null
+            val type = stream.readType() ?: break
+            val data = if (type in TEXT_CHUNK_TYPES) {
+                if (length > MAX_TEXT_CHUNK_BYTES) return null
+                ByteArray(length).also { if (!stream.readFullyOrFalse(it)) return null }
+            } else {
+                if (!stream.skipFully(length.toLong())) return null
+                null
+            }
             when (type) {
-                "tEXt" -> splitAtNull(data)?.let { (key, value) -> text[key] = value.toString(Charsets.ISO_8859_1) }
-                "zTXt" -> splitAtNull(data)?.let { (key, value) ->
+                "tEXt" -> splitAtNull(data!!)?.let { (key, value) -> text[key] = value.toString(Charsets.ISO_8859_1) }
+                "zTXt" -> splitAtNull(data!!)?.let { (key, value) ->
                     if (value.size > 1) runCatching { InflaterInputStream(ByteArrayInputStream(value, 1, value.size - 1)).readBytes().toString(Charsets.UTF_8) }
                         .getOrNull()?.let { text[key] = it }
                 }
-                "iTXt" -> parseInternationalText(data)?.let { (key, value) -> text[key] = value }
+                "iTXt" -> parseInternationalText(data!!)?.let { (key, value) -> text[key] = value }
             }
-            offset += length + 12
+            if (!stream.skipFully(4)) return null // CRC
             if (type == "IEND") break
         }
         val comment = text["Comment"]?.let { runCatching { Json.parseToJsonElement(it).jsonObject }.getOrNull() }
@@ -51,15 +65,31 @@ object NaiPngMetadataParser {
         return NaiImageMetadata(
             prompt, negative, comment.string("model") ?: comment.string("model_name") ?: text["Source"], comment.long("seed"),
             comment.int("width"), comment.int("height"), comment.string("sampler"), comment.int("steps"), comment.float("scale"),
+            comment.float("cfg_rescale") ?: comment.float("guidance_rescale"), comment.string("noise_schedule"),
             comment.characterCaptions("v4_prompt"), comment.characterCaptions("v4_negative_prompt"),
             comment.characterPositions(),
             comment.usedExternalImageGuidance(),
         )
     }
 
-    private fun readInt(bytes: ByteArray, offset: Int) =
-        ((bytes[offset].toInt() and 255) shl 24) or ((bytes[offset + 1].toInt() and 255) shl 16) or
-            ((bytes[offset + 2].toInt() and 255) shl 8) or (bytes[offset + 3].toInt() and 255)
+    private fun DataInputStream.readType(): String? {
+        val bytes = ByteArray(4)
+        return if (readFullyOrFalse(bytes)) bytes.toString(Charsets.ISO_8859_1) else null
+    }
+
+    private fun DataInputStream.readFullyOrFalse(bytes: ByteArray): Boolean = runCatching {
+        readFully(bytes); true
+    }.getOrDefault(false)
+
+    private fun InputStream.skipFully(byteCount: Long): Boolean {
+        var remaining = byteCount
+        while (remaining > 0) {
+            val skipped = skip(remaining)
+            if (skipped > 0) remaining -= skipped
+            else if (read() < 0) return false else remaining--
+        }
+        return true
+    }
 
     private fun splitAtNull(data: ByteArray): Pair<String, ByteArray>? {
         val end = data.indexOf(0)
@@ -128,4 +158,7 @@ object NaiPngMetadataParser {
         is JsonArray -> any { it.hasMeaningfulGuidanceValue() }
         is JsonObject -> values.any { it.hasMeaningfulGuidanceValue() }
     }
+
+    private val TEXT_CHUNK_TYPES = setOf("tEXt", "zTXt", "iTXt")
+    private const val MAX_TEXT_CHUNK_BYTES = 16 * 1024 * 1024
 }

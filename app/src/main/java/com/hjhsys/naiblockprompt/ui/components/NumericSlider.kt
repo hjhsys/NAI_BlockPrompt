@@ -29,6 +29,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import java.math.BigDecimal
+import java.math.BigInteger
 import java.util.Locale
 import kotlin.math.pow
 import kotlin.math.roundToInt
@@ -77,8 +78,10 @@ class NumericSliderSpec(
     /** Parses only finite, in-range values that lie exactly on this spec's tick grid. */
     fun parseInput(text: String): Double? {
         val parsed = text.trim().toBigDecimalOrNull() ?: return null
-        val scaled = runCatching { parsed.movePointRight(decimalScale).toBigIntegerExact().intValueExact() }.getOrNull()
+        val scaledInteger = runCatching { parsed.movePointRight(decimalScale).toBigIntegerExact() }.getOrNull()
             ?: return null
+        if (scaledInteger < INT_MIN || scaledInteger > INT_MAX) return null
+        val scaled = scaledInteger.toInt()
         if (scaled !in minUnits..maxUnits) return null
         if ((scaled - minUnits) % stepUnits != 0) return null
         return scaled / factor
@@ -87,6 +90,9 @@ class NumericSliderSpec(
     private val decimalScale = maxOf(displayDecimals, decimalPlaces(min), decimalPlaces(max), decimalPlaces(step))
 
     private companion object {
+        val INT_MIN: BigInteger = BigInteger.valueOf(Int.MIN_VALUE.toLong())
+        val INT_MAX: BigInteger = BigInteger.valueOf(Int.MAX_VALUE.toLong())
+
         fun decimalPlaces(value: Double): Int =
             BigDecimal.valueOf(value).stripTrailingZeros().scale().coerceAtLeast(0)
 

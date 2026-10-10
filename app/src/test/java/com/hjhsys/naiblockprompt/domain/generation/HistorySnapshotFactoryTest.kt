@@ -22,6 +22,31 @@ class HistorySnapshotFactoryTest {
         assertTrue(snapshot.snapshotVersion > 0)
     }
 
+    @Test fun `resolved history preserves blocks and block scale without embedding joined scale syntax`() {
+        val session = Session.empty().copy(
+            base = BasePrompt(PromptPair(positiveBlocks = listOf(
+                PromptBlock(name = "People", content = "1girl, __hair__", order = 0),
+                PromptBlock(name = "Style", content = "artist:test", order = 1),
+            ))),
+            blockScaleEnabled = true,
+            defaultBlockScale = "0.7",
+            generationSettings = GenerationSettings("nai-diffusion-5-full", samplerId = "k_euler_ancestral", steps = 28, scale = 5f),
+        )
+        val prepared = (NaiRequestMapper(randomWildcardSeed = { 10L }).prepare(
+            session = session,
+            normalizeWeights = false,
+            wildcards = mapOf("hair" to listOf("white hair")),
+        ) as PrepareGenerationResult.Ready).generation
+        val snapshot = HistorySnapshotFactory.from(prepared, 99L)
+
+        assertEquals(2, snapshot.resolvedSession?.base?.prompts?.positiveBlocks?.size)
+        assertEquals("1girl, white hair", snapshot.resolvedSession?.base?.prompts?.positiveBlocks?.first()?.content)
+        assertEquals("artist:test", snapshot.resolvedSession?.base?.prompts?.positiveBlocks?.last()?.content)
+        assertEquals("0.7", snapshot.resolvedSession?.defaultBlockScale)
+        assertTrue(snapshot.resolvedSession?.base?.prompts?.positiveBlocks?.none { "0.7::" in it.content } == true)
+        assertTrue(snapshot.generation?.basePositive?.startsWith("0.7::") == true)
+    }
+
     @Test fun `history resolved character positions align with enabled request characters`() {
         val session = Session.empty().copy(
             characters = listOf(

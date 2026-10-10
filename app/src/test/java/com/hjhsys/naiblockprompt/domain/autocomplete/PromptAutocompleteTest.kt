@@ -12,6 +12,29 @@ class PromptAutocompleteTest {
         assertFalse(PromptAutocomplete.shouldQueryRemote(PromptFragment("__h", 0, 3)))
     }
 
+    @Test fun `wildcard autocomplete starts after one character following delimiter`() {
+        assertEquals(PromptFragment("__t", 0, 3), PromptAutocomplete.currentFragment("__t", 3))
+        assertEquals(PromptFragment("__테", 6, 9), PromptAutocomplete.currentFragment("girl, __테", 9))
+        assertFalse(PromptAutocomplete.shouldQueryRemote(PromptFragment("__t", 0, 3)))
+    }
+
+    @Test fun `wildcard replacement preserves wildcard delimiters`() {
+        val replacement = PromptAutocomplete.replace(
+            "__테",
+            PromptAutocomplete.currentFragment("__테", 3)!!,
+            "__test__",
+        )
+
+        assertEquals("__test__, ", replacement.text)
+    }
+
+    @Test fun `wildcard aliases match contained text while insertion uses canonical name`() {
+        assertTrue(WildcardAutocomplete.matches("test", "테스트\n시험용", "__테"))
+        assertTrue(WildcardAutocomplete.matches("test", "내 테스트 별명", "__테"))
+        assertTrue(WildcardAutocomplete.matches("test", "별명", "__te"))
+        assertFalse(WildcardAutocomplete.matches("test", "별명", "__없음"))
+    }
+
     @Test fun `fragment starts after comma and leading whitespace`() {
         assertEquals(PromptFragment("blue hai", 6, 14), PromptAutocomplete.currentFragment("girl, blue hair", 14))
     }

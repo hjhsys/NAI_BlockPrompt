@@ -134,9 +134,15 @@ class AutocompleteRepository(
         if (updates.isNotEmpty()) tagDao.upsertTagExclusions(updates)
     }
 
-    suspend fun saveWildcard(id: String?, name: String, valuesText: String, folder: String? = null) {
+    suspend fun saveWildcard(id: String?, name: String, valuesText: String, folder: String? = null, aliasesText: String = "") {
         val timestamp = now()
         val normalizedName = name.trim().removePrefix("__").removeSuffix("__").replace(' ', '_')
+        val normalizedAliases = aliasesText
+            .split(',', '\n')
+            .map { it.trim().removePrefix("__").removeSuffix("__") }
+            .filter(String::isNotBlank)
+            .distinct()
+            .joinToString("\n")
         val existing = tagDao.findWildcardByName(normalizedName)
         require(normalizedName.matches(Regex("[A-Za-z0-9_.-]+"))) { "Invalid wildcard name" }
         require(existing == null || existing.id == id) { "Wildcard name already exists" }
@@ -145,12 +151,22 @@ class AutocompleteRepository(
             name = normalizedName,
             valuesText = valuesText.lines().map(String::trim).filter(String::isNotBlank).joinToString("\n"),
             folder = folder?.trim()?.takeIf(String::isNotBlank),
+            aliasesText = normalizedAliases,
             createdAt = existing?.createdAt ?: timestamp,
             updatedAt = timestamp,
         ))
     }
 
     suspend fun deleteWildcard(item: com.hjhsys.naiblockprompt.data.local.entity.WildcardEntity) = tagDao.deleteWildcard(item)
+
+    suspend fun deleteWildcards(items: List<com.hjhsys.naiblockprompt.data.local.entity.WildcardEntity>) {
+        if (items.isNotEmpty()) tagDao.deleteWildcards(items)
+    }
+
+    suspend fun deleteWildcardFolder(folder: String) = tagDao.clearWildcardFolder(folder, now())
+
+    suspend fun renameWildcardFolder(oldFolder: String, newFolder: String) =
+        tagDao.renameWildcardFolder(oldFolder, newFolder, now())
 
     suspend fun exportTranslationBatch(
         missingTranslation: Boolean,

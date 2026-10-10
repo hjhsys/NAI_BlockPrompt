@@ -144,6 +144,17 @@ object PromptAutocomplete {
     }
 }
 
+object WildcardAutocomplete {
+    fun matches(name: String, aliasesText: String, rawQuery: String): Boolean {
+        val query = rawQuery.removePrefix("__").removeSuffix("__").trim().lowercase()
+        if (query.isEmpty()) return false
+        return name.lowercase().startsWith(query) || aliasesText.lineSequence()
+            .map(String::trim)
+            .filter(String::isNotEmpty)
+            .any { query in it.lowercase() }
+    }
+}
+
 object AutocompleteDeduplicator {
     fun excludeLocal(local: List<TagSuggestion>, remote: List<TagSuggestion>): List<TagSuggestion> {
         val localKeys = local.mapTo(mutableSetOf()) { canonicalKey(it.tag) }

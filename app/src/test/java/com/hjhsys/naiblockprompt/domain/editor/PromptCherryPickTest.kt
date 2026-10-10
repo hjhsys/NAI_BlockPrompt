@@ -25,6 +25,8 @@ class PromptCherryPickTest {
         assertNotEquals(p.id, result.base.prompts.positiveBlocks.last().id)
         assertTrue(result.base.prompts.positiveBlocks.last().enabled)
         assertFalse(result.base.prompts.positiveBlocks.last().locked)
+        assertEquals(BlockScaleMode.CUSTOM, result.base.prompts.positiveBlocks.last().scaleMode)
+        assertEquals("1.0", result.base.prompts.positiveBlocks.last().customScale)
     }
 
     @Test fun `character auto creates for zero and uses existing for one`() {
@@ -106,6 +108,8 @@ class PromptCherryPickTest {
         val current = Session.empty()
         val negative = PromptCherryPick.appendSelection(current, listOf(sourceBlock), setOf(sourceBlock.id), CherryPickDestination.Base(PromptPolarity.NEGATIVE))
         assertEquals("ABC", negative.base.prompts.negativeBlocks.last().content)
+        assertEquals(BlockScaleMode.CUSTOM, negative.base.prompts.negativeBlocks.last().scaleMode)
+        assertEquals("1.0", negative.base.prompts.negativeBlocks.last().customScale)
         assertEquals(current.base.prompts.positiveBlocks, negative.base.prompts.positiveBlocks)
 
         val character = PromptCherryPick.appendSelection(current, listOf(sourceBlock), setOf(sourceBlock.id), CherryPickDestination.NewCharacter(CharacterType.GIRL, PromptPolarity.POSITIVE))

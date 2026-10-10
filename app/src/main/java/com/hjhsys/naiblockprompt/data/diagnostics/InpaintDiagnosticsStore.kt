@@ -9,7 +9,10 @@ import com.hjhsys.naiblockprompt.data.network.nai.NaiImageStreamDiagnostics
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.security.MessageDigest
-import java.time.Instant
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import kotlin.math.roundToInt
@@ -18,6 +21,11 @@ import kotlin.math.roundToInt
 class InpaintDiagnosticsStore(context: Context) {
     private val directory = File(context.cacheDir, "inpaint_debug/latest")
 
+    private fun currentUtcTimestamp(): String =
+        SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
+            timeZone = TimeZone.getTimeZone("UTC")
+        }.format(Date())
+
     fun begin(requestImagePng: ByteArray, requestMaskPng: ByteArray, summary: String) {
         directory.deleteRecursively()
         directory.mkdirs()
@@ -25,7 +33,7 @@ class InpaintDiagnosticsStore(context: Context) {
         File(directory, "02-request-mask.png").writeBytes(requestMaskPng)
         File(directory, "00-request-summary.txt").writeText(
             "NAI Block Prompt inpaint diagnostic\n" +
-                "capturedUtc=${Instant.now()}\n" + summary.trim() + "\n" +
+                "capturedUtc=${currentUtcTimestamp()}\n" + summary.trim() + "\n" +
                 "requestImageSha256=${sha256(requestImagePng)}\n" +
                 "requestMaskSha256=${sha256(requestMaskPng)}\n",
         )

@@ -140,6 +140,8 @@ data class Session(
 data class SessionSnapshot(
     val snapshotVersion: Int = CURRENT_SNAPSHOT_VERSION,
     val session: Session,
+    /** Editor structure with only wildcard expressions replaced by the choices used for this generation. */
+    val resolvedSession: Session? = null,
     val generation: GeneratedPromptSnapshot? = null,
 )
 

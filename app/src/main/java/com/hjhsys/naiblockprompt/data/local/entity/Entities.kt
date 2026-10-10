@@ -26,7 +26,7 @@ data class StashEntity(
 )
 
 @Serializable
-enum class SavedFolderKind { BLOCK, SET, PRESET }
+enum class SavedFolderKind { BLOCK, SET, PRESET, WILDCARD }
 
 @Serializable
 @Entity(tableName = "saved_folders", indices = [Index(value = ["name", "kind"], unique = true)])
@@ -103,6 +103,39 @@ data class HistoryEntryEntity(
     val snapshotVersion: Int,
     val snapshotJson: String,
     @ColumnInfo(defaultValue = "0") val favorite: Boolean = false,
+)
+
+@Serializable
+@Entity(
+    tableName = "gallery_images",
+    indices = [Index("folderKey"), Index("createdAt"), Index("model"), Index("sampler")],
+)
+data class GalleryImageEntity(
+    @PrimaryKey val uri: String,
+    val folderKey: String,
+    val displayName: String,
+    val createdAt: Long,
+    val modifiedAt: Long,
+    val sizeBytes: Long,
+    val model: String?,
+    val seed: Long?,
+    val width: Int?,
+    val height: Int?,
+    val sampler: String?,
+    val steps: Int?,
+    val scale: Float?,
+    @ColumnInfo(defaultValue = "NULL") val guidanceRescale: Float?,
+    @ColumnInfo(defaultValue = "NULL") val noiseSchedule: String?,
+    val prompt: String?,
+    val negativePrompt: String?,
+    @ColumnInfo(defaultValue = "NULL") val metadataJson: String?,
+    val searchTags: String,
+    val scanToken: Long,
+)
+
+data class GalleryDateBounds(
+    val oldest: Long?,
+    val newest: Long?,
 )
 
 @Serializable
@@ -199,6 +232,7 @@ data class WildcardEntity(
     val name: String,
     val valuesText: String,
     val folder: String? = null,
+    @ColumnInfo(defaultValue = "''") val aliasesText: String = "",
     val createdAt: Long,
     val updatedAt: Long,
 )

@@ -7,6 +7,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -16,6 +17,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -23,10 +25,15 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
@@ -47,19 +54,25 @@ import com.hjhsys.naiblockprompt.domain.model.TagDictionarySort
 import com.hjhsys.naiblockprompt.domain.model.ExcludedTagItem
 import com.hjhsys.naiblockprompt.domain.model.TagExclusionOrigin
 import com.hjhsys.naiblockprompt.domain.model.TagExclusionFilter
+import com.hjhsys.naiblockprompt.data.local.entity.SavedFolderEntity
+import com.hjhsys.naiblockprompt.data.local.entity.SavedFolderKind
 import com.hjhsys.naiblockprompt.domain.tags.AiTranslationExportScope
 import com.hjhsys.naiblockprompt.ui.MainViewModel
 import com.hjhsys.naiblockprompt.ui.components.AppTitleBar
 import com.hjhsys.naiblockprompt.ui.components.AppTitleMenuItem
+import com.hjhsys.naiblockprompt.ui.components.FolderChoice
+import com.hjhsys.naiblockprompt.ui.components.FolderSelectionDialog
 import java.text.DateFormat
 import java.util.Date
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun TagDatabaseScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit) {
     val tags by viewModel.dictionaryTags.collectAsStateWithLifecycle()
     val wildcards by viewModel.wildcards.collectAsStateWithLifecycle()
+    val savedFolders by viewModel.savedFolders.collectAsStateWithLifecycle()
     val matchingCount by viewModel.dictionaryCount.collectAsStateWithLifecycle()
     val missingTranslationCount by viewModel.missingTranslationCount.collectAsStateWithLifecycle()
     val missingCategoryCount by viewModel.missingCategoryCount.collectAsStateWithLifecycle()
@@ -72,6 +85,7 @@ fun TagDatabaseScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit) {
     val excludedTags by viewModel.excludedTags.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val resources = LocalResources.current
     val clipboard = LocalClipboardManager.current
     val exportScope = rememberCoroutineScope()
     var exportContent by remember { mutableStateOf(byteArrayOf()) }
@@ -86,7 +100,7 @@ fun TagDatabaseScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit) {
                         val output = context.contentResolver.openOutputStream(uri) ?: error("Cannot write translation export")
                         output.use { it.write(bytes) }
                     }
-                    clipboard.setText(AnnotatedString(context.getString(R.string.translation_ai_clipboard_prompt)))
+                    clipboard.setText(AnnotatedString(resources.getString(R.string.translation_ai_clipboard_prompt)))
                     android.widget.Toast.makeText(context, R.string.translation_export_copied, android.widget.Toast.LENGTH_LONG).show()
                 } catch (cancelled: kotlinx.coroutines.CancellationException) {
                     throw cancelled
@@ -241,7 +255,7 @@ fun TagDatabaseScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit) {
             modifier = Modifier.fillMaxSize().padding(padding),
         ) { page ->
         if (page == 1) {
-            WildcardScreen(wildcards, viewModel, Modifier.fillMaxSize())
+            WildcardScreen(wildcards, savedFolders, viewModel, Modifier.fillMaxSize())
         } else if (page == 2) {
             ExcludedTagsScreen(
                 items = excludedTags,
@@ -630,6 +644,7 @@ private fun ExcludedTagsScreen(
 @Composable
 private fun WildcardScreen(
     items: List<com.hjhsys.naiblockprompt.data.local.entity.WildcardEntity>,
+    savedFolders: List<SavedFolderEntity>,
     viewModel: MainViewModel,
     modifier: Modifier = Modifier,
 ) {
@@ -638,22 +653,57 @@ private fun WildcardScreen(
     var creating by rememberSaveable { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<com.hjhsys.naiblockprompt.data.local.entity.WildcardEntity?>(null) }
     var folderFilter by rememberSaveable { mutableStateOf<String?>(null) }
-    var folderMenu by remember { mutableStateOf(false) }
-    val folders = items.mapNotNull { it.folder }.distinct().sorted()
+    var noFolderOnly by rememberSaveable { mutableStateOf(false) }
+    var folderSelector by rememberSaveable { mutableStateOf(false) }
+    var selectedIds by rememberSaveable { mutableStateOf(emptySet<String>()) }
+    var deletingSelected by rememberSaveable { mutableStateOf(false) }
+    val persistentFolders = savedFolders.filter { it.kind == SavedFolderKind.WILDCARD.name }
+    val itemFolderNames = items.mapNotNull { it.folder }.toSet()
+    val folders = (persistentFolders.map { it.name } + itemFolderNames)
+        .distinctBy { it.lowercase() }
+        .sorted()
+    val folderChoices = folders.map { folder -> FolderChoice(folder, folder, items.count { it.folder == folder }) }
+    LaunchedEffect(itemFolderNames) {
+        viewModel.ensureWildcardFolders(itemFolderNames)
+    }
+    val filteredItems = items.filter {
+        when {
+            noFolderOnly -> it.folder == null
+            folderFilter != null -> it.folder == folderFilter
+            else -> true
+        }
+    }
+    val selectionMode = selectedIds.isNotEmpty()
+    fun toggleSelection(id: String) {
+        selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id
+    }
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri ?: return@rememberLauncherForActivityResult
         val displayName = context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
             if (cursor.moveToFirst()) cursor.getString(0) else null
         }.orEmpty().substringBeforeLast('.').ifBlank { "wildcard" }
         val values = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }.orEmpty()
-        if (values.isNotBlank()) viewModel.saveWildcard(null, displayName, values, folderFilter)
+        if (values.isNotBlank()) viewModel.saveWildcard(null, displayName, values, folderFilter.takeUnless { noFolderOnly })
     }
     if (creating || editing != null) {
-        WildcardEditDialog(editing, viewModel, folders, onDismiss = { creating = false; editing = null }) { id, name, values, folder ->
-            viewModel.saveWildcard(id, name, values, folder)
-            creating = false
-            editing = null
-        }
+        WildcardEditDialog(
+            item = editing,
+            viewModel = viewModel,
+            folders = folderChoices,
+            folderEntities = persistentFolders,
+            onDismiss = { creating = false; editing = null },
+            onDelete = editing?.let { item ->
+                {
+                    editing = null
+                    deleting = item
+                }
+            },
+            onSave = { id, name, values, folder, aliases ->
+                viewModel.saveWildcard(id, name, values, folder, aliases)
+                creating = false
+                editing = null
+            },
+        )
     }
     deleting?.let { item ->
         AlertDialog(
@@ -664,39 +714,137 @@ private fun WildcardScreen(
             dismissButton = { TextButton(onClick = { deleting = null }) { Text(stringResource(R.string.cancel)) } },
         )
     }
+    if (deletingSelected) {
+        AlertDialog(
+            onDismissRequest = { deletingSelected = false },
+            title = { Text(stringResource(R.string.delete_selected_wildcards_title, selectedIds.size)) },
+            text = { Text(stringResource(R.string.delete_selected_wildcards_message)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.deleteWildcards(items.filter { it.id in selectedIds })
+                    selectedIds = emptySet()
+                    deletingSelected = false
+                }) { Text(stringResource(R.string.delete), color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { deletingSelected = false }) { Text(stringResource(R.string.cancel)) } },
+        )
+    }
+    if (folderSelector) {
+        FolderSelectionDialog(
+            rootLabel = stringResource(R.string.wildcards_tab),
+            folders = folderChoices,
+            selectedId = folderFilter.takeUnless { noFolderOnly },
+            onSelect = {
+                folderFilter = it
+                noFolderOnly = it == null
+                folderSelector = false
+            },
+            onCreateFolder = { name ->
+                val existingName = folders.firstOrNull { it.equals(name, ignoreCase = true) }
+                val selectedName = existingName ?: name
+                if (existingName == null) viewModel.createFolder(name, SavedFolderKind.WILDCARD)
+                folderFilter = selectedName
+                noFolderOnly = false
+                folderSelector = false
+            },
+            onDismiss = { folderSelector = false },
+            showAll = true,
+            allSelected = folderFilter == null && !noFolderOnly,
+            onSelectAll = {
+                folderFilter = null
+                noFolderOnly = false
+                folderSelector = false
+            },
+            onDeleteFolder = {
+                viewModel.deleteWildcardFolder(it.name, persistentFolders.firstOrNull { folder -> folder.name == it.name })
+                if (folderFilter == it.name) {
+                    folderFilter = null
+                    noFolderOnly = false
+                }
+            },
+            onRenameFolder = { choice, name ->
+                persistentFolders.firstOrNull { it.name == choice.name }?.let { viewModel.renameWildcardFolder(it, name) }
+                if (folderFilter == choice.name) folderFilter = name
+            },
+            noFolderSelected = noFolderOnly,
+        )
+    }
     LazyColumn(modifier, contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilledTonalButton(onClick = { creating = true }, modifier = Modifier.weight(1f)) {
-                    Icon(Icons.Default.Add, null); Spacer(Modifier.width(6.dp)); Text(stringResource(R.string.add_wildcard))
+            if (selectionMode) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        stringResource(R.string.selected_count, selectedIds.size),
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    TextButton(onClick = { selectedIds = filteredItems.mapTo(mutableSetOf()) { it.id } }) {
+                        Text(stringResource(R.string.select_all_visible))
+                    }
+                    IconButton(onClick = { deletingSelected = true }) {
+                        Icon(Icons.Default.DeleteOutline, stringResource(R.string.delete), tint = MaterialTheme.colorScheme.error)
+                    }
+                    IconButton(onClick = { selectedIds = emptySet() }) {
+                        Icon(Icons.Default.Close, stringResource(R.string.cancel))
+                    }
                 }
-                OutlinedButton(onClick = { importLauncher.launch(arrayOf("text/plain")) }, modifier = Modifier.weight(1f)) {
-                    Icon(Icons.Default.UploadFile, null); Spacer(Modifier.width(6.dp)); Text(stringResource(R.string.import_txt))
+            } else {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilledTonalButton(onClick = { creating = true }, modifier = Modifier.weight(1f)) {
+                        Icon(Icons.Default.Add, null); Spacer(Modifier.width(6.dp)); Text(stringResource(R.string.add_wildcard))
+                    }
+                    OutlinedButton(onClick = { importLauncher.launch(arrayOf("text/plain")) }, modifier = Modifier.weight(1f)) {
+                        Icon(Icons.Default.UploadFile, null); Spacer(Modifier.width(6.dp)); Text(stringResource(R.string.import_txt))
+                    }
                 }
             }
         }
         item {
-            Box {
-                OutlinedButton(onClick = { folderMenu = true }, modifier = Modifier.fillMaxWidth()) {
-                    Icon(Icons.Default.FolderOpen, null); Spacer(Modifier.width(8.dp)); Text(folderFilter ?: stringResource(R.string.all_folders)); Spacer(Modifier.weight(1f)); Icon(Icons.Default.ArrowDropDown, null)
-                }
-                DropdownMenu(folderMenu, { folderMenu = false }) {
-                    DropdownMenuItem(text = { Text(stringResource(R.string.all_folders)) }, onClick = { folderFilter = null; folderMenu = false })
-                    folders.forEach { folder -> DropdownMenuItem(text = { Text(folder) }, onClick = { folderFilter = folder; folderMenu = false }) }
-                }
+            OutlinedButton(onClick = { folderSelector = true }, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.FolderOpen, null)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    when {
+                        noFolderOnly -> stringResource(R.string.no_folder)
+                        folderFilter != null -> folderFilter.orEmpty()
+                        else -> stringResource(R.string.wildcards_tab)
+                    },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.weight(1f))
+                Icon(Icons.Default.ArrowDropDown, null)
             }
         }
         if (items.isEmpty()) item { Text(stringResource(R.string.wildcard_empty), color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        items(items.filter { folderFilter == null || it.folder == folderFilter }, key = { it.id }) { item ->
-            ElevatedCard(Modifier.fillMaxWidth().clickable { editing = item }) {
+        items(filteredItems, key = { it.id }) { item ->
+            val selected = item.id in selectedIds
+            ElevatedCard(
+                modifier = Modifier.fillMaxWidth().combinedClickable(
+                    onClick = { if (selectionMode) toggleSelection(item.id) else editing = item },
+                    onLongClick = { toggleSelection(item.id) },
+                ),
+                colors = CardDefaults.elevatedCardColors(
+                    containerColor = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerLow,
+                ),
+            ) {
                 Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("__${item.name}__", style = MaterialTheme.typography.titleMedium)
                         item.folder?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary) }
+                        if (item.aliasesText.isNotBlank()) {
+                            Text(
+                                stringResource(R.string.wildcard_aliases_summary, item.aliasesText.replace("\n", " · ")),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                         Text(stringResource(R.string.wildcard_value_count, item.valuesText.lines().count { it.isNotBlank() }), style = MaterialTheme.typography.bodySmall)
                         Text(item.valuesText.replace("\n", " · "), maxLines = 2, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    IconButton(onClick = { deleting = item }) { Icon(Icons.Default.DeleteOutline, stringResource(R.string.delete)) }
+                    if (selectionMode) Checkbox(selected, { toggleSelection(item.id) })
                 }
             }
         }
@@ -708,17 +856,47 @@ private fun WildcardScreen(
 private fun WildcardEditDialog(
     item: com.hjhsys.naiblockprompt.data.local.entity.WildcardEntity?,
     viewModel: MainViewModel,
-    folders: List<String>,
+    folders: List<FolderChoice>,
+    folderEntities: List<SavedFolderEntity>,
     onDismiss: () -> Unit,
-    onSave: (String?, String, String, String?) -> Unit,
+    onDelete: (() -> Unit)?,
+    onSave: (String?, String, String, String?, String) -> Unit,
 ) {
     var name by rememberSaveable(item?.id) { mutableStateOf(item?.name.orEmpty()) }
     var values by rememberSaveable(item?.id) { mutableStateOf(item?.valuesText.orEmpty()) }
     var folder by rememberSaveable(item?.id) { mutableStateOf(item?.folder.orEmpty()) }
+    var aliases by rememberSaveable(item?.id) { mutableStateOf(item?.aliasesText.orEmpty().replace("\n", ", ")) }
     var showTags by rememberSaveable { mutableStateOf(false) }
+    var showFolderSelector by rememberSaveable { mutableStateOf(false) }
     if (showTags) WildcardTagPicker(viewModel, { showTags = false }) { selected ->
         values = (values.lineSequence().filter(String::isNotBlank) + selected.asSequence()).distinct().joinToString("\n")
         showTags = false
+    }
+    if (showFolderSelector) {
+        FolderSelectionDialog(
+            rootLabel = stringResource(R.string.wildcards_tab),
+            folders = folders,
+            selectedId = folder.ifBlank { null },
+            onSelect = {
+                folder = it.orEmpty()
+                showFolderSelector = false
+            },
+            onCreateFolder = { name ->
+                val existingName = folders.firstOrNull { it.name.equals(name, ignoreCase = true) }?.name
+                folder = existingName ?: name
+                if (existingName == null) viewModel.createFolder(name, SavedFolderKind.WILDCARD)
+                showFolderSelector = false
+            },
+            onDismiss = { showFolderSelector = false },
+            onDeleteFolder = { choice ->
+                viewModel.deleteWildcardFolder(choice.name, folderEntities.firstOrNull { it.name == choice.name })
+                if (folder == choice.name) folder = ""
+            },
+            onRenameFolder = { choice, newName ->
+                folderEntities.firstOrNull { it.name == choice.name }?.let { viewModel.renameWildcardFolder(it, newName) }
+                if (folder == choice.name) folder = newName
+            },
+        )
     }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -730,7 +908,7 @@ private fun WildcardEditDialog(
                     },
                     actions = {
                         TextButton(
-                            onClick = { onSave(item?.id, name, values, folder.ifBlank { null }) },
+                            onClick = { onSave(item?.id, name, values, folder.ifBlank { null }, aliases) },
                             enabled = name.isNotBlank() && values.lineSequence().any { it.isNotBlank() },
                         ) { Text(stringResource(R.string.save)) }
                     },
@@ -750,38 +928,147 @@ private fun WildcardEditDialog(
                         singleLine = true,
                     )
                     OutlinedTextField(
-                        folder,
-                        { folder = it },
+                        aliases,
+                        { aliases = it },
                         modifier = Modifier.fillMaxWidth(),
-                        label = { Text(stringResource(R.string.folder)) },
+                        label = { Text(stringResource(R.string.wildcard_aliases)) },
+                        supportingText = { Text(stringResource(R.string.wildcard_aliases_hint)) },
                         singleLine = true,
                     )
-                    OutlinedTextField(
-                        values,
-                        { values = it },
+                    OutlinedButton(
+                        onClick = { showFolderSelector = true },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(Icons.Default.FolderOpen, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(folder.ifBlank { stringResource(R.string.no_folder) })
+                        Spacer(Modifier.weight(1f))
+                        Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                    }
+                    WildcardValuesField(
+                        value = values,
+                        onValueChange = { values = it },
+                        onSelectTags = { showTags = true },
                         modifier = Modifier.fillMaxWidth().weight(1f),
-                        label = { Text(stringResource(R.string.wildcard_values)) },
-                        placeholder = { Text(stringResource(R.string.wildcard_values_hint)) },
-                        supportingText = { Text(stringResource(R.string.wildcard_value_count, values.lineSequence().count { it.isNotBlank() })) },
-                        trailingIcon = {
-                            FilledTonalIconButton(onClick = { showTags = true }) {
-                                Icon(Icons.Default.Storage, stringResource(R.string.select_wildcard_tags))
-                            }
-                        },
                     )
                     OutlinedButton(onClick = { showTags = true }, modifier = Modifier.fillMaxWidth()) {
                         Icon(Icons.Default.Storage, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
                         Text(stringResource(R.string.select_wildcard_tags))
                     }
+                    if (onDelete != null) {
+                        OutlinedButton(
+                            onClick = onDelete,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                        ) {
+                            Icon(Icons.Default.DeleteOutline, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text(stringResource(R.string.delete))
+                        }
+                    }
                     Button(
-                        onClick = { onSave(item?.id, name, values, folder.ifBlank { null }) },
+                        onClick = { onSave(item?.id, name, values, folder.ifBlank { null }, aliases) },
                         enabled = name.isNotBlank() && values.lineSequence().any { it.isNotBlank() },
                         modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
                     ) { Text(stringResource(R.string.save)) }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun WildcardValuesField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    onSelectTags: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val shape = MaterialTheme.shapes.extraSmall
+    val firstRowColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f)
+    val secondRowColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.26f)
+    val dividerColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.85f)
+    val textColor = MaterialTheme.colorScheme.onSurface
+    val placeholderColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val label = stringResource(R.string.wildcard_values)
+    val placeholder = stringResource(R.string.wildcard_values_hint)
+    var textLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    val inputTopPadding = 12.dp
+
+    Column(modifier) {
+        Text(
+            text = label,
+            color = MaterialTheme.colorScheme.primary,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(start = 4.dp, bottom = 4.dp),
+        )
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .border(1.dp, MaterialTheme.colorScheme.primary, shape),
+        ) {
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .drawBehind {
+                        val layout = textLayout ?: return@drawBehind
+                        val topPadding = inputTopPadding.toPx()
+                        val candidateLines = value.split('\n')
+                        var startOffset = 0
+                        candidateLines.forEachIndexed { index, candidate ->
+                            val endOffset = startOffset + candidate.length
+                            val firstVisualLine = layout.getLineForOffset(startOffset.coerceAtMost(value.length))
+                            val finalCharacterOffset = if (candidate.isEmpty()) startOffset else endOffset - 1
+                            val lastVisualLine = layout.getLineForOffset(finalCharacterOffset.coerceIn(0, value.length))
+                            val top = layout.getLineTop(firstVisualLine) + topPadding
+                            val bottom = layout.getLineBottom(lastVisualLine) + topPadding
+                            drawRect(
+                                color = if (index % 2 == 0) firstRowColor else secondRowColor,
+                                topLeft = Offset(0f, top),
+                                size = size.copy(height = (bottom - top).coerceAtLeast(0f)),
+                            )
+                            if (index < candidateLines.lastIndex) {
+                                drawLine(
+                                    color = dividerColor,
+                                    start = Offset(0f, bottom),
+                                    end = Offset(size.width, bottom),
+                                    strokeWidth = 0.5.dp.toPx(),
+                                )
+                            }
+                            startOffset = endOffset + 1
+                        }
+                    }
+                    .padding(start = 16.dp, top = inputTopPadding, end = 64.dp, bottom = 12.dp),
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = textColor),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                onTextLayout = { textLayout = it },
+                decorationBox = { innerTextField ->
+                    Box(Modifier.fillMaxSize()) {
+                        if (value.isEmpty()) {
+                            Text(placeholder, color = placeholderColor, style = MaterialTheme.typography.bodyLarge)
+                        }
+                        innerTextField()
+                    }
+                },
+            )
+            FilledTonalIconButton(
+                onClick = onSelectTags,
+                modifier = Modifier.align(Alignment.CenterEnd).padding(end = 8.dp),
+            ) {
+                Icon(Icons.Default.Storage, stringResource(R.string.select_wildcard_tags))
+            }
+        }
+        Text(
+            text = stringResource(R.string.wildcard_value_count, value.lineSequence().count { it.isNotBlank() }),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 16.dp, top = 4.dp),
+        )
     }
 }
 
@@ -903,6 +1190,7 @@ fun TagPickerScreen(
     onDismiss: () -> Unit,
     onInserted: () -> Unit,
     onSelectTags: ((List<String>) -> Unit)? = null,
+    maxSelection: Int? = null,
 ) {
     val tags by viewModel.dictionaryTags.collectAsStateWithLifecycle()
     val usedCategories by viewModel.usedTagCategories.collectAsStateWithLifecycle()
@@ -973,7 +1261,10 @@ fun TagPickerScreen(
                     val isSelected = tag.canonicalTag in selected
                     Surface(
                         onClick = {
-                            if (isSelected) selected.remove(tag.canonicalTag) else selected.add(tag.canonicalTag)
+                            if (isSelected) selected.remove(tag.canonicalTag) else {
+                                if (maxSelection == 1) selected.clear()
+                                if (maxSelection == null || selected.size < maxSelection) selected.add(tag.canonicalTag)
+                            }
                         },
                         color = if (isSelected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
                         shape = MaterialTheme.shapes.small,

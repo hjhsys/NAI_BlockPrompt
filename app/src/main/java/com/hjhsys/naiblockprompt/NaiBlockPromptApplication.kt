@@ -20,6 +20,7 @@ import kotlinx.coroutines.*
 import com.hjhsys.naiblockprompt.data.tags.BundledTagImporter
 import com.hjhsys.naiblockprompt.data.backup.BackupRepository
 import com.hjhsys.naiblockprompt.data.diagnostics.CrashLogStore
+import com.hjhsys.naiblockprompt.data.gallery.GeneratedGalleryRepository
 
 class NaiBlockPromptApplication : Application() {
     lateinit var container: AppContainer
@@ -29,7 +30,7 @@ class NaiBlockPromptApplication : Application() {
         super.onCreate()
         CrashLogStore(this).install()
         val database = Room.databaseBuilder(this, AppDatabase::class.java, "nai_block_prompt.db")
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19)
             .build()
         val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
         val client = OkHttpClient.Builder()
@@ -47,10 +48,35 @@ class NaiBlockPromptApplication : Application() {
             libraryRepository = LibraryRepository(this, database.savedDao(), database.historyDao(), json),
             autocompleteRepository = AutocompleteRepository(this@NaiBlockPromptApplication, OkHttpAutocompleteApi(client, json), database.tagDao()),
             backupRepository = BackupRepository(this@NaiBlockPromptApplication, database, settingsRepository, json),
+            galleryRepository = GeneratedGalleryRepository(this@NaiBlockPromptApplication, database.galleryDao(), database.historyDao()),
         )
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             BundledTagImporter(this@NaiBlockPromptApplication, database, settingsRepository).importIfNeeded()
         }
+    }
+}
+
+private val MIGRATION_16_17 = object : Migration(16, 17) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS gallery_images (uri TEXT NOT NULL PRIMARY KEY, folderKey TEXT NOT NULL, displayName TEXT NOT NULL, createdAt INTEGER NOT NULL, modifiedAt INTEGER NOT NULL, sizeBytes INTEGER NOT NULL, model TEXT, seed INTEGER, width INTEGER, height INTEGER, sampler TEXT, steps INTEGER, scale REAL, prompt TEXT, negativePrompt TEXT, searchTags TEXT NOT NULL, scanToken INTEGER NOT NULL)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_gallery_images_folderKey ON gallery_images(folderKey)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_gallery_images_createdAt ON gallery_images(createdAt)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_gallery_images_model ON gallery_images(model)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_gallery_images_sampler ON gallery_images(sampler)")
+    }
+}
+
+private val MIGRATION_17_18 = object : Migration(17, 18) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE gallery_images ADD COLUMN guidanceRescale REAL DEFAULT NULL")
+        db.execSQL("ALTER TABLE gallery_images ADD COLUMN noiseSchedule TEXT DEFAULT NULL")
+        db.execSQL("ALTER TABLE gallery_images ADD COLUMN metadataJson TEXT DEFAULT NULL")
+    }
+}
+
+private val MIGRATION_18_19 = object : Migration(18, 19) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE wildcards ADD COLUMN aliasesText TEXT NOT NULL DEFAULT ''")
     }
 }
 
@@ -196,4 +222,5 @@ data class AppContainer(
     val libraryRepository: LibraryRepository,
     val autocompleteRepository: AutocompleteRepository,
     val backupRepository: BackupRepository,
+    val galleryRepository: GeneratedGalleryRepository,
 )

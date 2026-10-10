@@ -63,14 +63,17 @@ private fun imageReferenceUri(reference: String): Uri =
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ImageActionsDialog(reference: String, viewModel: MainViewModel, onDismiss: () -> Unit) {
+fun ImageActionsDialog(reference: String, viewModel: MainViewModel, onApplied: (() -> Unit)? = null, onDismiss: () -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
             Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 16.dp).padding(bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(stringResource(R.string.image_actions), style = MaterialTheme.typography.headlineSmall)
-            ImageActionChoices(reference, viewModel, onDismiss)
+            ImageActionChoices(reference, viewModel) {
+                onDismiss()
+                onApplied?.invoke()
+            }
         }
     }
 }

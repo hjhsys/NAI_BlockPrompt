@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 import java.io.ByteArrayOutputStream
+import java.io.ByteArrayInputStream
 
 class NaiPngMetadataParserTest {
     @Test fun `reads NovelAI text metadata`() {
@@ -19,7 +20,27 @@ class NaiPngMetadataParserTest {
         assertEquals(listOf("blue hair"), metadata.characterPrompts)
     }
 
+    @Test fun `reads gallery generation filter metadata`() {
+        val png = png(
+            "Description" to "1girl",
+            "Comment" to """{"steps":28,"scale":5.0,"cfg_rescale":0.4,"noise_schedule":"karras"}""",
+        )
+
+        val metadata = NaiPngMetadataParser.parse(png)!!
+        assertEquals(0.4f, metadata.guidanceRescale)
+        assertEquals("karras", metadata.noiseSchedule)
+    }
+
     @Test fun `non png has no metadata`() = assertNull(NaiPngMetadataParser.parse("jpeg".toByteArray()))
+
+    @Test fun `streaming parser skips image payload`() {
+        val png = png(
+            "Description" to "1girl, beach",
+            extraChunk = "IDAT" to ByteArray(1024 * 1024),
+        )
+
+        assertEquals("1girl, beach", NaiPngMetadataParser.parse(ByteArrayInputStream(png))?.prompt)
+    }
 
     @Test fun `comment api model takes precedence over display source`() {
         val png = png(
@@ -70,13 +91,17 @@ class NaiPngMetadataParserTest {
         assertEquals(false, NaiPngMetadataParser.parse(png)?.usedExternalImageGuidance)
     }
 
-    private fun png(vararg values: Pair<String, String>): ByteArray {
+    private fun png(vararg values: Pair<String, String>, extraChunk: Pair<String, ByteArray>? = null): ByteArray {
         val out = ByteArrayOutputStream()
         out.write(byteArrayOf(-119, 80, 78, 71, 13, 10, 26, 10))
         values.forEach { (key, value) ->
             val data = key.toByteArray(Charsets.ISO_8859_1) + byteArrayOf(0) + value.toByteArray(Charsets.ISO_8859_1)
             out.write(byteArrayOf((data.size ushr 24).toByte(), (data.size ushr 16).toByte(), (data.size ushr 8).toByte(), data.size.toByte()))
             out.write("tEXt".toByteArray(Charsets.ISO_8859_1)); out.write(data); out.write(byteArrayOf(0, 0, 0, 0))
+        }
+        extraChunk?.let { (type, data) ->
+            out.write(byteArrayOf((data.size ushr 24).toByte(), (data.size ushr 16).toByte(), (data.size ushr 8).toByte(), data.size.toByte()))
+            out.write(type.toByteArray(Charsets.ISO_8859_1)); out.write(data); out.write(byteArrayOf(0, 0, 0, 0))
         }
         return out.toByteArray()
     }

@@ -8,6 +8,41 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class NaiRequestMapperTest {
+    @Test fun `wildcard rerolls independently from a fixed image seed`() {
+        val candidates = listOf("abc", "def")
+        val values = mapOf("test" to candidates)
+        val seedByResult = (0L..100L)
+            .groupBy { com.hjhsys.naiblockprompt.domain.prompt.WildcardResolver.resolve("__test__", values, it) }
+        val firstWildcardSeed = seedByResult.getValue("abc").first()
+        val secondWildcardSeed = seedByResult.getValue("def").first()
+        val wildcardSeeds = ArrayDeque(listOf(firstWildcardSeed, secondWildcardSeed))
+        val mapper = NaiRequestMapper(
+            randomWildcardSeed = { wildcardSeeds.removeFirst() },
+            randomSeed = { 123L },
+        )
+        val session = Session.empty().copy(
+            base = Session.empty().base.copy(
+                prompts = PromptPair(positiveBlocks = listOf(PromptBlock(name = "p", content = "__test__"))),
+            ),
+            generationSettings = GenerationSettings(
+                modelId = "nai-diffusion-5-full",
+                samplerId = "k_euler_ancestral",
+                steps = 28,
+                scale = 5f,
+                seedMode = SeedMode.FIXED,
+                seed = 777L,
+            ),
+        )
+
+        val first = (mapper.prepare(session, false, values) as PrepareGenerationResult.Ready).generation
+        val second = (mapper.prepare(session, false, values) as PrepareGenerationResult.Ready).generation
+
+        assertEquals(777L, first.usedSeed)
+        assertEquals(777L, second.usedSeed)
+        assertEquals("abc,", first.request.input)
+        assertEquals("def,", second.request.input)
+    }
+
     @Test fun `block scale changes generated prompt only and excludes text rendering`() {
         val source = "plain, 1.2::strong ::"
         val session = Session(

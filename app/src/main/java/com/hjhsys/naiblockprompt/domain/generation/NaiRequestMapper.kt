@@ -9,6 +9,7 @@ import java.security.SecureRandom
 
 data class PreparedGeneration(
     val sourceSession: Session,
+    val resolvedSession: Session,
     val request: NaiImageGenerationRequest,
     val usedSeed: Long,
 )
@@ -49,6 +50,7 @@ object VibeTransferRequestMapper {
 }
 
 class NaiRequestMapper(
+    private val randomWildcardSeed: () -> Long = { SecureRandom().nextLong() },
     private val randomSeed: () -> Long = { SecureRandom().nextInt().toLong() and 0xffff_ffffL },
 ) {
     fun prepare(
@@ -71,6 +73,9 @@ class NaiRequestMapper(
             SeedMode.RANDOM -> randomSeed()
             SeedMode.FIXED -> settings.seed ?: return PrepareGenerationResult.Invalid(MissingGenerationField.FIXED_SEED)
         }
+        // Wildcards are an editor-side random choice, not part of NovelAI's image seed.
+        // Reroll them for every preparation even when the image seed is fixed.
+        val wildcardSeed = randomWildcardSeed()
 
         fun joined(blocks: List<PromptBlock>) = PromptProcessor.joinEnabledBlocks(
             blocks = blocks,
@@ -81,10 +86,35 @@ class NaiRequestMapper(
         fun positive(blocks: List<PromptBlock>, textRendering: TextRenderingState) =
             if (includeTextRendering) PromptProcessor.appendTextRendering(joined(blocks), textRendering) else joined(blocks)
         fun resolved(value: String): String {
-            val wildcardResolved = WildcardResolver.resolve(value, wildcards, seed)
+            val wildcardResolved = WildcardResolver.resolve(value, wildcards, wildcardSeed)
             val commaCleaned = PromptProcessor.cleanupExtraCommas(wildcardResolved)
             return if (normalizeWeights) PromptProcessor.normalizeWeightClosings(commaCleaned) else commaCleaned
         }
+        fun resolveEditorBlocks(blocks: List<PromptBlock>) = blocks.map { block ->
+            block.copy(content = WildcardResolver.resolve(block.content, wildcards, wildcardSeed))
+        }
+        fun resolveEditorTextRendering(value: TextRenderingState) = value.copy(
+            content = WildcardResolver.resolve(value.content, wildcards, wildcardSeed),
+            description = WildcardResolver.resolve(value.description, wildcards, wildcardSeed),
+        )
+        val resolvedSession = session.copy(
+            base = session.base.copy(
+                prompts = PromptPair(
+                    positiveBlocks = resolveEditorBlocks(session.base.prompts.positiveBlocks),
+                    negativeBlocks = resolveEditorBlocks(session.base.prompts.negativeBlocks),
+                ),
+                textRendering = resolveEditorTextRendering(session.base.textRendering),
+            ),
+            characters = session.characters.map { character ->
+                if (!character.enabled) character else character.copy(
+                    prompts = PromptPair(
+                        positiveBlocks = resolveEditorBlocks(character.prompts.positiveBlocks),
+                        negativeBlocks = resolveEditorBlocks(character.prompts.negativeBlocks),
+                    ),
+                    textRendering = resolveEditorTextRendering(character.textRendering),
+                )
+            },
+        )
         val basePositive = resolved(positive(session.base.prompts.positiveBlocks, session.base.textRendering))
         val baseNegative = resolved(joined(session.base.prompts.negativeBlocks))
         val characters = session.characters.filter { it.enabled }.sortedBy { it.order }
@@ -127,7 +157,7 @@ class NaiRequestMapper(
                 v4NegativePrompt = condition(baseNegative, negativeCharacters, false),
             ),
         )
-        return PrepareGenerationResult.Ready(PreparedGeneration(session, request, seed))
+        return PrepareGenerationResult.Ready(PreparedGeneration(session, resolvedSession, request, seed))
     }
 
     private fun condition(base: String, characters: List<NaiV4CharacterCaption>, useCoordinates: Boolean) = NaiV4ConditionInput(

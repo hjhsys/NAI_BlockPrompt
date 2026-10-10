@@ -225,5 +225,7 @@ object PromptCherryPick {
         locked = false,
         collapsed = false,
         order = order,
+        scaleMode = BlockScaleMode.CUSTOM,
+        customScale = "1.0",
     )
 }

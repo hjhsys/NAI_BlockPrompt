@@ -179,10 +179,13 @@ fun ImageViewer(
     reference: String,
     comparisonCandidates: List<ImageCompareCandidate> = emptyList(),
     initialComparison: ImageCompareCandidate? = null,
+    startFullscreen: Boolean = false,
     onComparePrompts: ((ImageCompareCandidate) -> Unit)? = null,
     onDismiss: () -> Unit,
 ) {
-    var mode by remember(reference) { mutableStateOf(ImageViewerMode.CONTEXTUAL) }
+    var mode by remember(reference, startFullscreen) {
+        mutableStateOf(if (startFullscreen) ImageViewerMode.FULLSCREEN else ImageViewerMode.CONTEXTUAL)
+    }
     var loadFailed by remember(reference) { mutableStateOf(false) }
     var viewportSize by remember(reference) { mutableStateOf(IntSize.Zero) }
     var sourceSize by remember(reference) { mutableStateOf(IntSize.Zero) }

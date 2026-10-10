@@ -26,6 +26,19 @@ data class AppSettings(
     val showStickyPromptControls: Boolean = true,
     val promptEditorOverlayPlacement: PromptEditorOverlayPlacement = PromptEditorOverlayPlacement.DYNAMIC,
     val showExclusionConfirmationHelp: Boolean = true,
+    val promptImportPreferences: PromptImportPreferences = PromptImportPreferences(),
+)
+
+@Serializable
+data class PromptImportPreferences(
+    val basePositive: Boolean = true,
+    val baseNegative: Boolean = true,
+    val characters: Boolean = true,
+    val settings: Boolean = true,
+    val seed: Boolean = true,
+    val inputImage: Boolean = false,
+    val wildcardOriginal: Boolean = true,
+    val appendCharacters: Boolean = false,
 )
 
 @Serializable enum class AutocompleteSource { NOVEL_AI, DANBOORU, BOTH }

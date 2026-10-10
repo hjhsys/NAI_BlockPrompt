@@ -10,6 +10,7 @@ import com.hjhsys.naiblockprompt.domain.model.ColorHelperMode
 import com.hjhsys.naiblockprompt.domain.model.QuickEditToolbarPlacement
 import com.hjhsys.naiblockprompt.domain.model.QuickEditPressTiming
 import com.hjhsys.naiblockprompt.domain.model.PromptEditorOverlayPlacement
+import com.hjhsys.naiblockprompt.domain.model.PromptImportPreferences
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.first
@@ -41,6 +42,14 @@ class SettingsRepository(private val context: Context) {
         val showStickyPromptControls = booleanPreferencesKey("show_sticky_prompt_controls")
         val promptEditorOverlayPlacement = stringPreferencesKey("prompt_editor_overlay_placement")
         val showExclusionConfirmationHelp = booleanPreferencesKey("show_exclusion_confirmation_help")
+        val importBasePositive = booleanPreferencesKey("prompt_import_base_positive")
+        val importBaseNegative = booleanPreferencesKey("prompt_import_base_negative")
+        val importCharacters = booleanPreferencesKey("prompt_import_characters")
+        val importSettings = booleanPreferencesKey("prompt_import_settings")
+        val importSeed = booleanPreferencesKey("prompt_import_seed")
+        val importInputImage = booleanPreferencesKey("prompt_import_input_image")
+        val importWildcardOriginal = booleanPreferencesKey("prompt_import_wildcard_original")
+        val importAppendCharacters = booleanPreferencesKey("prompt_import_append_characters")
     }
 
     val settings: Flow<AppSettings> = context.settingsDataStore.data.map { prefs ->
@@ -77,6 +86,16 @@ class SettingsRepository(private val context: Context) {
                 ?.let { runCatching { PromptEditorOverlayPlacement.valueOf(it) }.getOrNull() }
                 ?: PromptEditorOverlayPlacement.DYNAMIC,
             showExclusionConfirmationHelp = prefs[Keys.showExclusionConfirmationHelp] ?: true,
+            promptImportPreferences = PromptImportPreferences(
+                basePositive = prefs[Keys.importBasePositive] ?: true,
+                baseNegative = prefs[Keys.importBaseNegative] ?: true,
+                characters = prefs[Keys.importCharacters] ?: true,
+                settings = prefs[Keys.importSettings] ?: true,
+                seed = prefs[Keys.importSeed] ?: true,
+                inputImage = prefs[Keys.importInputImage] ?: false,
+                wildcardOriginal = prefs[Keys.importWildcardOriginal] ?: true,
+                appendCharacters = prefs[Keys.importAppendCharacters] ?: false,
+            ),
         )
     }
 
@@ -128,6 +147,16 @@ class SettingsRepository(private val context: Context) {
     suspend fun setShowExclusionConfirmationHelp(value: Boolean) = context.settingsDataStore.edit {
         it[Keys.showExclusionConfirmationHelp] = value
     }
+    suspend fun setPromptImportPreferences(value: PromptImportPreferences) = context.settingsDataStore.edit { prefs ->
+        prefs[Keys.importBasePositive] = value.basePositive
+        prefs[Keys.importBaseNegative] = value.baseNegative
+        prefs[Keys.importCharacters] = value.characters
+        prefs[Keys.importSettings] = value.settings
+        prefs[Keys.importSeed] = value.seed
+        prefs[Keys.importInputImage] = value.inputImage
+        prefs[Keys.importWildcardOriginal] = value.wildcardOriginal
+        prefs[Keys.importAppendCharacters] = value.appendCharacters
+    }
     suspend fun bundledTagVersion(): Int = context.settingsDataStore.data.map { it[Keys.bundledTagVersion] ?: 0 }.first()
     suspend fun setBundledTagVersion(value: Int) = context.settingsDataStore.edit { it[Keys.bundledTagVersion] = value }
     suspend fun current(): AppSettings = settings.first()
@@ -154,6 +183,7 @@ class SettingsRepository(private val context: Context) {
         setShowStickyPromptControls(settings.showStickyPromptControls)
         setPromptEditorOverlayPlacement(settings.promptEditorOverlayPlacement)
         setShowExclusionConfirmationHelp(settings.showExclusionConfirmationHelp)
+        setPromptImportPreferences(settings.promptImportPreferences)
     }
 
     private fun decodeColors(value: String?): List<String> = value.orEmpty().split(',').map(String::trim).filter(String::isNotBlank)
